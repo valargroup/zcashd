@@ -24,6 +24,70 @@ The lower-level knobs are available for testing and staged rollout:
 -unitysyncbatchsize=<blocks>
 ```
 
+## Quick Start
+
+Unity mode is `zcashd` driven by a Zebra JSON-RPC endpoint. You need a running
+Zebra node with RPC enabled, and a `zcashd` built from this tree.
+
+### 1. Run Zebra with authenticated JSON-RPC
+
+In Zebra's `zebrad.toml`, enable the RPC endpoint. Zebra authenticates RPC
+callers with a cookie file (recommended); keep it enabled and never expose the
+endpoint publicly:
+
+```toml
+[rpc]
+listen_addr = "127.0.0.1:8232"
+# enable_cookie_auth defaults to true; Zebra writes a `.cookie` file
+# (user:password format) into its cache/cookie dir on startup.
+```
+
+Start Zebra and note the path to the generated `.cookie` file (printed at
+startup, under Zebra's cache dir by default). Let Zebra finish syncing to the
+network tip before pointing Unity at it.
+
+### 2. Build `zcashd`
+
+```sh
+./zcutil/build.sh -j$(nproc)
+```
+
+### 3. Run `zcashd` in Unity mode
+
+Point Unity at the Zebra endpoint and supply the cookie file for
+authentication:
+
+```sh
+./src/zcashd -unity \
+  -unityzebra=http://127.0.0.1:8232 \
+  -unityzebracookiefile=/path/to/zebra/.cookie
+```
+
+`-unity` expands to `-blocksource=zebra -p2p=0 -blockvalidation=trusted-zebra`.
+If you cannot share the cookie file (for example a remote Zebra host), use
+static credentials instead:
+
+```sh
+./src/zcashd -unity \
+  -unityzebra=http://10.0.0.2:8232 \
+  -unityzebrarpcuser=<user> -unityzebrarpcpassword=<password>
+```
+
+When Zebra and `zcashd` are on different hosts, do not expose the Zebra RPC
+port to the public internet: bind it to a private interface, restrict it with a
+host firewall, or tunnel it. See **Deployment Topology** below.
+
+### 4. Verify the connection
+
+```sh
+./src/zcash-cli getunityinfo
+```
+
+Confirm `zebra.identity_verified` is `true` and watch `readiness` move from
+`degraded` (syncing) to `ready` once the local tip catches Zebra's best tip.
+`sync.retry_count` and `sync.current_backoff_seconds` surface connectivity
+problems; see **Readiness And Diagnostics** below for the full surface.
+
 ## Trust Model
 
 Unity trusts the configured Zebra node for data availability, peer selection,
