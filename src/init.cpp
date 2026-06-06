@@ -376,6 +376,7 @@ std::string HelpMessage(HelpMessageMode mode)
     strUsage += HelpMessageOpt("-unitypollinterval=<seconds>", _("Unity Zebra polling interval in seconds (default: 5)"));
     strUsage += HelpMessageOpt("-unitypreferstream", _("Prefer Zebra streaming when available (reserved for a later Unity checkpoint; not active yet)"));
     strUsage += HelpMessageOpt("-unitysyncbatchsize=<n>", _("Unity Zebra polling block batch size (default: 8)"));
+    strUsage += HelpMessageOpt("-unitysyncdrivebatches=<n>", _("Number of acquisition batches one forward-sync pass drives before refreshing Zebra's tip; batches within a pass are fetched and applied concurrently (default: 64)"));
     strUsage += HelpMessageOpt("-unitysyncresponsebudgetmb=<n>", _("Maximum cumulative size in MiB of one Zebra getblock batch response, bounding the effective sync batch size (default: 128). Zebra's max_response_body_size must be at least this large"));
     strUsage += HelpMessageOpt("-unityzebra=<scheme://host:port>", _("Zebra JSON-RPC endpoint for Unity mode"));
     strUsage += HelpMessageOpt("-unityzebracookiefile=<path>", _("Cookie file for Zebra JSON-RPC authentication"));
