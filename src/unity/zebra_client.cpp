@@ -34,7 +34,21 @@ const char* const UNITY_JSONRPC_ID = "unity";
 const size_t ZEBRA_RPC_RESPONSE_BODY_MARGIN = 1024 * 1024;
 const int DEFAULT_UNITY_SYNC_BATCH_SIZE = 8;
 const int MAX_UNITY_SYNC_BATCH_SIZE_BY_COUNT = 1000;
-const size_t UNITY_SYNC_RAW_BLOCK_RESPONSE_BUDGET = 128 * 1024 * 1024;
+const int DEFAULT_UNITY_SYNC_RESPONSE_BUDGET_MB = 128;
+
+// Upper bound on the cumulative size of one getblock batch response. This caps how
+// many blocks may be requested per Zebra round-trip (see UnitySyncBatchSize). It is
+// runtime-tunable via -unitysyncresponsebudgetmb so the acquisition batch can be
+// scaled for throughput experiments without a rebuild; the Zebra server's own
+// max_response_body_size must be configured at least as large.
+size_t UnitySyncRawBlockResponseBudget()
+{
+    int64_t megabytes = GetArg("-unitysyncresponsebudgetmb", DEFAULT_UNITY_SYNC_RESPONSE_BUDGET_MB);
+    if (megabytes < 1) {
+        megabytes = 1;
+    }
+    return static_cast<size_t>(megabytes) * 1024 * 1024;
+}
 
 struct EventBaseDeleter {
     void operator()(event_base* base) const
@@ -165,12 +179,13 @@ std::string MakeJsonRpcBatchRequest(const std::vector<ZebraRpcCall>& calls)
 
 int UnitySyncBatchSizeFromMemoryBudget()
 {
-    if (UNITY_SYNC_RAW_BLOCK_RESPONSE_BUDGET <= ZEBRA_RPC_RESPONSE_BODY_MARGIN) {
+    const size_t budget = UnitySyncRawBlockResponseBudget();
+    if (budget <= ZEBRA_RPC_RESPONSE_BODY_MARGIN) {
         return 1;
     }
 
     const size_t maxRawBlocks =
-        (UNITY_SYNC_RAW_BLOCK_RESPONSE_BUDGET - ZEBRA_RPC_RESPONSE_BODY_MARGIN) /
+        (budget - ZEBRA_RPC_RESPONSE_BODY_MARGIN) /
         (2 * MAX_BLOCK_SIZE + 1024);
     return std::max<int>(1, std::min<int>(MAX_UNITY_SYNC_BATCH_SIZE_BY_COUNT, maxRawBlocks));
 }
