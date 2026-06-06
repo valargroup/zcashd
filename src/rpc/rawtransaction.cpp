@@ -21,6 +21,8 @@
 #include "script/script_error.h"
 #include "script/sign.h"
 #include "script/standard.h"
+#include "unity/tx_forwarder.h"
+#include "unity/unity.h"
 #include "uint256.h"
 #ifdef ENABLE_WALLET
 #include "wallet/wallet.h"
@@ -1245,6 +1247,7 @@ UniValue sendrawtransaction(const UniValue& params, bool fHelp)
         throw runtime_error(
             "sendrawtransaction \"hexstring\" ( allowhighfees )\n"
             "\nSubmits raw transaction (serialized, hex-encoded) to local node and network.\n"
+            "\nIn Unity mode, forwards to Zebra after local preflight and returns success only after Zebra accepts.\n"
             "\nAlso see createrawtransaction and signrawtransaction calls.\n"
             "\nArguments:\n"
             "1. \"hexstring\"    (string, required) The hex string of the raw transaction)\n"
@@ -1261,6 +1264,72 @@ UniValue sendrawtransaction(const UniValue& params, bool fHelp)
             "\nAs a json rpc call\n"
             + HelpExampleRpc("sendrawtransaction", "\"signedhex\"")
         );
+
+    if (unity::IsEnabled()) {
+        RPCTypeCheck(params, boost::assign::list_of(UniValue::VSTR)(UniValue::VBOOL));
+
+        // parse hex string from parameter
+        CTransaction tx;
+        try {
+            DecodeHexTx(tx, params[0].get_str());
+        } catch (const std::exception& e) {
+            throw JSONRPCError(RPC_DESERIALIZATION_ERROR, std::string("TX decode failed: ") + e.what());
+        }
+        uint256 hashTx = tx.GetHash();
+
+        auto chainparams = Params();
+        const std::string txHex = params[0].get_str();
+
+        bool fOverrideFees = false;
+        if (params.size() > 1)
+            fOverrideFees = params[1].get_bool();
+
+        {
+            LOCK(cs_main);
+            if (tx.IsCoinBase()) {
+                throw JSONRPCError(RPC_TRANSACTION_REJECTED, "coinbase");
+            }
+
+            CCoinsViewCache &view = *pcoinsTip;
+            const CCoins* existingCoins = view.AccessCoins(hashTx);
+            bool fHaveChain = existingCoins && existingCoins->nHeight < 1000000000;
+            if (fHaveChain) {
+                throw JSONRPCError(RPC_TRANSACTION_ALREADY_IN_CHAIN, "transaction already in block chain");
+            }
+
+            // DoS mitigation: reject transactions expiring soon
+            if (tx.nExpiryHeight > 0) {
+                int nextBlockHeight = chainActive.Height() + 1;
+                if (chainparams.GetConsensus().NetworkUpgradeActive(nextBlockHeight, Consensus::UPGRADE_OVERWINTER)) {
+                    if (nextBlockHeight + TX_EXPIRING_SOON_THRESHOLD > tx.nExpiryHeight) {
+                        throw JSONRPCError(RPC_TRANSACTION_REJECTED,
+                            strprintf("tx-expiring-soon: expiryheight is %d but should be at least %d to avoid transaction expiring soon",
+                            tx.nExpiryHeight,
+                            nextBlockHeight + TX_EXPIRING_SOON_THRESHOLD));
+                    }
+                }
+            }
+        }
+
+        unity::TxForwardingResult forwardResult = unity::ForwardRawTransaction(txHex, hashTx);
+        if (!forwardResult.success) {
+            throw JSONRPCError(forwardResult.rpcErrorCode, forwardResult.error);
+        }
+
+        {
+            LOCK(cs_main);
+            if (!mempool.exists(hashTx)) {
+                CValidationState state;
+                bool fMissingInputs = false;
+                if (!AcceptToMemoryPool(chainparams, mempool, state, tx, true, &fMissingInputs, !fOverrideFees)) {
+                    LogPrintf("Unity sendrawtransaction: Zebra accepted tx %s but local mempool did not accept it: %s\n",
+                              hashTx.GetHex(), fMissingInputs ? "missing inputs" : FormatStateMessage(state));
+                }
+            }
+        }
+
+        return hashTx.GetHex();
+    }
 
     LOCK(cs_main);
     RPCTypeCheck(params, boost::assign::list_of(UniValue::VSTR)(UniValue::VBOOL));

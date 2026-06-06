@@ -317,10 +317,16 @@ BITCOIN_CORE_H = \
   txdb.h \
   mempool_limit.h \
   txmempool.h \
+  unity/mempool_mirror.h \
+  unity/tx_forwarder.h \
   ui_interface.h \
   uint256.h \
   uint252.h \
   undo.h \
+  unity/block_ingestion.h \
+  unity/metadata.h \
+  unity/zebra_client.h \
+  unity/unity.h \
   util/system.h \
   util/match.h \
   util/moneystr.h \
@@ -399,6 +405,13 @@ libbitcoin_server_a_SOURCES = \
   txdb.cpp \
   mempool_limit.cpp \
   txmempool.cpp \
+  unity/block_ingestion.cpp \
+  unity/mempool_mirror.cpp \
+  unity/metadata.cpp \
+  unity/rpc.cpp \
+  unity/tx_forwarder.cpp \
+  unity/unity.cpp \
+  unity/zebra_client.cpp \
   validationinterface.cpp \
   $(BITCOIN_CORE_H) \
   $(LIBZCASH_H)

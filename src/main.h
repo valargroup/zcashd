@@ -575,6 +575,9 @@ bool ContextualCheckBlock(const CBlock& block, CValidationState& state,
  * How a given block should be checked.
  *
  * - `CheckAs::Block` applies all relevant block checks.
+ * - `CheckAs::TrustedBlock` is the same as `CheckAs::Block` except that
+ *   expensive authorizing proofs/signatures are not validated. It is only for
+ *   real blocks that entered through a trusted Unity block source.
  * - `CheckAs::BlockTemplate` is the same as `CheckAs::Block` except that proofs
  *   and signatures are not validated, and the authDataRoot is not checked (as
  *   the coinbase transaction is not fully complete).
@@ -584,9 +587,13 @@ bool ContextualCheckBlock(const CBlock& block, CValidationState& state,
  */
 enum class CheckAs {
     Block,
+    TrustedBlock,
     BlockTemplate,
     SlowBenchmark,
 };
+
+bool BlockCheckModeUsesExpensiveChecks(CheckAs blockChecks, bool fCheckpointAncestor);
+size_t TEST_GetUnityTrustedBlockCandidateCount();
 
 /** Apply the effects of this block (with given index) on the UTXO set represented by coins.
  *  Validity checks that depend on the UTXO set are also done; ConnectBlock()
@@ -602,6 +609,8 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
  * via `block.hashPrevBlock == chainActive.Tip()->GetBlockHash()`.
  */
 bool TestNewBlockAtTipValidity(CValidationState& state, const CChainParams& chainparams, const CBlock& block, bool fIsBlockTemplate);
+
+bool ProcessNewTrustedBlockBatch(CValidationState& state, const CChainParams& chainparams, const std::vector<CBlock>& blocks);
 
 /**
  * This will clear the subtree database for a given shielded type from the

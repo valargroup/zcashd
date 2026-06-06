@@ -24,6 +24,7 @@
 #include "pow.h"
 #include "rpc/server.h"
 #include "txmempool.h"
+#include "unity/unity.h"
 #include "util/match.h"
 #include "util/system.h"
 #include "validationinterface.h"
@@ -184,6 +185,8 @@ UniValue generate(const UniValue& params, bool fHelp)
             + HelpExampleCli("generate", "11")
         );
 
+    unity::ThrowIfMiningDisabled("generate");
+
     if (!Params().MineBlocksOnDemand())
         throw JSONRPCError(RPC_METHOD_NOT_FOUND, "This method can only be used on regtest");
 
@@ -300,6 +303,8 @@ UniValue setgenerate(const UniValue& params, bool fHelp)
             "\nUsing json rpc\n"
             + HelpExampleRpc("setgenerate", "true, 1")
         );
+
+    unity::ThrowIfMiningDisabled("setgenerate");
 
     if (Params().MineBlocksOnDemand())
         throw JSONRPCError(RPC_METHOD_NOT_FOUND, "Use the generate method instead of setgenerate on this network");
@@ -509,6 +514,8 @@ UniValue getblocktemplate(const UniValue& params, bool fHelp)
             + HelpExampleCli("getblocktemplate", "")
             + HelpExampleRpc("getblocktemplate", "")
          );
+
+    unity::ThrowIfMiningDisabled("getblocktemplate");
 
     LOCK(cs_main);
 
@@ -871,6 +878,8 @@ UniValue submitblock(const UniValue& params, bool fHelp)
             + HelpExampleCli("submitblock", "\"mydata\"")
             + HelpExampleRpc("submitblock", "\"mydata\"")
         );
+
+    unity::ThrowIfMiningDisabled("submitblock");
 
     CBlock block;
     if (!DecodeHexBlk(block, params[0].get_str()))

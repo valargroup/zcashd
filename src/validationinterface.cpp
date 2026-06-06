@@ -539,15 +539,13 @@ void ThreadNotifyWallets(CBlockIndex *pindexLastTip)
             }
         }
 
-        // Update the notified sequence numbers. We only need this in regtest mode,
-        // and should not lock on cs or cs_main here otherwise.
-        if (chainParams.NetworkIDString() == "regtest") {
-            if (chainNotifiedSequence.has_value()) {
-                SetChainNotifiedSequence(chainParams, chainNotifiedSequence.value());
-            }
-            if (recentlyAdded.second > 0) {
-                mempool.SetNotifiedSequence(recentlyAdded.second);
-            }
+        // Update the notified sequence numbers after wallet/index/ZMQ
+        // consumers have processed the corresponding chain work.
+        if (chainNotifiedSequence.has_value()) {
+            SetChainNotifiedSequence(chainParams, chainNotifiedSequence.value());
+        }
+        if (chainParams.NetworkIDString() == "regtest" && recentlyAdded.second > 0) {
+            mempool.SetNotifiedSequence(recentlyAdded.second);
         }
     }
 }

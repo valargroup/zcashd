@@ -31,6 +31,8 @@
 #include "txmempool.h"
 #include "ui_interface.h"
 #include "undo.h"
+#include "unity/metadata.h"
+#include "unity/unity.h"
 #include "util/system.h"
 #include "util/moneystr.h"
 #include "validationinterface.h"
@@ -226,6 +228,12 @@ namespace {
       * Pruned nodes may have entries where B is missing data.
       */
     multimap<CBlockIndex*, CBlockIndex*> mapBlocksUnlinked;
+
+    /**
+     * Blocks accepted through Unity's trusted Zebra ingestion boundary but not
+     * yet covered by the persisted trusted boundary.
+     */
+    set<uint256> setUnityTrustedBlockCandidates;
 
     CCriticalSection cs_LastBlockFile;
     std::vector<CBlockFileInfo> vinfoBlockFile;
@@ -3243,6 +3251,31 @@ static bool ShouldCheckTransactions(const CChainParams& chainparams, const CBloc
              && Checkpoints::IsAncestorOfLastCheckpoint(chainparams.Checkpoints(), pindex));
 }
 
+bool BlockCheckModeUsesExpensiveChecks(CheckAs blockChecks, bool fCheckpointAncestor)
+{
+    if (fCheckpointAncestor) {
+        return false;
+    }
+
+    switch (blockChecks) {
+    case CheckAs::Block:
+    case CheckAs::SlowBenchmark:
+        return true;
+    case CheckAs::TrustedBlock:
+    case CheckAs::BlockTemplate:
+        return false;
+    default:
+        assert(false);
+    }
+    return true;
+}
+
+size_t TEST_GetUnityTrustedBlockCandidateCount()
+{
+    LOCK(cs_main);
+    return setUnityTrustedBlockCandidates.size();
+}
+
 static bool CheckBlockBodyAuthCommitment(
     const CBlock& block,
     int nHeight,
@@ -3270,30 +3303,9 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
 
     auto consensusParams = chainparams.GetConsensus();
 
-    bool fExpensiveChecks = true;
-
-    switch (blockChecks) {
-    case CheckAs::Block:
-        break;
-    case CheckAs::BlockTemplate:
-        // Disable checking proofs and signatures for block templates, to avoid
-        // checking them twice for transactions that were already checked when
-        // added to the mempool.
-        fExpensiveChecks = false;
-        break;
-    case CheckAs::SlowBenchmark:
-        // This case does not disable any verification work. It is retained
-        // because it disables `fCacheResults` below, so that per-tx
-        // verification results are not cached across benchmark runs.
-        break;
-    default:
-        assert(false);
-    }
-
-    // If this block is an ancestor of a checkpoint, disable expensive checks
-    if (fCheckpointsEnabled && Checkpoints::IsAncestorOfLastCheckpoint(chainparams.Checkpoints(), pindex)) {
-        fExpensiveChecks = false;
-    }
+    const bool fCheckpointAncestor =
+        fCheckpointsEnabled && Checkpoints::IsAncestorOfLastCheckpoint(chainparams.Checkpoints(), pindex);
+    bool fExpensiveChecks = BlockCheckModeUsesExpensiveChecks(blockChecks, fCheckpointAncestor);
 
     // Don't cache results if we're actually connecting blocks or benchmarking
     // (still consult the cache, though, which will be empty for benchmarks).
@@ -4531,7 +4543,57 @@ static int64_t nTimePostConnect = 0;
 // Protected by cs_main
 std::map<const CBlockIndex*, std::list<CTransaction>> recentlyConflictedTxs;
 uint64_t nConnectedSequence = 0;
-uint64_t nNotifiedSequence = 0;
+std::atomic<uint64_t> nNotifiedSequence{0};
+
+namespace {
+
+bool PersistUnityTrustedBoundary(const unity::TrustedBlockBoundary& boundary)
+{
+    return unity::WriteTrustedBlockBoundary(boundary);
+}
+
+bool RestoreUnityTrustedBoundary(
+    bool hadPreviousBoundary,
+    const unity::TrustedBlockBoundary& previousBoundary)
+{
+    if (hadPreviousBoundary) {
+        return PersistUnityTrustedBoundary(previousBoundary);
+    }
+    return unity::ClearTrustedBlockBoundary();
+}
+
+bool UnityTrustedBoundaryCoversBlock(const CBlockIndex* pindex, const CChainParams& chainparams)
+{
+    unity::TrustedBlockBoundary boundary;
+    if (!unity::GetCachedTrustedBlockBoundary(boundary) ||
+        !unity::TrustedBoundaryMatchesConfiguredSource(boundary, chainparams) ||
+        pindex == nullptr ||
+        pindex->nHeight > boundary.nHeight) {
+        return false;
+    }
+
+    auto it = mapBlockIndex.find(boundary.hash);
+    if (it == mapBlockIndex.end() || it->second->nHeight != boundary.nHeight) {
+        return false;
+    }
+
+    return it->second->GetAncestor(pindex->nHeight) == pindex;
+}
+
+CheckAs GetConnectBlockCheckMode(const CBlockIndex* pindex, const CChainParams& chainparams)
+{
+    if (unity::IsTrustedValidationEnabled()) {
+        const uint256 hash = pindex->GetBlockHash();
+        if (setUnityTrustedBlockCandidates.count(hash) ||
+            UnityTrustedBoundaryCoversBlock(pindex, chainparams)) {
+            return CheckAs::TrustedBlock;
+        }
+    }
+
+    return CheckAs::Block;
+}
+
+} // namespace
 
 /**
  * Connect a new block to chainActive. pblock is either NULL or a pointer to a CBlock
@@ -4544,9 +4606,10 @@ bool static ConnectTip(CValidationState& state, const CChainParams& chainparams,
     // Apply the block atomically to the chain state.
     int64_t nTime2 = GetTimeMicros();
     int64_t nTime3;
+    CheckAs blockChecks = GetConnectBlockCheckMode(pindexNew, chainparams);
     {
         CCoinsViewCache view(pcoinsTip);
-        bool rv = ConnectBlock(*pblock, state, pindexNew, view, chainparams);
+        bool rv = ConnectBlock(*pblock, state, pindexNew, view, chainparams, false, blockChecks);
         GetMainSignals().BlockChecked(*pblock, state);
         if (!rv) {
             if (state.IsInvalid())
@@ -4558,6 +4621,7 @@ bool static ConnectTip(CValidationState& state, const CChainParams& chainparams,
         LogPrint("bench", "  - Connect total: %.2fms [%.2fs]\n", (nTime3 - nTime2) * 0.001, nTimeConnectTotal * 0.000001);
         assert(view.Flush());
     }
+
     int64_t nTime4 = GetTimeMicros(); nTimeFlush += nTime4 - nTime3;
     LogPrint("bench", "  - Flush: %.2fms [%.2fs]\n", (nTime4 - nTime3) * 0.001, nTimeFlush * 0.000001);
     // Write the chain state to disk, if necessary.
@@ -4629,15 +4693,14 @@ uint64_t GetChainConnectedSequence() {
 }
 
 void SetChainNotifiedSequence(const CChainParams& chainparams, uint64_t connectedSequence) {
-    assert(chainparams.NetworkIDString() == "regtest");
-    LOCK(cs_main);
-    nNotifiedSequence = connectedSequence;
+    (void)chainparams;
+    nNotifiedSequence.store(connectedSequence);
 }
 
 bool ChainIsFullyNotified(const CChainParams& chainparams) {
-    assert(chainparams.NetworkIDString() == "regtest");
+    (void)chainparams;
     LOCK(cs_main);
-    return nConnectedSequence == nNotifiedSequence;
+    return nConnectedSequence == nNotifiedSequence.load();
 }
 
 /**
@@ -6264,6 +6327,131 @@ bool ProcessNewBlock(CValidationState& state, const CChainParams& chainparams, c
     return true;
 }
 
+bool ProcessNewTrustedBlockBatch(CValidationState& state, const CChainParams& chainparams, const std::vector<CBlock>& blocks)
+{
+    auto span = TracingSpan("info", "main", "ProcessNewTrustedBlockBatch");
+    auto spanGuard = span.Enter();
+
+    if (blocks.empty()) {
+        return true;
+    }
+
+    if (!unity::IsTrustedValidationEnabled()) {
+        return state.Error("Unity trusted block ingestion requires -blockvalidation=trusted-zebra");
+    }
+    if (!unity::InitUnityMetadata()) {
+        return state.Error("failed to initialize Unity metadata database");
+    }
+
+    std::vector<uint256> acceptedHashes;
+    acceptedHashes.reserve(blocks.size());
+    unity::TrustedBlockBoundary previousBoundary;
+    const bool hadPreviousBoundary = unity::GetCachedTrustedBlockBoundary(previousBoundary);
+    unity::TrustedBlockBoundary batchBoundary;
+    bool wroteBatchBoundary = false;
+    int lastAcceptedHeight = -1;
+    struct CandidateCleanup {
+        std::vector<uint256>& hashes;
+
+        ~CandidateCleanup()
+        {
+            LOCK(cs_main);
+            for (const uint256& hash : hashes) {
+                setUnityTrustedBlockCandidates.erase(hash);
+            }
+        }
+    } cleanup{acceptedHashes};
+
+    {
+        LOCK(cs_main);
+
+        uint256 expectedPrev = blocks.front().hashPrevBlock;
+        if (mapBlockIndex.find(expectedPrev) == mapBlockIndex.end() &&
+            blocks.front().GetHash() != chainparams.GetConsensus().hashGenesisBlock) {
+            return state.DoS(10, error("%s: first block parent is unknown", __func__),
+                             REJECT_INVALID, "unity-first-parent-unknown");
+        }
+
+        for (const CBlock& block : blocks) {
+            const uint256 hash = block.GetHash();
+            if (block.hashPrevBlock != expectedPrev) {
+                return state.DoS(10, error("%s: non-contiguous Unity block batch", __func__),
+                                 REJECT_INVALID, "unity-non-contiguous-batch");
+            }
+
+            MarkBlockAsReceived(hash);
+
+            CBlockIndex *pindex = NULL;
+            bool ret = AcceptBlock(block, state, chainparams, &pindex, true, NULL);
+            if (!ret) {
+                return error("%s: AcceptBlock FAILED", __func__);
+            }
+            if (pindex != NULL) {
+                lastAcceptedHeight = pindex->nHeight;
+            }
+
+            setUnityTrustedBlockCandidates.insert(hash);
+            acceptedHashes.push_back(hash);
+            expectedPrev = hash;
+        }
+
+        CheckBlockIndex(chainparams.GetConsensus());
+    }
+
+    if (lastAcceptedHeight >= 0) {
+        unity::TrustedBlockBoundary currentBoundary;
+        if (!unity::GetCachedTrustedBlockBoundary(currentBoundary) ||
+            !unity::TrustedBoundaryMatchesConfiguredSource(currentBoundary, chainparams) ||
+            lastAcceptedHeight >= currentBoundary.nHeight) {
+            batchBoundary =
+                unity::MakeTrustedBlockBoundary(lastAcceptedHeight, blocks.back().GetHash(), chainparams);
+            if (!PersistUnityTrustedBoundary(batchBoundary)) {
+                return state.Error("failed to persist Unity trusted block boundary before activation");
+            }
+            wroteBatchBoundary = true;
+        }
+    }
+
+    NotifyHeaderTip(chainparams.GetConsensus());
+
+    if (!ActivateBestChain(state, chainparams, &blocks.back())) {
+        if (wroteBatchBoundary) {
+            if (!RestoreUnityTrustedBoundary(hadPreviousBoundary, previousBoundary)) {
+                return state.Error("failed to restore Unity trusted block boundary after activation failure");
+            }
+        }
+        return error("%s: ActivateBestChain failed", __func__);
+    }
+
+    bool lastBlockConnected = false;
+    int lastBlockHeight = -1;
+    const uint256 lastBlockHash = blocks.back().GetHash();
+    {
+        LOCK(cs_main);
+        auto it = mapBlockIndex.find(lastBlockHash);
+        if (it != mapBlockIndex.end() && chainActive.Contains(it->second)) {
+            lastBlockConnected = true;
+            lastBlockHeight = it->second->nHeight;
+        }
+    }
+
+    if (lastBlockConnected) {
+        if (lastBlockHeight != lastAcceptedHeight) {
+            unity::TrustedBlockBoundary boundary =
+                unity::MakeTrustedBlockBoundary(lastBlockHeight, lastBlockHash, chainparams);
+            if (!PersistUnityTrustedBoundary(boundary)) {
+                return state.Error("failed to persist Unity trusted block boundary after activation");
+            }
+        }
+    } else if (wroteBatchBoundary) {
+        if (!RestoreUnityTrustedBoundary(hadPreviousBoundary, previousBoundary)) {
+            return state.Error("failed to restore Unity trusted block boundary after inactive trusted batch");
+        }
+    }
+
+    return true;
+}
+
 /**
  * This is only invoked by the miner.
  * The block's proof-of-work is assumed invalid and not checked.
@@ -6835,7 +7023,7 @@ bool CVerifyDB::VerifyDB(const CChainParams& chainparams, CCoinsView *coinsview,
             CBlock block;
             if (!ReadBlockFromDisk(block, pindex, chainparams.GetConsensus()))
                 return error("VerifyDB(): *** ReadBlockFromDisk failed at %d, hash=%s", pindex->nHeight, pindex->GetBlockHash().ToString());
-            if (!ConnectBlock(block, state, pindex, coins, chainparams))
+            if (!ConnectBlock(block, state, pindex, coins, chainparams, false, GetConnectBlockCheckMode(pindex, chainparams)))
                 return error("VerifyDB(): *** found unconnectable block at %d, hash=%s", pindex->nHeight, pindex->GetBlockHash().ToString());
         }
     }
@@ -7243,6 +7431,9 @@ void UnloadBlockIndex()
     mapOrphanTransactionsByPrev.clear();
     nSyncStarted = 0;
     mapBlocksUnlinked.clear();
+    setUnityTrustedBlockCandidates.clear();
+    nConnectedSequence = 0;
+    nNotifiedSequence.store(0);
     vinfoBlockFile.clear();
     nLastBlockFile = 0;
     nBlockSequenceId = 1;
