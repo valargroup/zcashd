@@ -38,6 +38,8 @@
 #include "txdb.h"
 #include "torcontrol.h"
 #include "ui_interface.h"
+#include "unity/metadata.h"
+#include "unity/unity.h"
 #include "util/system.h"
 #include "util/moneystr.h"
 #include "validationinterface.h"
@@ -174,6 +176,7 @@ static CCoinsViewErrorCatcher *pcoinscatcher = NULL;
 
 void Interrupt(boost::thread_group& threadGroup)
 {
+    unity::InterruptUnityNode();
     InterruptHTTPServer();
     InterruptHTTPRPC();
     InterruptRPC();
@@ -210,6 +213,7 @@ void Shutdown()
 #ifdef ENABLE_MINING
     GenerateBitcoins(false, 0, Params());
 #endif
+    unity::StopUnityNode();
     StopNode();
     StopTorControl();
     UnregisterNodeSignals(GetNodeSignals());
@@ -324,6 +328,8 @@ std::string HelpMessage(HelpMessageMode mode)
     strUsage += HelpMessageOpt("-alertnotify=<cmd>", _("Execute command on node end-of-service or when we see a really long fork (%s in cmd is replaced by message)"));
     strUsage += HelpMessageOpt("-allowdeprecated=<feature>", strprintf(_("Explicitly allow the use of the specified deprecated feature. Multiple instances of this parameter are permitted; values for <feature> must be selected from among {%s}"), GetAllowableDeprecatedFeatures()));
     strUsage += HelpMessageOpt("-blocknotify=<cmd>", _("Execute command when the best block changes (%s in cmd is replaced by block hash)"));
+    strUsage += HelpMessageOpt("-blocksource=<p2p|zebra>", _("Select the source of blocks for local validation (default: p2p)"));
+    strUsage += HelpMessageOpt("-blockvalidation=<full|trusted-zebra>", _("Select local block validation policy (default: full)"));
     if (showDebug)
         strUsage += HelpMessageOpt("-blocksonly", strprintf(_("Whether to reject transactions from network peers. Automatic broadcast and rebroadcast of any transactions from inbound peers is disabled, unless '-whitelistforcerelay' is '1', in which case whitelisted peers' transactions will be relayed. RPC transactions are not affected. (default: %u)"), DEFAULT_BLOCKSONLY));
     strUsage += HelpMessageOpt("-checkblocks=<n>", strprintf(_("How many blocks to check at startup (default: %u, 0 = all)"), DEFAULT_CHECKBLOCKS));
@@ -351,6 +357,7 @@ std::string HelpMessage(HelpMessageMode mode)
     strUsage += HelpMessageOpt("-prune=<n>", strprintf(_("Reduce storage requirements by pruning (deleting) old blocks. This mode disables wallet support and is incompatible with -txindex. "
             "Warning: Reverting this setting requires re-downloading the entire blockchain. "
             "(default: 0 = disable pruning blocks, >%u = target size in MiB to use for block files)"), MIN_DISK_SPACE_FOR_BLOCK_FILES / 1024 / 1024));
+    strUsage += HelpMessageOpt("-p2p", _("Enable Zcash P2P networking (default: 1)"));
 #ifdef ENABLE_WALLET
     strUsage += HelpMessageOpt("-reindex-chainstate", _("Rebuild chain state from the currently indexed blocks (implies -rescan)"));
     strUsage += HelpMessageOpt("-reindex", _("Rebuild chain state and block index from the blk*.dat files on disk (implies -rescan)"));
@@ -363,6 +370,16 @@ std::string HelpMessage(HelpMessageMode mode)
 #endif
     strUsage += HelpMessageOpt("-txexpirynotify=<cmd>", _("Execute command when transaction expires (%s in cmd is replaced by transaction id)"));
     strUsage += HelpMessageOpt("-txindex", strprintf(_("Maintain a full transaction index, used by the getrawtransaction rpc call (default: %u)"), DEFAULT_TXINDEX));
+    strUsage += HelpMessageOpt("-unity", _("Run in Unity mode: use Zebra as the block source, disable local Zcash P2P, and use trusted Zebra block validation"));
+
+    strUsage += HelpMessageGroup(_("Unity options:"));
+    strUsage += HelpMessageOpt("-unitypollinterval=<seconds>", _("Unity Zebra polling interval in seconds (default: 5)"));
+    strUsage += HelpMessageOpt("-unitypreferstream", _("Prefer Zebra streaming when available (reserved for a later Unity checkpoint; not active yet)"));
+    strUsage += HelpMessageOpt("-unitysyncbatchsize=<n>", _("Unity Zebra polling block batch size (default: 8)"));
+    strUsage += HelpMessageOpt("-unityzebra=<scheme://host:port>", _("Zebra JSON-RPC endpoint for Unity mode"));
+    strUsage += HelpMessageOpt("-unityzebracookiefile=<path>", _("Cookie file for Zebra JSON-RPC authentication"));
+    strUsage += HelpMessageOpt("-unityzebrarpcpassword=<password>", _("Password for Zebra JSON-RPC authentication"));
+    strUsage += HelpMessageOpt("-unityzebrarpcuser=<user>", _("Username for Zebra JSON-RPC authentication"));
 
     strUsage += HelpMessageGroup(_("Connection options:"));
     strUsage += HelpMessageOpt("-addnode=<ip>", _("Add a node to connect to and attempt to keep the connection open"));
@@ -388,6 +405,8 @@ std::string HelpMessage(HelpMessageMode mode)
     strUsage += HelpMessageOpt("-peerbloomfilters", strprintf(_("Support filtering of blocks and transaction with bloom filters (default: %u)"), DEFAULT_PEERBLOOMFILTERS));
     if (showDebug)
         strUsage += HelpMessageOpt("-enforcenodebloom", strprintf("Enforce minimum protocol version to limit use of bloom filters (default: %u)", DEFAULT_ENFORCENODEBLOOM));
+    if (showDebug)
+        strUsage += HelpMessageOpt("-unitytrustedvalidationfixture", "Allow -blockvalidation=trusted-zebra without -blocksource=zebra in tests");
     strUsage += HelpMessageOpt("-port=<port>", strprintf(_("Listen for connections on <port> (default: %u or testnet: %u)"),
         Params(CBaseChainParams::MAIN).GetDefaultPort(), Params(CBaseChainParams::TESTNET).GetDefaultPort()));
     strUsage += HelpMessageOpt("-proxy=<ip:port>", _("Connect through SOCKS5 proxy"));
@@ -891,6 +910,8 @@ bool AppInitServers(boost::thread_group& threadGroup)
 // Parameter interaction based on rules
 void InitParameterInteraction()
 {
+    unity::InitParameterInteraction();
+
     // when specifying an explicit binding address, you want to listen on it
     // even when -connect or -proxy is specified
     if (mapArgs.count("-bind")) {
@@ -1072,6 +1093,11 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
     auto err = InitExperimentalMode();
     if (err) {
         return InitError(err.value());
+    }
+
+    std::string unityOptionError = unity::ValidateParameterInteraction();
+    if (!unityOptionError.empty()) {
+        return InitError(unityOptionError);
     }
 
     // if using block pruning, then disable txindex
@@ -1670,7 +1696,7 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
     }
 
     // see Step 2: parameter interactions for more information about these
-    fListen = GetBoolArg("-listen", DEFAULT_LISTEN);
+    fListen = GetBoolArg("-listen", DEFAULT_LISTEN) && unity::IsP2PEnabled();
     fDiscover = GetBoolArg("-discover", true);
     fNameLookup = GetBoolArg("-dns", DEFAULT_NAME_LOOKUP);
 
@@ -1848,6 +1874,11 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
                 if (fHavePruned && GetArg("-checkblocks", DEFAULT_CHECKBLOCKS) > MIN_BLOCKS_TO_KEEP) {
                     LogPrintf("Prune: pruned datadir may not have more than %d blocks; -checkblocks=%d may fail\n",
                         MIN_BLOCKS_TO_KEEP, GetArg("-checkblocks", DEFAULT_CHECKBLOCKS));
+                }
+
+                if (unity::IsTrustedValidationEnabled() && !unity::InitUnityMetadata()) {
+                    strLoadError = _("Error opening Unity metadata database");
+                    break;
                 }
 
                 {
@@ -2097,14 +2128,22 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
     }
 #endif
 
-    if (GetBoolArg("-listenonion", DEFAULT_LISTEN_ONION))
-        StartTorControl(threadGroup, scheduler);
+    if (unity::IsP2PEnabled()) {
+        if (GetBoolArg("-listenonion", DEFAULT_LISTEN_ONION))
+            StartTorControl(threadGroup, scheduler);
 
-    StartNode(threadGroup, scheduler);
+        StartNode(threadGroup, scheduler);
+    } else {
+        if (!unity::StartUnityNode(threadGroup, scheduler, chainparams)) {
+            return InitError(_("Unable to start Unity node"));
+        }
+    }
 
 #ifdef ENABLE_MINING
     // Generate coins in the background
-    GenerateBitcoins(GetBoolArg("-gen", DEFAULT_GENERATE), GetArg("-genproclimit", DEFAULT_GENERATE_THREADS), chainparams);
+    if (!unity::IsEnabled()) {
+        GenerateBitcoins(GetBoolArg("-gen", DEFAULT_GENERATE), GetArg("-genproclimit", DEFAULT_GENERATE_THREADS), chainparams);
+    }
 #endif
 
     // ********************************************************* Step 12: finished
