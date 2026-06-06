@@ -5,6 +5,7 @@
 #include "test/test_bitcoin.h"
 #include "test/test_util.h"
 #include "arith_uint256.h"
+#include "core_io.h"
 #include "unity/mempool_mirror.h"
 #include "unity/unity.h"
 #include "unity/metadata.h"
@@ -35,8 +36,6 @@
 #include <boost/thread.hpp>
 
 #include <univalue.h>
-
-BOOST_FIXTURE_TEST_SUITE(unity_tests, BasicTestingSetup)
 
 namespace {
 
@@ -234,6 +233,8 @@ struct UnityRegtestSetup : public TestingSetup {
 };
 
 } // namespace
+
+BOOST_FIXTURE_TEST_SUITE(unity_tests, BasicTestingSetup)
 
 BOOST_AUTO_TEST_CASE(unity_preset_expands_to_lower_level_knobs)
 {
