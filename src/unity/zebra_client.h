@@ -43,8 +43,8 @@ struct ZebraClientConfig {
 
 struct ZebraRpcResponse {
     int httpStatus = 0;
-    std::string body;
-    std::string transportError;
+    std::string body = {};
+    std::string transportError = {};
 };
 
 struct ZebraRpcCall {

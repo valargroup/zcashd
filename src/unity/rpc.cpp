@@ -5,6 +5,7 @@
 #include "unity/unity.h"
 
 #include "rpc/server.h"
+#include "util/strencodings.h"
 #include "util/system.h"
 
 #include <stdexcept>
