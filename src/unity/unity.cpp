@@ -20,6 +20,7 @@
 
 #include <atomic>
 #include <algorithm>
+#include <future>
 #include <map>
 #include <memory>
 #include <stdexcept>
@@ -39,6 +40,12 @@ CCriticalSection cs_unity_status;
 
 static const int DEFAULT_UNITY_POLL_INTERVAL_SECONDS = 5;
 static const int MAX_UNITY_RETRY_BACKOFF_SECONDS = 60;
+// How many acquisition batches one forward-sync pass drives before returning to the
+// outer loop to refresh Zebra's tip/identity. Batches inside a pass are pipelined
+// (the next batch is fetched from Zebra while the current one is applied), so this
+// only bounds how often the cheap identity round-trip is amortized, not memory use
+// (at most two batches are ever held in flight).
+static const int DEFAULT_UNITY_FORWARD_DRIVE_BATCHES = 64;
 
 struct UnityStatus {
     std::string serviceState = "stopped";
@@ -159,6 +166,11 @@ std::string ValidateUnityPreset()
 int UnityPollIntervalSeconds()
 {
     return std::max<int64_t>(1, GetArg("-unitypollinterval", DEFAULT_UNITY_POLL_INTERVAL_SECONDS));
+}
+
+int UnityForwardDriveBatches()
+{
+    return std::max<int64_t>(1, GetArg("-unitysyncdrivebatches", DEFAULT_UNITY_FORWARD_DRIVE_BATCHES));
 }
 
 struct LocalTipSnapshot {
@@ -584,7 +596,156 @@ bool IsTransientIdentityFailure(const ZebraIdentity& identity)
     return identity.failure == ZebraIdentity::TRANSIENT;
 }
 
-SyncOutcome SyncUnityOnce(UnityZebraClient& client, const CChainParams& chainparams)
+struct ForwardFetch {
+    int startHeight = -1;
+    int endHeight = -1;
+    std::vector<std::string> hashes;
+    std::vector<std::string> rawBlocks;
+};
+
+// Fetch the best-chain hashes and raw block data for [startHeight, endHeight] from
+// Zebra. Used for the priming batch and, on a worker via std::async, to prefetch the
+// next batch while the current one is applied.
+ForwardFetch FetchForwardRange(UnityZebraClient& client, int startHeight, int endHeight)
+{
+    ForwardFetch fetch;
+    fetch.startHeight = startHeight;
+    fetch.endHeight = endHeight;
+    fetch.hashes = GetZebraBestChainHashes(client, startHeight, endHeight);
+    fetch.rawBlocks = client.GetRawBlocks(fetch.hashes);
+    return fetch;
+}
+
+// Drive forward (append-only) sync from the local tip toward Zebra's best chain,
+// overlapping Zebra block acquisition with local block application: while the current
+// batch is decoded and ingested, the next batch is fetched on a worker thread, turning
+// the per-batch cost from fetch+apply into max(fetch, apply). Correctness is unchanged
+// from the serial path: every batch is still verified to chain onto the actual local
+// tip and to match the requested hashes (DecodeFetchedBlocks), so a batch invalidated
+// by a Zebra reorg fails those checks and is rejected rather than applied. At most two
+// batches are ever held in flight. Preconditions, checked by the caller: the local tip
+// is on Zebra's best chain and strictly below Zebra's tip.
+SyncOutcome RunForwardSyncPipelined(
+    UnityZebraClient& client,
+    UnityZebraClient& prefetchClient,
+    const CChainParams& chainparams,
+    const LocalTipSnapshot& startTip,
+    int zebraBestHeight,
+    const std::string& zebraBestHash)
+{
+    const int batch = UnitySyncBatchSize();
+    const int64_t windowEnd = std::min<int64_t>(
+        zebraBestHeight,
+        static_cast<int64_t>(startTip.height) +
+            static_cast<int64_t>(batch) * UnityForwardDriveBatches());
+
+    std::string expectedPrevHash = startTip.hash;
+    bool progressedAny = false;
+
+    UpdateSyncStatus("ready", "syncing", "fetching_zebra_blocks");
+
+    // Prime the pipeline with the first batch synchronously.
+    ForwardFetch current;
+    try {
+        current = FetchForwardRange(
+            client, startTip.height + 1, std::min(zebraBestHeight, startTip.height + batch));
+    } catch (const std::exception& e) {
+        UpdateSyncStatus("waiting", "degraded", "zebra_rpc_error", e.what());
+        return {progressedAny, false, true};
+    }
+
+    while (true) {
+        boost::this_thread::interruption_point();
+        if (g_unity_interrupt.load()) {
+            return {progressedAny, false};
+        }
+
+        // If this batch reaches Zebra's tip, confirm Zebra still ends where we expect;
+        // otherwise Zebra moved under us and the outer loop should refresh identity.
+        if (current.endHeight == zebraBestHeight &&
+            (current.hashes.empty() || current.hashes.back() != zebraBestHash)) {
+            UpdateSyncStatus(
+                "ready",
+                "degraded",
+                "zebra_tip_changed_during_sync",
+                strprintf("Zebra block batch no longer ends at expected tip %s at height %d",
+                          zebraBestHash, zebraBestHeight));
+            return {progressedAny, false};
+        }
+
+        // Start acquiring the next batch so it overlaps with applying the current one.
+        // The future's destructor joins the worker on every early return below, so the
+        // referenced prefetchClient always outlives the task.
+        const bool hasNext = current.endHeight < windowEnd;
+        std::future<ForwardFetch> nextFetch;
+        if (hasNext) {
+            const int nextStart = current.endHeight + 1;
+            const int nextEnd = std::min(zebraBestHeight, current.endHeight + batch);
+            nextFetch = std::async(
+                std::launch::async,
+                [&prefetchClient, nextStart, nextEnd]() {
+                    return FetchForwardRange(prefetchClient, nextStart, nextEnd);
+                });
+        }
+
+        std::vector<CBlock> blocks;
+        std::string decodeError;
+        if (!DecodeFetchedBlocks(current.hashes, current.rawBlocks, expectedPrevHash, blocks, decodeError)) {
+            UpdateSyncStatus("failed", "failed", "zebra_block_data_error", decodeError);
+            return {progressedAny, true};
+        }
+
+        BlockIngestionResult result = IngestBlockBatch(blocks, chainparams);
+        if (!result.success) {
+            UpdateSyncStatus(
+                result.hardFailure ? "failed" : "ready",
+                result.hardFailure ? "failed" : "degraded",
+                result.hardFailure ? "hard_sync_fault" : "block_ingestion_error",
+                result.error);
+            return {progressedAny, result.hardFailure};
+        }
+
+        LocalTipSnapshot newTip = GetLocalTipSnapshot();
+        if (newTip.hash != current.hashes.back() || newTip.height != current.endHeight) {
+            return HandleTipMismatchAfterIngestion(
+                client,
+                chainparams,
+                zebraBestHeight,
+                zebraBestHash,
+                "local_tip_mismatch_after_chunk",
+                strprintf("local tip after Unity chunk is %s at height %d, expected %s at height %d",
+                          newTip.hash, newTip.height, current.hashes.back(), current.endHeight));
+        }
+
+        UpdateSyncedTip(newTip);
+        progressedAny = true;
+        expectedPrevHash = newTip.hash;
+
+        if (newTip.height == zebraBestHeight && newTip.hash == zebraBestHash) {
+            UpdateSyncStatus("ready", "synced", "zebra_tip_matched", "", true);
+            return {true, false};
+        }
+        UpdateSyncStatus("ready", "syncing", "zebra_backfill_in_progress");
+
+        if (!hasNext) {
+            // Reached the drive window without reaching Zebra's tip; return so the outer
+            // loop refreshes Zebra's tip/identity and continues from the new local tip.
+            return {true, false};
+        }
+
+        try {
+            current = nextFetch.get();
+        } catch (const std::exception& e) {
+            UpdateSyncStatus("waiting", "degraded", "zebra_rpc_error", e.what());
+            return {progressedAny, false, true};
+        }
+    }
+}
+
+SyncOutcome SyncUnityOnce(
+    UnityZebraClient& client,
+    UnityZebraClient& prefetchClient,
+    const CChainParams& chainparams)
 {
     ZebraIdentity identity = client.CheckIdentity(chainparams);
     UpdateZebraStatus(identity);
@@ -625,59 +786,10 @@ SyncOutcome SyncUnityOnce(UnityZebraClient& client, const CChainParams& chainpar
         return {false, false};
     }
 
-    const int startHeight = localTip.height + 1;
-    const int endHeight = std::min(zebraBestHeight, localTip.height + UnitySyncBatchSize());
-    UpdateSyncStatus("ready", "syncing", "fetching_zebra_blocks");
-
-    std::vector<std::string> hashes = GetZebraBestChainHashes(client, startHeight, endHeight);
-    if (endHeight == zebraBestHeight && (hashes.empty() || hashes.back() != zebraBestHash)) {
-        UpdateSyncStatus(
-            "ready",
-            "degraded",
-            "zebra_tip_changed_during_sync",
-            strprintf("Zebra block batch no longer ends at expected tip %s at height %d",
-                      zebraBestHash, zebraBestHeight));
-        return {false, false};
-    }
-    std::vector<std::string> rawBlocks = client.GetRawBlocks(hashes);
-
-    std::vector<CBlock> blocks;
-    std::string decodeError;
-    if (!DecodeFetchedBlocks(hashes, rawBlocks, localTip.hash, blocks, decodeError)) {
-        UpdateSyncStatus("failed", "failed", "zebra_block_data_error", decodeError);
-        return {false, true};
-    }
-
-    BlockIngestionResult result = IngestBlockBatch(blocks, chainparams);
-    if (!result.success) {
-        UpdateSyncStatus(
-            result.hardFailure ? "failed" : "ready",
-            result.hardFailure ? "failed" : "degraded",
-            result.hardFailure ? "hard_sync_fault" : "block_ingestion_error",
-            result.error);
-        return {false, result.hardFailure};
-    }
-
-    LocalTipSnapshot newTip = GetLocalTipSnapshot();
-    if (newTip.hash != hashes.back() || newTip.height != endHeight) {
-        return HandleTipMismatchAfterIngestion(
-            client,
-            chainparams,
-            zebraBestHeight,
-            zebraBestHash,
-            "local_tip_mismatch_after_chunk",
-            strprintf("local tip after Unity chunk is %s at height %d, expected %s at height %d",
-                      newTip.hash, newTip.height, hashes.back(), endHeight));
-    }
-
-    UpdateSyncedTip(newTip);
-    if (newTip.height == zebraBestHeight && newTip.hash == zebraBestHash) {
-        UpdateSyncStatus("ready", "synced", "zebra_tip_matched", "", true);
-    } else {
-        UpdateSyncStatus("ready", "syncing", "zebra_backfill_in_progress");
-    }
-
-    return {true, false};
+    // Forward, append-only sync: the local tip is on Zebra's best chain and strictly
+    // below it. Drive it with acquisition/application pipelining.
+    return RunForwardSyncPipelined(
+        client, prefetchClient, chainparams, localTip, zebraBestHeight, zebraBestHash);
 }
 
 bool IsSyncedForMempoolMirror()
@@ -723,6 +835,10 @@ void UnityBlockSourceThread(ZebraClientConfig config, std::string chainName)
     try {
         const CChainParams& chainparams = Params(chainName);
         UnityZebraClient client(config, std::unique_ptr<ZebraRpcTransport>(new LibeventZebraRpcTransport()));
+        // Dedicated client for prefetching the next batch concurrently with applying the
+        // current one. A second client keeps acquisition and application from sharing any
+        // per-call transport state.
+        UnityZebraClient prefetchClient(config, std::unique_ptr<ZebraRpcTransport>(new LibeventZebraRpcTransport()));
         bool stickyFault = false;
         int consecutiveRetryCount = 0;
         while (!g_unity_interrupt.load()) {
@@ -733,7 +849,7 @@ void UnityBlockSourceThread(ZebraClientConfig config, std::string chainName)
                     MilliSleep(UnityPollIntervalSeconds() * 1000);
                     continue;
                 }
-                SyncOutcome outcome = SyncUnityOnce(client, chainparams);
+                SyncOutcome outcome = SyncUnityOnce(client, prefetchClient, chainparams);
                 stickyFault = outcome.stickyFault;
                 const bool synced = IsUnitySynced();
                 if (outcome.progressed || stickyFault || synced || !outcome.transientFailure) {
@@ -1239,6 +1355,7 @@ UniValue GetUnityInfo()
     limits.pushKV("poll_interval_seconds", UnityPollIntervalSeconds());
     limits.pushKV("max_retry_backoff_seconds", MAX_UNITY_RETRY_BACKOFF_SECONDS);
     limits.pushKV("sync_batch_size", UnitySyncBatchSize());
+    limits.pushKV("forward_drive_batches", UnityForwardDriveBatches());
     limits.pushKV("zebra_rpc_max_response_body_bytes", static_cast<int64_t>(ZebraRpcMaxResponseBodySize()));
     limits.pushKV("mempool_txids_per_poll", static_cast<int64_t>(MaxMempoolMirrorTxIdsPerPoll()));
     limits.pushKV("mempool_divergence_details", static_cast<int64_t>(MaxMempoolMirrorDivergenceDetails()));
