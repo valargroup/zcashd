@@ -23,6 +23,8 @@ class thread_group;
 
 namespace unity {
 
+class UnityZebraClient;
+
 static const char* const BLOCK_SOURCE_P2P = "p2p";
 static const char* const BLOCK_SOURCE_ZEBRA = "zebra";
 static const char* const BLOCK_VALIDATION_FULL = "full";
@@ -62,6 +64,22 @@ void ThrowIfMiningDisabled(const std::string& method);
 void RegisterUnityRPCCommands(CRPCTable& tableRPC);
 
 int UnityRetryBackoffSeconds(int consecutiveFailures);
+
+struct UnitySyncTestOutcome {
+    bool progressed = false;
+    bool stickyFault = false;
+    bool transientFailure = false;
+};
+
+UnitySyncTestOutcome TEST_ValidatePostIngestionTipOnZebraBestChain(
+    UnityZebraClient& client,
+    const CChainParams& chainparams,
+    int localTipHeight,
+    const std::string& localTipHash,
+    int expectedHeight,
+    const std::string& expectedHash,
+    const std::string& mismatchError,
+    const std::string& offChainDetail);
 
 } // namespace unity
 
