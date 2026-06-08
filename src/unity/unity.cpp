@@ -447,13 +447,14 @@ CommonAncestorSearchResult FindCommonAncestorWithZebra(
         MAX_REORG_LENGTH);
 }
 
-SyncOutcome HandleTipMismatchAfterIngestion(
+SyncOutcome ValidatePostIngestionTipOnZebraBestChain(
     UnityZebraClient& client,
     const CChainParams& chainparams,
+    const LocalTipSnapshot& localTip,
     int expectedHeight,
     const std::string& expectedHash,
-    const std::string& mismatchDetail,
-    const std::string& mismatchError)
+    const std::string& mismatchError,
+    const std::string& offChainDetail)
 {
     ZebraIdentity current = client.CheckIdentity(chainparams);
     UpdateZebraStatus(current);
@@ -467,6 +468,37 @@ SyncOutcome HandleTipMismatchAfterIngestion(
         return {false, !transient, transient};
     }
 
+    std::string zebraHashAtLocalHeight;
+    bool localTipOnZebraBest = false;
+    if (localTip.height >= 0 && localTip.height <= current.blocks) {
+        if (localTip.height == current.blocks) {
+            zebraHashAtLocalHeight = current.bestBlockHash;
+        
+            // If we don't have the zebra hash at the local height, we need to get it from the client
+        } else if (!GetCachedZebraBestChainHash(
+                       localTip.height,
+                       current.blocks,
+                       current.bestBlockHash,
+                       zebraHashAtLocalHeight)) {
+            zebraHashAtLocalHeight = client.GetBlockHash(localTip.height);
+            RecordZebraBestChainHash(localTip.height, zebraHashAtLocalHeight);
+        }
+        // Check if the zebra hash at the local height matches the local tip hash
+        localTipOnZebraBest = (zebraHashAtLocalHeight == localTip.hash);
+    }
+
+    // If the local tip is on the Zebra best chain, we can update the synced tip and status
+    // and continue. Otherwise, fall through and fail.
+    if (localTipOnZebraBest) {
+        UpdateSyncedTip(localTip);
+        if (localTip.height == current.blocks && localTip.hash == current.bestBlockHash) {
+            UpdateSyncStatus("ready", "synced", "zebra_tip_matched", "", true);
+        } else {
+            UpdateSyncStatus("ready", "syncing", "zebra_backfill_in_progress");
+        }
+        return {true, false};
+    }
+
     if (current.blocks != expectedHeight ||
         current.bestBlockHash != expectedHash) {
         UpdateSyncStatus(
@@ -478,7 +510,23 @@ SyncOutcome HandleTipMismatchAfterIngestion(
         return {false, false};
     }
 
-    UpdateSyncStatus("failed", "failed", mismatchDetail, mismatchError);
+    const std::string localVsZebraError = localTip.height > current.blocks
+        ? strprintf(
+              "local tip %s at height %d exceeds Zebra best tip %s at height %d",
+              localTip.hash,
+              localTip.height,
+              current.bestBlockHash,
+              current.blocks)
+        : strprintf(
+              "local tip %s at height %d is not on Zebra best chain (Zebra hash at that height: %s)",
+              localTip.hash,
+              localTip.height,
+              zebraHashAtLocalHeight);
+    UpdateSyncStatus(
+        "failed",
+        "failed",
+        offChainDetail,
+        mismatchError + "; " + localVsZebraError);
     return {false, true};
 }
 
@@ -569,14 +617,15 @@ SyncOutcome SyncUnityReorgToZebraBest(
 
     LocalTipSnapshot newTip = GetLocalTipSnapshot();
     if (newTip.hash != zebraBestHash || newTip.height != zebraBestHeight) {
-        return HandleTipMismatchAfterIngestion(
+        return ValidatePostIngestionTipOnZebraBestChain(
             client,
             chainparams,
+            newTip,
             zebraBestHeight,
             zebraBestHash,
-            "local_tip_mismatch_after_reorg",
             strprintf("local tip after Zebra reorg is %s at height %d, expected %s at height %d",
-                      newTip.hash, newTip.height, zebraBestHash, zebraBestHeight));
+                      newTip.hash, newTip.height, zebraBestHash, zebraBestHeight),
+            "local_tip_not_on_zebra_best_chain_after_reorg");
     }
 
     UpdateSyncedTip(newTip);
@@ -707,14 +756,15 @@ SyncOutcome RunForwardSyncPipelined(
 
         LocalTipSnapshot newTip = GetLocalTipSnapshot();
         if (newTip.hash != current.hashes.back() || newTip.height != current.endHeight) {
-            return HandleTipMismatchAfterIngestion(
+            return ValidatePostIngestionTipOnZebraBestChain(
                 client,
                 chainparams,
+                newTip,
                 zebraBestHeight,
                 zebraBestHash,
-                "local_tip_mismatch_after_chunk",
                 strprintf("local tip after Unity chunk is %s at height %d, expected %s at height %d",
-                          newTip.hash, newTip.height, current.hashes.back(), current.endHeight));
+                          newTip.hash, newTip.height, current.hashes.back(), current.endHeight),
+                "local_tip_not_on_zebra_best_chain_after_chunk");
         }
 
         UpdateSyncedTip(newTip);
@@ -1377,6 +1427,36 @@ void ThrowIfMiningDisabled(const std::string& method)
     if (IsEnabled()) {
         throw JSONRPCError(RPC_MISC_ERROR, strprintf("%s is unavailable in unity mode", method));
     }
+}
+
+UnitySyncTestOutcome TEST_ValidatePostIngestionTipOnZebraBestChain(
+    UnityZebraClient& client,
+    const CChainParams& chainparams,
+    int localTipHeight,
+    const std::string& localTipHash,
+    int expectedHeight,
+    const std::string& expectedHash,
+    const std::string& mismatchError,
+    const std::string& offChainDetail)
+{
+    LocalTipSnapshot localTip;
+    localTip.height = localTipHeight;
+    localTip.hash = localTipHash;
+
+    SyncOutcome outcome = ValidatePostIngestionTipOnZebraBestChain(
+        client,
+        chainparams,
+        localTip,
+        expectedHeight,
+        expectedHash,
+        mismatchError,
+        offChainDetail);
+
+    UnitySyncTestOutcome testOutcome;
+    testOutcome.progressed = outcome.progressed;
+    testOutcome.stickyFault = outcome.stickyFault;
+    testOutcome.transientFailure = outcome.transientFailure;
+    return testOutcome;
 }
 
 } // namespace unity

@@ -749,6 +749,174 @@ BOOST_AUTO_TEST_CASE(zebra_client_fails_closed_on_oversized_response)
     BOOST_CHECK(identity.lastError.find("response body exceeded maximum size") != std::string::npos);
 }
 
+BOOST_AUTO_TEST_CASE(unity_accepts_tip_ahead_when_on_zebra_best_chain_after_chunk_mismatch)
+{
+    ArgsSnapshot snapshot;
+    ApplyUnityArgs("-unity -unityzebra=http://127.0.0.1:8232");
+
+    const std::string currentBestHash = HashWithLastChar('f');
+    const std::string localTipHash = currentBestHash;
+    const int expectedHeight = 4054025;
+    const std::string expectedHash = HashWithLastChar('c');
+    const int currentBestHeight = 4054209;
+    const int localTipHeight = currentBestHeight;
+
+    std::unique_ptr<MockZebraTransport> transport(new MockZebraTransport());
+    UniValue blockchainInfo(UniValue::VOBJ);
+    blockchainInfo.pushKV("chain", Params().NetworkIDString());
+    blockchainInfo.pushKV("blocks", currentBestHeight);
+    blockchainInfo.pushKV("bestblockhash", currentBestHash);
+    transport->responses["getblockchaininfo"] = {HTTP_OK, RpcResult(blockchainInfo).write()};
+    transport->responses["getblockhash"] = {
+        HTTP_OK,
+        RpcResult(UniValue(Params().GetConsensus().hashGenesisBlock.GetHex())).write()};
+
+    unity::UnityZebraClient client(MockZebraConfig(), std::move(transport));
+    unity::UnitySyncTestOutcome outcome = unity::TEST_ValidatePostIngestionTipOnZebraBestChain(
+        client,
+        Params(),
+        localTipHeight,
+        localTipHash,
+        expectedHeight,
+        expectedHash,
+        "local tip mismatch during test",
+        "local_tip_not_on_zebra_best_chain_after_chunk");
+
+    BOOST_CHECK(outcome.progressed);
+    BOOST_CHECK(!outcome.stickyFault);
+    BOOST_CHECK(!outcome.transientFailure);
+
+    UniValue info = unity::GetUnityInfo();
+    UniValue sync = find_value(info.get_obj(), "sync");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "state").get_str(), "synced");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "detail").get_str(), "zebra_tip_matched");
+}
+
+BOOST_AUTO_TEST_CASE(unity_fails_when_tip_ahead_is_not_on_zebra_best_chain_after_chunk_mismatch)
+{
+    ArgsSnapshot snapshot;
+    ApplyUnityArgs("-unity -unityzebra=http://127.0.0.1:8232");
+
+    const int expectedHeight = 4054025;
+    const std::string expectedHash = HashWithLastChar('c');
+    const std::string localTipHash = HashWithLastChar('e');
+    const int localTipHeight = expectedHeight;
+
+    std::unique_ptr<MockZebraTransport> transport(new MockZebraTransport());
+    UniValue blockchainInfo(UniValue::VOBJ);
+    blockchainInfo.pushKV("chain", Params().NetworkIDString());
+    blockchainInfo.pushKV("blocks", expectedHeight);
+    blockchainInfo.pushKV("bestblockhash", expectedHash);
+    transport->responses["getblockchaininfo"] = {HTTP_OK, RpcResult(blockchainInfo).write()};
+    transport->responses["getblockhash"] = {
+        HTTP_OK,
+        RpcResult(UniValue(Params().GetConsensus().hashGenesisBlock.GetHex())).write()};
+
+    unity::UnityZebraClient client(MockZebraConfig(), std::move(transport));
+    unity::UnitySyncTestOutcome outcome = unity::TEST_ValidatePostIngestionTipOnZebraBestChain(
+        client,
+        Params(),
+        localTipHeight,
+        localTipHash,
+        expectedHeight,
+        expectedHash,
+        "local tip mismatch during test",
+        "local_tip_not_on_zebra_best_chain_after_chunk");
+
+    BOOST_CHECK(!outcome.progressed);
+    BOOST_CHECK(outcome.stickyFault);
+    BOOST_CHECK(!outcome.transientFailure);
+
+    UniValue info = unity::GetUnityInfo();
+    UniValue sync = find_value(info.get_obj(), "sync");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "state").get_str(), "failed");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "detail").get_str(), "local_tip_not_on_zebra_best_chain_after_chunk");
+}
+
+BOOST_AUTO_TEST_CASE(unity_fails_when_local_tip_exceeds_zebra_best_after_chunk_mismatch)
+{
+    ArgsSnapshot snapshot;
+    ApplyUnityArgs("-unity -unityzebra=http://127.0.0.1:8232");
+
+    const int expectedHeight = 4054025;
+    const std::string expectedHash = HashWithLastChar('c');
+    const int localTipHeight = 4054026;
+    const std::string localTipHash = HashWithLastChar('e');
+
+    std::unique_ptr<MockZebraTransport> transport(new MockZebraTransport());
+    UniValue blockchainInfo(UniValue::VOBJ);
+    blockchainInfo.pushKV("chain", Params().NetworkIDString());
+    blockchainInfo.pushKV("blocks", expectedHeight);
+    blockchainInfo.pushKV("bestblockhash", expectedHash);
+    transport->responses["getblockchaininfo"] = {HTTP_OK, RpcResult(blockchainInfo).write()};
+    transport->responses["getblockhash"] = {
+        HTTP_OK,
+        RpcResult(UniValue(Params().GetConsensus().hashGenesisBlock.GetHex())).write()};
+
+    unity::UnityZebraClient client(MockZebraConfig(), std::move(transport));
+    unity::UnitySyncTestOutcome outcome = unity::TEST_ValidatePostIngestionTipOnZebraBestChain(
+        client,
+        Params(),
+        localTipHeight,
+        localTipHash,
+        expectedHeight,
+        expectedHash,
+        "local tip mismatch during test",
+        "local_tip_not_on_zebra_best_chain_after_chunk");
+
+    BOOST_CHECK(!outcome.progressed);
+    BOOST_CHECK(outcome.stickyFault);
+    BOOST_CHECK(!outcome.transientFailure);
+
+    UniValue info = unity::GetUnityInfo();
+    UniValue sync = find_value(info.get_obj(), "sync");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "state").get_str(), "failed");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "detail").get_str(), "local_tip_not_on_zebra_best_chain_after_chunk");
+}
+
+BOOST_AUTO_TEST_CASE(unity_degrades_non_sticky_when_zebra_tip_changes_during_chunk_mismatch_handling)
+{
+    ArgsSnapshot snapshot;
+    ApplyUnityArgs("-unity -unityzebra=http://127.0.0.1:8232");
+
+    const int expectedHeight = 4054025;
+    const std::string expectedHash = HashWithLastChar('c');
+    const int newZebraHeight = 4054026;
+    const std::string newZebraHash = HashWithLastChar('d');
+    const int localTipHeight = newZebraHeight + 1;
+    const std::string localTipHash = HashWithLastChar('e');
+
+    std::unique_ptr<MockZebraTransport> transport(new MockZebraTransport());
+    UniValue blockchainInfo(UniValue::VOBJ);
+    blockchainInfo.pushKV("chain", Params().NetworkIDString());
+    blockchainInfo.pushKV("blocks", newZebraHeight);
+    blockchainInfo.pushKV("bestblockhash", newZebraHash);
+    transport->responses["getblockchaininfo"] = {HTTP_OK, RpcResult(blockchainInfo).write()};
+    transport->responses["getblockhash"] = {
+        HTTP_OK,
+        RpcResult(UniValue(Params().GetConsensus().hashGenesisBlock.GetHex())).write()};
+
+    unity::UnityZebraClient client(MockZebraConfig(), std::move(transport));
+    unity::UnitySyncTestOutcome outcome = unity::TEST_ValidatePostIngestionTipOnZebraBestChain(
+        client,
+        Params(),
+        localTipHeight,
+        localTipHash,
+        expectedHeight,
+        expectedHash,
+        "local tip mismatch during test",
+        "local_tip_not_on_zebra_best_chain_after_chunk");
+
+    BOOST_CHECK(!outcome.progressed);
+    BOOST_CHECK(!outcome.stickyFault);
+    BOOST_CHECK(!outcome.transientFailure);
+
+    UniValue info = unity::GetUnityInfo();
+    UniValue sync = find_value(info.get_obj(), "sync");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "state").get_str(), "degraded");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "detail").get_str(), "zebra_tip_changed_during_sync");
+}
+
 BOOST_AUTO_TEST_CASE(trusted_block_uses_checkpoint_expensive_check_lever)
 {
     BOOST_CHECK(BlockCheckModeUsesExpensiveChecks(CheckAs::Block, false));
@@ -994,6 +1162,44 @@ BOOST_AUTO_TEST_CASE(unity_ingestion_reports_hard_fault_for_wrong_parent_without
     UniValue sync = find_value(info.get_obj(), "sync");
     BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "state").get_str(), "failed");
     BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "detail").get_str(), "hard_sync_fault");
+}
+
+BOOST_AUTO_TEST_CASE(unity_ingesting_known_ancestor_keeps_descendant_tip_active)
+{
+    ArgsSnapshot snapshot;
+    ApplyUnityArgs("-unity -unityzebra=http://127.0.0.1:8232");
+    unity::ClearTrustedBlockBoundary();
+
+    CKey firstKey = CKey::TestOnlyRandomKey(true);
+    CScript firstScript = CScript() << ToByteVector(firstKey.GetPubKey()) << OP_CHECKSIG;
+    CBlock first = CreateSolvedBlock(Params(), firstScript);
+
+    unity::BlockIngestionResult firstResult = unity::IngestBlock(first, Params());
+    BOOST_REQUIRE(firstResult.success);
+
+    CKey secondKey = CKey::TestOnlyRandomKey(true);
+    CScript secondScript = CScript() << ToByteVector(secondKey.GetPubKey()) << OP_CHECKSIG;
+    CBlock second = CreateSolvedBlock(Params(), secondScript);
+
+    unity::BlockIngestionResult seedResult = unity::IngestBlock(second, Params());
+    BOOST_REQUIRE(seedResult.success);
+
+    {
+        LOCK(cs_main);
+        BOOST_REQUIRE(chainActive.Tip() != nullptr);
+        BOOST_CHECK_EQUAL(chainActive.Tip()->GetBlockHash().GetHex(), second.GetHash().GetHex());
+    }
+
+    unity::BlockIngestionResult replayResult =
+        unity::IngestBlockBatch(std::vector<CBlock>{first}, Params());
+    BOOST_CHECK(replayResult.success);
+    BOOST_CHECK_EQUAL(replayResult.hash, first.GetHash().GetHex());
+
+    {
+        LOCK(cs_main);
+        BOOST_REQUIRE(chainActive.Tip() != nullptr);
+        BOOST_CHECK_EQUAL(chainActive.Tip()->GetBlockHash().GetHex(), second.GetHash().GetHex());
+    }
 }
 
 BOOST_AUTO_TEST_CASE(unity_failed_non_contiguous_batch_clears_trusted_candidates)
