@@ -2,7 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php .
 
-#include "unity/unity.h"
+#include "zebra_compat/zebra_compat.h"
 
 #include "rpc/server.h"
 #include "util/strencodings.h"
@@ -14,12 +14,12 @@
 
 namespace {
 
-UniValue getunityinfo(const UniValue& params, bool fHelp)
+UniValue getzebracompatinfo(const UniValue& params, bool fHelp)
 {
     if (fHelp || params.size() != 0) {
         throw std::runtime_error(
-            "getunityinfo\n"
-            "\nReturns Unity node mode and source status.\n"
+            "getzebracompatinfo\n"
+            "\nReturns zebra-compat node mode and source status.\n"
             "\nResult:\n"
             "{\n"
             "  \"enabled\": true|false,\n"
@@ -116,8 +116,8 @@ UniValue getunityinfo(const UniValue& params, bool fHelp)
             "  }\n"
             "}\n"
             "\nExamples:\n"
-            + HelpExampleCli("getunityinfo", "")
-            + HelpExampleRpc("getunityinfo", "")
+            + HelpExampleCli("getzebracompatinfo", "")
+            + HelpExampleRpc("getzebracompatinfo", "")
         );
     }
 
@@ -127,7 +127,7 @@ UniValue getunityinfo(const UniValue& params, bool fHelp)
 static const CRPCCommand commands[] =
 { //  category              name                      actor (function)         okSafeMode
   //  --------------------- ------------------------  -----------------------  ----------
-    { "unity",              "getunityinfo",           &getunityinfo,           true  },
+    { "zebra-compat",       "getzebracompatinfo",     &getzebracompatinfo,     true  },
 };
 
 } // namespace

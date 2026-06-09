@@ -2,7 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php .
 
-#include "unity/zebra_client.h"
+#include "zebra_compat/zebra_client.h"
 
 #include "chainparams.h"
 #include "consensus/consensus.h"
@@ -38,12 +38,12 @@ const int DEFAULT_UNITY_SYNC_RESPONSE_BUDGET_MB = 128;
 
 // Upper bound on the cumulative size of one getblock batch response. This caps how
 // many blocks may be requested per Zebra round-trip (see UnitySyncBatchSize). It is
-// runtime-tunable via -unitysyncresponsebudgetmb so the acquisition batch can be
+// runtime-tunable via -zebra-compat-sync-response-budget-mb so the acquisition batch can be
 // scaled for throughput experiments without a rebuild; the Zebra server's own
 // max_response_body_size must be configured at least as large.
 size_t UnitySyncRawBlockResponseBudget()
 {
-    int64_t megabytes = GetArg("-unitysyncresponsebudgetmb", DEFAULT_UNITY_SYNC_RESPONSE_BUDGET_MB);
+    int64_t megabytes = GetArg("-zebra-compat-sync-response-budget-mb", DEFAULT_UNITY_SYNC_RESPONSE_BUDGET_MB);
     if (megabytes < 1) {
         megabytes = 1;
     }
@@ -290,7 +290,7 @@ size_t ZebraRpcMaxResponseBodySize()
 
 int UnitySyncBatchSize()
 {
-    int64_t configured = GetArg("-unitysyncbatchsize", DEFAULT_UNITY_SYNC_BATCH_SIZE);
+    int64_t configured = GetArg("-zebra-compat-sync-batch-size", DEFAULT_UNITY_SYNC_BATCH_SIZE);
     if (configured < 1) {
         configured = 1;
     }
@@ -328,7 +328,7 @@ bool ParseZebraEndpoint(const std::string& url, ZebraEndpoint& endpoint, std::st
         error = "Unity Zebra JSON-RPC currently supports http:// endpoints only";
         return false;
     } else {
-        error = "-unityzebra must be an http:// URL";
+        error = "-zebra-compat-url must be an http:// URL";
         return false;
     }
 
@@ -340,7 +340,7 @@ bool ParseZebraEndpoint(const std::string& url, ZebraEndpoint& endpoint, std::st
     }
 
     if (hostPort.empty()) {
-        error = "-unityzebra URL is missing a host";
+        error = "-zebra-compat-url is missing a host";
         return false;
     }
 
@@ -348,7 +348,7 @@ bool ParseZebraEndpoint(const std::string& url, ZebraEndpoint& endpoint, std::st
     std::string host;
     SplitHostPort(hostPort, port, host);
     if (host.empty()) {
-        error = "-unityzebra URL is missing a host";
+        error = "-zebra-compat-url is missing a host";
         return false;
     }
 
@@ -359,7 +359,7 @@ bool ParseZebraEndpoint(const std::string& url, ZebraEndpoint& endpoint, std::st
 
 bool LoadZebraClientConfig(ZebraClientConfig& config, std::string& error)
 {
-    const std::string url = GetArg("-unityzebra", "");
+    const std::string url = GetArg("-zebra-compat-url", "");
     if (url.empty()) {
         error = "waiting_for_zebra_endpoint";
         return false;
@@ -369,11 +369,11 @@ bool LoadZebraClientConfig(ZebraClientConfig& config, std::string& error)
         return false;
     }
 
-    const std::string user = GetArg("-unityzebrarpcuser", "");
-    const std::string password = GetArg("-unityzebrarpcpassword", "");
-    const std::string cookieFile = GetArg("-unityzebracookiefile", "");
+    const std::string user = GetArg("-zebra-compat-rpc-user", "");
+    const std::string password = GetArg("-zebra-compat-rpc-password", "");
+    const std::string cookieFile = GetArg("-zebra-compat-cookiefile", "");
     if (!cookieFile.empty() && (!user.empty() || !password.empty())) {
-        error = "-unityzebracookiefile is incompatible with -unityzebrarpcuser/-unityzebrarpcpassword";
+        error = "-zebra-compat-cookiefile is incompatible with -zebra-compat-rpc-user/-zebra-compat-rpc-password";
         return false;
     }
 
@@ -395,7 +395,7 @@ bool LoadZebraClientConfig(ZebraClientConfig& config, std::string& error)
         config.auth.password = cookie.substr(colon + 1);
     } else {
         if (user.empty() || password.empty()) {
-            error = "Unity Zebra JSON-RPC requires -unityzebracookiefile or both -unityzebrarpcuser and -unityzebrarpcpassword";
+            error = "zebra-compat Zebra JSON-RPC requires -zebra-compat-cookiefile or both -zebra-compat-rpc-user and -zebra-compat-rpc-password";
             return false;
         }
         config.auth.user = user;

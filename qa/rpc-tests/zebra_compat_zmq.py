@@ -14,7 +14,7 @@ from test_framework.util import (
     start_node,
     stop_node,
 )
-from unity_polling_sync import FakePollingZebraServer, wait_until
+from zebra_compat_polling_sync import FakePollingZebraServer, wait_until
 
 
 class UnityZMQTest(BitcoinTestFramework):
@@ -32,11 +32,11 @@ class UnityZMQTest(BitcoinTestFramework):
 
     def unity_args(self, endpoint):
         return [
-            '-unity',
-            '-unityzebra=%s' % endpoint,
-            '-unityzebrarpcuser=user',
-            '-unityzebrarpcpassword=pass',
-            '-unitypollinterval=1',
+            '-zebra-compat',
+            '-zebra-compat-url=%s' % endpoint,
+            '-zebra-compat-rpc-user=user',
+            '-zebra-compat-rpc-password=pass',
+            '-zebra-compat-poll-interval=1',
             '-zmqpubhashtx=tcp://127.0.0.1:%d' % self.port,
             '-zmqpubhashblock=tcp://127.0.0.1:%d' % self.port,
         ]
@@ -63,7 +63,7 @@ class UnityZMQTest(BitcoinTestFramework):
 
         try:
             unity = start_node(1, self.options.tmpdir, self.unity_args(endpoint))
-            wait_until(lambda: unity.getunityinfo()['sync']['state'] == 'synced')
+            wait_until(lambda: unity.getzebracompatinfo()['sync']['state'] == 'synced')
 
             block_hash = source.generate(1)[0]
             coinbase_txid = source.getblock(block_hash)['tx'][0]

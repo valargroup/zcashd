@@ -12,7 +12,7 @@
 #include "rpc/protocol.h"
 #include "sync.h"
 #include "ui_interface.h"
-#include "unity/unity.h"
+#include "zebra_compat/zebra_compat.h"
 #include "util/system.h"
 #include "version.h"
 #include "deprecation.h"

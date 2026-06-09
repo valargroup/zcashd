@@ -2,7 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php .
 
-#include "unity/unity.h"
+#include "zebra_compat/zebra_compat.h"
 
 #include "chainparams.h"
 #include "core_io.h"
@@ -10,10 +10,10 @@
 #include "rpc/protocol.h"
 #include "scheduler.h"
 #include "sync.h"
-#include "unity/mempool_mirror.h"
-#include "unity/metadata.h"
-#include "unity/tx_forwarder.h"
-#include "unity/zebra_client.h"
+#include "zebra_compat/mempool_mirror.h"
+#include "zebra_compat/metadata.h"
+#include "zebra_compat/tx_forwarder.h"
+#include "zebra_compat/zebra_client.h"
 #include "uint256.h"
 #include "util/system.h"
 #include "util/time.h"
@@ -77,7 +77,7 @@ ZebraSourceView g_source_view;
 
 bool IsTrustedValidationTestFixtureEnabled()
 {
-    return GetBoolArg("-unitytrustedvalidationfixture", false);
+    return GetBoolArg("-zebra-compat-trusted-validation-fixture", false);
 }
 
 bool IsExplicitlySet(const std::string& arg)
@@ -99,7 +99,7 @@ void ForceOffP2POption(const std::string& arg)
 
 std::string P2PDisabledConflictPrefix()
 {
-    return GetBoolArg("-unity", false) ? "-unity" : "-p2p=0";
+    return GetBoolArg("-zebra-compat", false) ? "-zebra-compat" : "-p2p=0";
 }
 
 bool IsOneOf(const std::string& value, const std::vector<std::string>& allowed)
@@ -148,29 +148,29 @@ std::string ValidateP2PDisabledConflicts()
 
 std::string ValidateUnityPreset()
 {
-    if (!GetBoolArg("-unity", false)) {
+    if (!GetBoolArg("-zebra-compat", false)) {
         return "";
     }
     if (GetArg("-blocksource", BLOCK_SOURCE_P2P) != BLOCK_SOURCE_ZEBRA) {
-        return "-unity requires -blocksource=zebra";
+        return "-zebra-compat requires -blocksource=zebra";
     }
     if (IsP2PEnabled()) {
-        return "-unity requires -p2p=0";
+        return "-zebra-compat requires -p2p=0";
     }
     if (GetArg("-blockvalidation", BLOCK_VALIDATION_FULL) != BLOCK_VALIDATION_TRUSTED_ZEBRA) {
-        return "-unity requires -blockvalidation=trusted-zebra";
+        return "-zebra-compat requires -blockvalidation=trusted-zebra";
     }
     return "";
 }
 
 int UnityPollIntervalSeconds()
 {
-    return std::max<int64_t>(1, GetArg("-unitypollinterval", DEFAULT_UNITY_POLL_INTERVAL_SECONDS));
+    return std::max<int64_t>(1, GetArg("-zebra-compat-poll-interval", DEFAULT_UNITY_POLL_INTERVAL_SECONDS));
 }
 
 int UnityForwardDriveBatches()
 {
-    return std::max<int64_t>(1, GetArg("-unitysyncdrivebatches", DEFAULT_UNITY_FORWARD_DRIVE_BATCHES));
+    return std::max<int64_t>(1, GetArg("-zebra-compat-sync-drive-batches", DEFAULT_UNITY_FORWARD_DRIVE_BATCHES));
 }
 
 struct LocalTipSnapshot {
@@ -1003,7 +1003,7 @@ bool IsEnabled()
 {
     // After validation, every Unity configuration has local Zcash P2P disabled.
     // The explicit checks keep pre-validation status reporting robust.
-    return GetBoolArg("-unity", false) ||
+    return GetBoolArg("-zebra-compat", false) ||
         GetArg("-blocksource", BLOCK_SOURCE_P2P) == BLOCK_SOURCE_ZEBRA ||
         !IsP2PEnabled();
 }
@@ -1035,15 +1035,15 @@ bool IsTrustedValidationEnabled()
 
 void InitParameterInteraction()
 {
-    if (GetBoolArg("-unity", false)) {
+    if (GetBoolArg("-zebra-compat", false)) {
         if (SoftSetArg("-blocksource", BLOCK_SOURCE_ZEBRA)) {
-            LogPrintf("Unity parameter interaction: -unity=1 -> setting -blocksource=zebra\n");
+            LogPrintf("zebra-compat parameter interaction: -zebra-compat=1 -> setting -blocksource=zebra\n");
         }
         if (SoftSetBoolArg("-p2p", false)) {
-            LogPrintf("Unity parameter interaction: -unity=1 -> setting -p2p=0\n");
+            LogPrintf("zebra-compat parameter interaction: -zebra-compat=1 -> setting -p2p=0\n");
         }
         if (SoftSetArg("-blockvalidation", BLOCK_VALIDATION_TRUSTED_ZEBRA)) {
-            LogPrintf("Unity parameter interaction: -unity=1 -> setting -blockvalidation=trusted-zebra\n");
+            LogPrintf("zebra-compat parameter interaction: -zebra-compat=1 -> setting -blockvalidation=trusted-zebra\n");
         }
     }
 
@@ -1090,13 +1090,13 @@ std::string ValidateParameterInteraction()
         return optionError;
     }
 
-    const int64_t configuredSyncBatchSize = GetArg("-unitysyncbatchsize", UnitySyncBatchSize());
+    const int64_t configuredSyncBatchSize = GetArg("-zebra-compat-sync-batch-size", UnitySyncBatchSize());
     if (configuredSyncBatchSize < 1) {
-        return "-unitysyncbatchsize must be at least 1";
+        return "-zebra-compat-sync-batch-size must be at least 1";
     }
     const int effectiveSyncBatchSize = UnitySyncBatchSize();
     if (configuredSyncBatchSize > effectiveSyncBatchSize) {
-        return "-unitysyncbatchsize=" + std::to_string(configuredSyncBatchSize) +
+        return "-zebra-compat-sync-batch-size=" + std::to_string(configuredSyncBatchSize) +
             " exceeds Unity's raw block response memory budget; use " +
             std::to_string(effectiveSyncBatchSize) + " or lower";
     }
@@ -1144,7 +1144,7 @@ bool StartUnityNode(boost::thread_group& threadGroup, CScheduler& scheduler, con
             status.syncDetail = "zebra_configuration_error";
             LogPrintf("Unity Zebra configuration failed: %s\n", error);
         } else {
-            LogPrintf("Unity node waiting for Zebra endpoint configuration (-unityzebra)\n");
+            LogPrintf("zebra-compat node waiting for Zebra endpoint configuration (-zebra-compat-url)\n");
         }
     } else {
         status.serviceState = "waiting";
@@ -1208,7 +1208,7 @@ UniValue GetUnityInfo()
 {
     UniValue obj(UniValue::VOBJ);
     const bool enabled = IsEnabled();
-    const std::string zebraUrl = GetArg("-unityzebra", "");
+    const std::string zebraUrl = GetArg("-zebra-compat-url", "");
     UnityStatus status;
     {
         LOCK(cs_unity_status);
@@ -1321,7 +1321,7 @@ UniValue GetUnityInfo()
     UniValue sync(UniValue::VOBJ);
     if (!enabled) {
         sync.pushKV("state", "disabled");
-        sync.pushKV("detail", "Unity mode is not enabled");
+        sync.pushKV("detail", "zebra-compat mode is not enabled");
     } else if (zebraUrl.empty()) {
         sync.pushKV("state", "degraded");
         sync.pushKV("detail", "waiting_for_zebra_endpoint");

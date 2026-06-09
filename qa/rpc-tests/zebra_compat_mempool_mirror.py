@@ -12,7 +12,7 @@ from test_framework.util import (
 
 from decimal import Decimal
 
-from unity_polling_sync import FakePollingZebraServer, wait_until
+from zebra_compat_polling_sync import FakePollingZebraServer, wait_until
 
 
 class UnityMempoolMirrorTest(BitcoinTestFramework):
@@ -28,12 +28,12 @@ class UnityMempoolMirrorTest(BitcoinTestFramework):
 
     def unity_args(self, endpoint, extra_args=None):
         args = [
-            '-unity',
-            '-unityzebra=%s' % endpoint,
-            '-unityzebrarpcuser=user',
-            '-unityzebrarpcpassword=pass',
-            '-unitypollinterval=1',
-            '-unitysyncbatchsize=2',
+            '-zebra-compat',
+            '-zebra-compat-url=%s' % endpoint,
+            '-zebra-compat-rpc-user=user',
+            '-zebra-compat-rpc-password=pass',
+            '-zebra-compat-poll-interval=1',
+            '-zebra-compat-sync-batch-size=2',
         ]
         if extra_args:
             args.extend(extra_args)
@@ -42,11 +42,11 @@ class UnityMempoolMirrorTest(BitcoinTestFramework):
     def wait_for_unity_tip(self, unity, source):
         wait_until(lambda: unity.getblockcount() == source.getblockcount() and
                    unity.getbestblockhash() == source.getbestblockhash(), timeout=60)
-        assert_equal(unity.getunityinfo()['sync']['state'], 'synced')
+        assert_equal(unity.getzebracompatinfo()['sync']['state'], 'synced')
 
     def wait_for_mirror_tx(self, unity, txid):
         wait_until(lambda: txid in unity.getrawmempool(), timeout=60)
-        info = unity.getunityinfo()['mempool_mirror']
+        info = unity.getzebracompatinfo()['mempool_mirror']
         assert_equal(info['source'], 'zebra-poll')
         assert_equal(info['divergent'], 0)
         assert_equal(info['zebra_size'], 1)
@@ -70,7 +70,7 @@ class UnityMempoolMirrorTest(BitcoinTestFramework):
     def wait_for_mirror_txs(self, unity, txids):
         expected = set(txids)
         wait_until(lambda: expected.issubset(set(unity.getrawmempool())), timeout=60)
-        info = unity.getunityinfo()['mempool_mirror']
+        info = unity.getzebracompatinfo()['mempool_mirror']
         assert_equal(info['source'], 'zebra-poll')
         assert_equal(info['divergent'], 0)
         assert_equal(info['zebra_size'], len(expected))
@@ -113,10 +113,10 @@ class UnityMempoolMirrorTest(BitcoinTestFramework):
                 ['-minrelaytxfee=1.0'],
             ))
             self.wait_for_unity_tip(unity, source)
-            wait_until(lambda: unity.getunityinfo()['mempool_mirror']['divergent'] >= 2, timeout=60)
+            wait_until(lambda: unity.getzebracompatinfo()['mempool_mirror']['divergent'] >= 2, timeout=60)
             assert low_fee_parent_txid not in unity.getrawmempool()
             assert low_fee_child_txid not in unity.getrawmempool()
-            assert_equal(unity.getunityinfo()['mempool_mirror']['zebra_size'], 2)
+            assert_equal(unity.getzebracompatinfo()['mempool_mirror']['zebra_size'], 2)
 
             stop_node(unity, 1)
             stop_node(source, 0)

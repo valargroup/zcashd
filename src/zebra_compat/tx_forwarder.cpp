@@ -2,11 +2,11 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php .
 
-#include "unity/tx_forwarder.h"
+#include "zebra_compat/tx_forwarder.h"
 
 #include "rpc/protocol.h"
 #include "sync.h"
-#include "unity/zebra_client.h"
+#include "zebra_compat/zebra_client.h"
 #include "util/system.h"
 #include "util/time.h"
 

@@ -110,10 +110,10 @@ class UnityZebraIdentityTest(BitcoinTestFramework):
 
     def unity_args(self, endpoint):
         return [
-            '-unity',
-            '-unityzebra=%s' % endpoint,
-            '-unityzebrarpcuser=user',
-            '-unityzebrarpcpassword=pass',
+            '-zebra-compat',
+            '-zebra-compat-url=%s' % endpoint,
+            '-zebra-compat-rpc-user=user',
+            '-zebra-compat-rpc-password=pass',
         ]
 
     def run_test(self):
@@ -122,8 +122,8 @@ class UnityZebraIdentityTest(BitcoinTestFramework):
         wrong_genesis_zebra = FakeZebraServer(genesis=WRONG_GENESIS)
         try:
             node = start_node(0, self.options.tmpdir, self.unity_args(good_zebra.start()))
-            wait_until(lambda: node.getunityinfo()['sync']['state'] == 'synced')
-            info = node.getunityinfo()
+            wait_until(lambda: node.getzebracompatinfo()['sync']['state'] == 'synced')
+            info = node.getzebracompatinfo()
             assert_equal(info['service_state'], 'ready')
             assert_equal(info['zebra']['reachable'], True)
             assert_equal(info['zebra']['identity_verified'], True)
@@ -137,8 +137,8 @@ class UnityZebraIdentityTest(BitcoinTestFramework):
             stop_node(node, 0)
 
             node = start_node(1, self.options.tmpdir, self.unity_args(wrong_network_zebra.start()))
-            wait_until(lambda: node.getunityinfo()['sync']['state'] == 'failed')
-            info = node.getunityinfo()
+            wait_until(lambda: node.getzebracompatinfo()['sync']['state'] == 'failed')
+            info = node.getzebracompatinfo()
             assert_equal(info['service_state'], 'failed')
             assert_equal(info['zebra']['reachable'], True)
             assert_equal(info['zebra']['identity_verified'], False)
@@ -147,8 +147,8 @@ class UnityZebraIdentityTest(BitcoinTestFramework):
             stop_node(node, 1)
 
             node = start_node(2, self.options.tmpdir, self.unity_args(wrong_genesis_zebra.start()))
-            wait_until(lambda: node.getunityinfo()['sync']['state'] == 'failed')
-            info = node.getunityinfo()
+            wait_until(lambda: node.getzebracompatinfo()['sync']['state'] == 'failed')
+            info = node.getzebracompatinfo()
             assert_equal(info['service_state'], 'failed')
             assert_equal(info['zebra']['reachable'], True)
             assert_equal(info['zebra']['identity_verified'], False)

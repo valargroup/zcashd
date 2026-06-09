@@ -183,8 +183,8 @@ static const CRPCConvertTable rpcCvtTable =
     { "z_mergetoaddress",            {{o, s}, {o, o, o, n, s}} },
     { "z_listoperationids",          {{}, {s}} },
     { "z_getnotescount",             {{}, {o, o}} },
-    // unity
-    { "getunityinfo",                {{}, {}} },
+    // zebra-compat
+    { "getzebracompatinfo",          {{}, {}} },
     // server
     { "help",                        {{}, {s}} },
     { "setlogfilter",                {{s}, {}} },

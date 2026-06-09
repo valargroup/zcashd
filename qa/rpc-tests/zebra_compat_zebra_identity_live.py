@@ -81,15 +81,15 @@ class UnityZebraIdentityLiveTest(BitcoinTestFramework):
 
     def unity_args(self):
         args = [
-            '-unity',
-            '-unityzebra=%s' % self.options.zebra_rpc_url,
+            '-zebra-compat',
+            '-zebra-compat-url=%s' % self.options.zebra_rpc_url,
         ]
         if self.options.zebra_rpc_cookiefile:
-            args.append('-unityzebracookiefile=%s' % self.options.zebra_rpc_cookiefile)
+            args.append('-zebra-compat-cookiefile=%s' % self.options.zebra_rpc_cookiefile)
         else:
             args.extend([
-                '-unityzebrarpcuser=%s' % self.options.zebra_rpc_user,
-                '-unityzebrarpcpassword=%s' % self.options.zebra_rpc_password,
+                '-zebra-compat-rpc-user=%s' % self.options.zebra_rpc_user,
+                '-zebra-compat-rpc-password=%s' % self.options.zebra_rpc_password,
             ])
         return args
 
@@ -107,7 +107,7 @@ class UnityZebraIdentityLiveTest(BitcoinTestFramework):
 
         node = start_node(0, self.options.tmpdir, self.unity_args())
         try:
-            info = node.getunityinfo()
+            info = node.getzebracompatinfo()
             assert_equal(info['zebra']['reachable'], True)
             assert_equal(info['zebra']['identity_verified'], True)
             assert_equal(info['zebra']['network'], zebra_chain['chain'])

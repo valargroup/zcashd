@@ -2,10 +2,10 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php .
 
-#include "unity/block_ingestion.h"
+#include "zebra_compat/block_ingestion.h"
 
 #include "main.h"
-#include "unity/unity.h"
+#include "zebra_compat/zebra_compat.h"
 
 namespace unity {
 namespace {
