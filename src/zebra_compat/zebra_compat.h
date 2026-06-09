@@ -2,14 +2,14 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php .
 
-#ifndef BITCOIN_UNITY_UNITY_H
-#define BITCOIN_UNITY_UNITY_H
+#ifndef BITCOIN_ZEBRA_COMPAT_ZEBRA_COMPAT_H
+#define BITCOIN_ZEBRA_COMPAT_ZEBRA_COMPAT_H
 
 #include <string>
 #include <vector>
 #include <stdint.h>
 
-#include "unity/block_ingestion.h"
+#include "zebra_compat/block_ingestion.h"
 
 class CBlock;
 class CChainParams;
@@ -83,4 +83,4 @@ UnitySyncTestOutcome TEST_ValidatePostIngestionTipOnZebraBestChain(
 
 } // namespace unity
 
-#endif // BITCOIN_UNITY_UNITY_H
+#endif // BITCOIN_ZEBRA_COMPAT_ZEBRA_COMPAT_H

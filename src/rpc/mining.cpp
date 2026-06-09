@@ -24,7 +24,7 @@
 #include "pow.h"
 #include "rpc/server.h"
 #include "txmempool.h"
-#include "unity/unity.h"
+#include "zebra_compat/zebra_compat.h"
 #include "util/match.h"
 #include "util/system.h"
 #include "validationinterface.h"

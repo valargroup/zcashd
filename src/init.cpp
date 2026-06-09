@@ -38,8 +38,8 @@
 #include "txdb.h"
 #include "torcontrol.h"
 #include "ui_interface.h"
-#include "unity/metadata.h"
-#include "unity/unity.h"
+#include "zebra_compat/metadata.h"
+#include "zebra_compat/zebra_compat.h"
 #include "util/system.h"
 #include "util/moneystr.h"
 #include "validationinterface.h"
@@ -370,18 +370,18 @@ std::string HelpMessage(HelpMessageMode mode)
 #endif
     strUsage += HelpMessageOpt("-txexpirynotify=<cmd>", _("Execute command when transaction expires (%s in cmd is replaced by transaction id)"));
     strUsage += HelpMessageOpt("-txindex", strprintf(_("Maintain a full transaction index, used by the getrawtransaction rpc call (default: %u)"), DEFAULT_TXINDEX));
-    strUsage += HelpMessageOpt("-unity", _("Run in Unity mode: use Zebra as the block source, disable local Zcash P2P, and use trusted Zebra block validation"));
+    strUsage += HelpMessageOpt("-zebra-compat", _("Run in zebra-compat mode: use Zebra as the block source, disable local Zcash P2P, and use trusted Zebra block validation"));
 
-    strUsage += HelpMessageGroup(_("Unity options:"));
-    strUsage += HelpMessageOpt("-unitypollinterval=<seconds>", _("Unity Zebra polling interval in seconds (default: 5)"));
-    strUsage += HelpMessageOpt("-unitypreferstream", _("Prefer Zebra streaming when available (reserved for a later Unity checkpoint; not active yet)"));
-    strUsage += HelpMessageOpt("-unitysyncbatchsize=<n>", _("Unity Zebra polling block batch size (default: 8)"));
-    strUsage += HelpMessageOpt("-unitysyncdrivebatches=<n>", _("Number of acquisition batches one forward-sync pass drives before refreshing Zebra's tip; batches within a pass are fetched and applied concurrently (default: 64)"));
-    strUsage += HelpMessageOpt("-unitysyncresponsebudgetmb=<n>", _("Maximum cumulative size in MiB of one Zebra getblock batch response, bounding the effective sync batch size (default: 128). Zebra's max_response_body_size must be at least this large"));
-    strUsage += HelpMessageOpt("-unityzebra=<scheme://host:port>", _("Zebra JSON-RPC endpoint for Unity mode"));
-    strUsage += HelpMessageOpt("-unityzebracookiefile=<path>", _("Cookie file for Zebra JSON-RPC authentication"));
-    strUsage += HelpMessageOpt("-unityzebrarpcpassword=<password>", _("Password for Zebra JSON-RPC authentication"));
-    strUsage += HelpMessageOpt("-unityzebrarpcuser=<user>", _("Username for Zebra JSON-RPC authentication"));
+    strUsage += HelpMessageGroup(_("zebra-compat options:"));
+    strUsage += HelpMessageOpt("-zebra-compat-poll-interval=<seconds>", _("zebra-compat Zebra polling interval in seconds (default: 5)"));
+    strUsage += HelpMessageOpt("-zebra-compat-prefer-stream", _("Prefer Zebra streaming when available (reserved for a later zebra-compat checkpoint; not active yet)"));
+    strUsage += HelpMessageOpt("-zebra-compat-sync-batch-size=<n>", _("zebra-compat Zebra polling block batch size (default: 8)"));
+    strUsage += HelpMessageOpt("-zebra-compat-sync-drive-batches=<n>", _("Number of acquisition batches one forward-sync pass drives before refreshing Zebra's tip; batches within a pass are fetched and applied concurrently (default: 64)"));
+    strUsage += HelpMessageOpt("-zebra-compat-sync-response-budget-mb=<n>", _("Maximum cumulative size in MiB of one Zebra getblock batch response, bounding the effective sync batch size (default: 128). Zebra's max_response_body_size must be at least this large"));
+    strUsage += HelpMessageOpt("-zebra-compat-url=<scheme://host:port>", _("Zebra JSON-RPC endpoint for zebra-compat mode"));
+    strUsage += HelpMessageOpt("-zebra-compat-cookiefile=<path>", _("Cookie file for Zebra JSON-RPC authentication"));
+    strUsage += HelpMessageOpt("-zebra-compat-rpc-password=<password>", _("Password for Zebra JSON-RPC authentication"));
+    strUsage += HelpMessageOpt("-zebra-compat-rpc-user=<user>", _("Username for Zebra JSON-RPC authentication"));
 
     strUsage += HelpMessageGroup(_("Connection options:"));
     strUsage += HelpMessageOpt("-addnode=<ip>", _("Add a node to connect to and attempt to keep the connection open"));
@@ -408,7 +408,7 @@ std::string HelpMessage(HelpMessageMode mode)
     if (showDebug)
         strUsage += HelpMessageOpt("-enforcenodebloom", strprintf("Enforce minimum protocol version to limit use of bloom filters (default: %u)", DEFAULT_ENFORCENODEBLOOM));
     if (showDebug)
-        strUsage += HelpMessageOpt("-unitytrustedvalidationfixture", "Allow -blockvalidation=trusted-zebra without -blocksource=zebra in tests");
+        strUsage += HelpMessageOpt("-zebra-compat-trusted-validation-fixture", "Allow -blockvalidation=trusted-zebra without -blocksource=zebra in tests");
     strUsage += HelpMessageOpt("-port=<port>", strprintf(_("Listen for connections on <port> (default: %u or testnet: %u)"),
         Params(CBaseChainParams::MAIN).GetDefaultPort(), Params(CBaseChainParams::TESTNET).GetDefaultPort()));
     strUsage += HelpMessageOpt("-proxy=<ip:port>", _("Connect through SOCKS5 proxy"));

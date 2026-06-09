@@ -17,7 +17,7 @@ from test_framework.util import (
     wait_bitcoinds,
 )
 from test_framework.zip317 import conventional_fee
-from unity_polling_sync import FakePollingZebraServer, wait_until
+from zebra_compat_polling_sync import FakePollingZebraServer, wait_until
 
 
 class UnityWalletIndexTest(BitcoinTestFramework):
@@ -33,28 +33,28 @@ class UnityWalletIndexTest(BitcoinTestFramework):
 
     def unity_args(self, endpoint=None):
         args = [
-            '-unity',
+            '-zebra-compat',
             '-allowdeprecated=getnewaddress',
             '-allowdeprecated=z_getnewaddress',
             '-allowdeprecated=z_getbalance',
             '-experimentalfeatures',
             '-lightwalletd',
             '-txindex',
-            '-unitypollinterval=1',
-            '-unitysyncbatchsize=25',
+            '-zebra-compat-poll-interval=1',
+            '-zebra-compat-sync-batch-size=25',
         ]
         if endpoint is not None:
             args.extend([
-                '-unityzebra=%s' % endpoint,
-                '-unityzebrarpcuser=user',
-                '-unityzebrarpcpassword=pass',
+                '-zebra-compat-url=%s' % endpoint,
+                '-zebra-compat-rpc-user=user',
+                '-zebra-compat-rpc-password=pass',
             ])
         return args
 
     def wait_for_unity_tip(self, node, source):
         wait_until(lambda: node.getblockcount() == source.getblockcount() and
                    node.getbestblockhash() == source.getbestblockhash(), timeout=60)
-        info = node.getunityinfo()
+        info = node.getzebracompatinfo()
         assert_equal(info['sync']['state'], 'synced')
         assert_equal(info['local']['bestblockhash'], source.getbestblockhash())
 
@@ -151,7 +151,7 @@ class UnityWalletIndexTest(BitcoinTestFramework):
 
     def run_test(self):
         unity = start_node(1, self.options.tmpdir, self.unity_args())
-        wait_until(lambda: unity.getunityinfo()['sync']['detail'] == 'waiting_for_zebra_endpoint')
+        wait_until(lambda: unity.getzebracompatinfo()['sync']['detail'] == 'waiting_for_zebra_endpoint')
         miner_addr = unity.getnewaddress()
         sapling_addr = unity.z_getnewaddress('sapling')
         stop_node(unity, 1)

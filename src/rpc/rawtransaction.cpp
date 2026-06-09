@@ -21,8 +21,8 @@
 #include "script/script_error.h"
 #include "script/sign.h"
 #include "script/standard.h"
-#include "unity/tx_forwarder.h"
-#include "unity/unity.h"
+#include "zebra_compat/tx_forwarder.h"
+#include "zebra_compat/zebra_compat.h"
 #include "uint256.h"
 #ifdef ENABLE_WALLET
 #include "wallet/wallet.h"

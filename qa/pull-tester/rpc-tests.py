@@ -124,12 +124,12 @@ BASE_SCRIPTS= [
     'decodescript.py',
     'blockchain.py',
     'disablewallet.py',
-    'unity_mode.py',
-    'unity_mempool_mirror.py',
-    'unity_polling_sync.py',
-    'unity_transaction_forwarding.py',
-    'unity_wallet_index.py',
-    'unity_zebra_identity.py',
+    'zebra_compat_mode.py',
+    'zebra_compat_mempool_mirror.py',
+    'zebra_compat_polling_sync.py',
+    'zebra_compat_transaction_forwarding.py',
+    'zebra_compat_wallet_index.py',
+    'zebra_compat_zebra_identity.py',
     'keypool.py',
     'getblocktemplate.py',
     'getmininginfo.py',
@@ -178,7 +178,7 @@ ZMQ_SCRIPTS = [
     # ZMQ test can only be run if bitcoin was built with zmq-enabled.
     # call rpc_tests.py with --nozmq to explicitly exclude these tests.
     "zmq_test.py",
-    "unity_zmq.py"]
+    "zebra_compat_zmq.py"]
 
 EXTENDED_SCRIPTS = [
     # These tests are not run by the travis build process.

@@ -195,19 +195,19 @@ class UnityPollingSyncTest(BitcoinTestFramework):
 
     def unity_args(self, endpoint, password='pass'):
         return [
-            '-unity',
-            '-unityzebra=%s' % endpoint,
-            '-unityzebrarpcuser=user',
-            '-unityzebrarpcpassword=%s' % password,
-            '-unitypollinterval=1',
-            '-unitysyncbatchsize=2',
+            '-zebra-compat',
+            '-zebra-compat-url=%s' % endpoint,
+            '-zebra-compat-rpc-user=user',
+            '-zebra-compat-rpc-password=%s' % password,
+            '-zebra-compat-poll-interval=1',
+            '-zebra-compat-sync-batch-size=2',
         ]
 
     def wait_for_unity_tip(self, node, source):
         wait_until(lambda: node.getblockcount() == source.getblockcount() and
                    node.getbestblockhash() == source.getbestblockhash())
-        wait_until(lambda: node.getunityinfo()['readiness'] == 'ready')
-        info = node.getunityinfo()
+        wait_until(lambda: node.getzebracompatinfo()['readiness'] == 'ready')
+        info = node.getzebracompatinfo()
         assert_equal(info['sync']['state'], 'synced')
         assert_equal(info['sync']['detail'], 'zebra_tip_matched')
         assert_equal(info['readiness'], 'ready')
@@ -235,11 +235,11 @@ class UnityPollingSyncTest(BitcoinTestFramework):
         port = self.reserve_port()
         endpoint = 'http://127.0.0.1:%d' % port
         unity = start_node(1, self.options.tmpdir, self.unity_args(endpoint))
-        wait_until(lambda: unity.getunityinfo()['sync']['detail'] in [
+        wait_until(lambda: unity.getzebracompatinfo()['sync']['detail'] in [
             'zebra_unreachable',
             'zebra_rpc_error',
-        ] and unity.getunityinfo()['sync']['retry_count'] >= 1)
-        unreachable_info = unity.getunityinfo()
+        ] and unity.getzebracompatinfo()['sync']['retry_count'] >= 1)
+        unreachable_info = unity.getzebracompatinfo()
         assert_equal(unreachable_info['readiness'], 'degraded')
         assert unreachable_info['sync']['current_backoff_seconds'] >= 1
         assert unreachable_info['sync']['next_retry'] is not None
@@ -251,8 +251,8 @@ class UnityPollingSyncTest(BitcoinTestFramework):
             stop_node(unity, 1)
 
             unity = start_node(1, self.options.tmpdir, self.unity_args(endpoint, password='wrong'))
-            wait_until(lambda: unity.getunityinfo()['sync']['detail'] == 'zebra_identity_error')
-            info = unity.getunityinfo()
+            wait_until(lambda: unity.getzebracompatinfo()['sync']['detail'] == 'zebra_identity_error')
+            info = unity.getzebracompatinfo()
             assert_equal(info['readiness'], 'failed')
             assert_equal(info['sync']['state'], 'failed')
             assert 'authentication failed' in info['sync']['last_error']
@@ -262,8 +262,8 @@ class UnityPollingSyncTest(BitcoinTestFramework):
             fake_zebra.set_fail_getblock_batch(True)
             unity = start_node(1, self.options.tmpdir, self.unity_args(endpoint))
             source.generate(2)
-            wait_until(lambda: unity.getunityinfo()['sync']['detail'] == 'zebra_rpc_error')
-            rpc_error_info = unity.getunityinfo()
+            wait_until(lambda: unity.getzebracompatinfo()['sync']['detail'] == 'zebra_rpc_error')
+            rpc_error_info = unity.getzebracompatinfo()
             assert_equal(rpc_error_info['readiness'], 'degraded')
             assert rpc_error_info['sync']['retry_count'] >= 1
             assert rpc_error_info['sync']['current_backoff_seconds'] >= 1
@@ -283,7 +283,7 @@ class UnityPollingSyncTest(BitcoinTestFramework):
 
             source.generate(1)
             fake_zebra.set_reorg_tip_on_next_getblockhash_batch()
-            wait_until(lambda: unity.getunityinfo()['sync']['detail'] == 'zebra_tip_changed_during_sync')
+            wait_until(lambda: unity.getzebracompatinfo()['sync']['detail'] == 'zebra_tip_changed_during_sync')
             self.wait_for_unity_tip(unity, source)
 
             fork_height = source.getblockcount() - 2
@@ -294,7 +294,7 @@ class UnityPollingSyncTest(BitcoinTestFramework):
             self.wait_for_unity_tip(unity, source)
             assert_equal(unity.getblockhash(fork_height), fork_hash)
             assert_equal(unity.getblockhash(fork_height + 1), source.getblockhash(fork_height + 1))
-            reorg_info = unity.getunityinfo()
+            reorg_info = unity.getzebracompatinfo()
             assert_equal(reorg_info['sync']['last_common_ancestor_height'], fork_height)
             assert_equal(reorg_info['sync']['last_common_ancestor_hash'], fork_hash)
 
@@ -312,8 +312,8 @@ class UnityPollingSyncTest(BitcoinTestFramework):
             large_branch_child = source.getblockhash(large_branch_fork_height + 1)
             source.invalidateblock(large_branch_child)
             source.generate(3)
-            wait_until(lambda: unity.getunityinfo()['sync']['detail'] == 'reorg_branch_too_large')
-            large_branch_info = unity.getunityinfo()
+            wait_until(lambda: unity.getzebracompatinfo()['sync']['detail'] == 'reorg_branch_too_large')
+            large_branch_info = unity.getzebracompatinfo()
             assert_equal(large_branch_info['readiness'], 'failed')
             assert_equal(large_branch_info['sync']['state'], 'failed')
             assert_equal(unity.getbestblockhash(), local_tip_before_large_branch)

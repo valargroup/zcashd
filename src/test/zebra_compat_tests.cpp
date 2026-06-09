@@ -6,11 +6,11 @@
 #include "test/test_util.h"
 #include "arith_uint256.h"
 #include "core_io.h"
-#include "unity/mempool_mirror.h"
-#include "unity/unity.h"
-#include "unity/metadata.h"
-#include "unity/tx_forwarder.h"
-#include "unity/zebra_client.h"
+#include "zebra_compat/mempool_mirror.h"
+#include "zebra_compat/zebra_compat.h"
+#include "zebra_compat/metadata.h"
+#include "zebra_compat/tx_forwarder.h"
+#include "zebra_compat/zebra_client.h"
 #ifdef ENABLE_MINING
 #include "crypto/equihash.h"
 #include "miner.h"
@@ -57,6 +57,19 @@ void ResetArgs(const std::string& strArg)
     if (strArg.size()) {
         boost::split(vecArg, strArg, boost::is_space(), boost::token_compress_on);
     }
+    for (std::string& arg : vecArg) {
+        if (arg == "-unity") arg = "-zebra-compat";
+        if (boost::algorithm::starts_with(arg, "-unityzebra=")) arg.replace(0, 11, "-zebra-compat-url=");
+        if (boost::algorithm::starts_with(arg, "-unityzebracookiefile=")) arg.replace(0, 21, "-zebra-compat-cookiefile=");
+        if (boost::algorithm::starts_with(arg, "-unityzebrarpcuser=")) arg.replace(0, 18, "-zebra-compat-rpc-user=");
+        if (boost::algorithm::starts_with(arg, "-unityzebrarpcpassword=")) arg.replace(0, 22, "-zebra-compat-rpc-password=");
+        if (boost::algorithm::starts_with(arg, "-unitypollinterval=")) arg.replace(0, 18, "-zebra-compat-poll-interval=");
+        if (boost::algorithm::starts_with(arg, "-unitysyncbatchsize=")) arg.replace(0, 19, "-zebra-compat-sync-batch-size=");
+        if (boost::algorithm::starts_with(arg, "-unitysyncdrivebatches=")) arg.replace(0, 22, "-zebra-compat-sync-drive-batches=");
+        if (boost::algorithm::starts_with(arg, "-unitysyncresponsebudgetmb=")) arg.replace(0, 26, "-zebra-compat-sync-response-budget-mb=");
+        if (arg == "-unitytrustedvalidationfixture") arg = "-zebra-compat-trusted-validation-fixture";
+        if (arg == "-unityfailtrustedboundarywrite=1") arg = "-zebra-compat-fail-trusted-boundary-write=1";
+    }
 
     vecArg.insert(vecArg.begin(), "testbitcoin");
 
@@ -81,12 +94,12 @@ std::string HashWithLastChar(char last)
 
 UniValue RpcResult(const UniValue& result)
 {
-    return JSONRPCReplyObj(result, NullUniValue, UniValue("unity"));
+    return JSONRPCReplyObj(result, NullUniValue, UniValue("zebra-compat"));
 }
 
 UniValue RpcErrorResult(int code, const std::string& message)
 {
-    return JSONRPCReplyObj(NullUniValue, JSONRPCError(code, message), UniValue("unity"));
+    return JSONRPCReplyObj(NullUniValue, JSONRPCError(code, message), UniValue("zebra-compat"));
 }
 
 class MockZebraTransport : public unity::ZebraRpcTransport {
@@ -931,14 +944,14 @@ BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_FIXTURE_TEST_SUITE(unity_rpc_tests, TestingSetup)
 
-BOOST_AUTO_TEST_CASE(getunityinfo_reports_minimal_status)
+BOOST_AUTO_TEST_CASE(getzebracompatinfo_reports_minimal_status)
 {
     ArgsSnapshot snapshot;
     ApplyUnityArgs("-unity");
     unity::ResetMempoolMirrorForTesting();
     unity::ResetTxForwardingForTesting();
 
-    UniValue info = CallRPC("getunityinfo");
+    UniValue info = CallRPC("getzebracompatinfo");
     BOOST_CHECK(find_value(info.get_obj(), "enabled").get_bool());
     BOOST_CHECK_EQUAL(find_value(info.get_obj(), "service_state").get_str(), "stopped");
     BOOST_CHECK_EQUAL(find_value(info.get_obj(), "readiness").get_str(), "degraded");
@@ -1158,7 +1171,7 @@ BOOST_AUTO_TEST_CASE(unity_ingestion_reports_hard_fault_for_wrong_parent_without
         BOOST_CHECK_EQUAL(chainActive.Tip()->GetBlockHash().GetHex(), oldTip.GetHex());
     }
 
-    UniValue info = CallRPC("getunityinfo");
+    UniValue info = CallRPC("getzebracompatinfo");
     UniValue sync = find_value(info.get_obj(), "sync");
     BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "state").get_str(), "failed");
     BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "detail").get_str(), "hard_sync_fault");

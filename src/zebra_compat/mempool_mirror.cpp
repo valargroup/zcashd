@@ -2,7 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php .
 
-#include "unity/mempool_mirror.h"
+#include "zebra_compat/mempool_mirror.h"
 
 #include "chainparams.h"
 #include "core_io.h"
@@ -10,8 +10,8 @@
 #include "primitives/transaction.h"
 #include "sync.h"
 #include "txmempool.h"
-#include "unity/tx_forwarder.h"
-#include "unity/zebra_client.h"
+#include "zebra_compat/tx_forwarder.h"
+#include "zebra_compat/zebra_client.h"
 #include "uint256.h"
 #include "util/strencodings.h"
 #include "util/time.h"

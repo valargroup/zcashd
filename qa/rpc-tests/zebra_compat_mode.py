@@ -24,13 +24,13 @@ class UnityModeTest(BitcoinTestFramework):
         self.num_nodes = 2
 
     def setup_network(self, split=False):
-        self.nodes = start_nodes(1, self.options.tmpdir, [['-unity']])
+        self.nodes = start_nodes(1, self.options.tmpdir, [['-zebra-compat']])
         self.is_network_split = False
 
     def run_test(self):
         node = self.nodes[0]
 
-        info = node.getunityinfo()
+        info = node.getzebracompatinfo()
         assert_equal(info['enabled'], True)
         assert_equal(info['service_state'], 'waiting')
         assert_equal(info['readiness'], 'degraded')

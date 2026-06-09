@@ -2,7 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php .
 
-#include "unity/metadata.h"
+#include "zebra_compat/metadata.h"
 
 #include "chainparams.h"
 #include "dbwrapper.h"
@@ -71,7 +71,7 @@ bool WriteTrustedBlockBoundary(const TrustedBlockBoundary& boundary)
     }
 
     try {
-        if (GetBoolArg("-unityfailtrustedboundarywrite", false)) {
+        if (GetBoolArg("-zebra-compat-fail-trusted-boundary-write", false)) {
             g_unity_metadata_last_error = "trusted block boundary write failure injected";
             return false;
         }
@@ -163,7 +163,7 @@ TrustedBlockBoundary MakeTrustedBlockBoundary(int nHeight, const uint256& hash, 
     boundary.hash = hash;
     boundary.network = chainparams.NetworkIDString();
     boundary.genesisHash = chainparams.GetConsensus().hashGenesisBlock.GetHex();
-    boundary.zebraEndpoint = GetArg("-unityzebra", "");
+    boundary.zebraEndpoint = GetArg("-zebra-compat-url", "");
     return boundary;
 }
 
@@ -173,7 +173,7 @@ bool TrustedBoundaryMatchesConfiguredSource(const TrustedBlockBoundary& boundary
         boundary.network == chainparams.NetworkIDString() &&
         boundary.genesisHash == chainparams.GetConsensus().hashGenesisBlock.GetHex() &&
         !boundary.zebraEndpoint.empty() &&
-        boundary.zebraEndpoint == GetArg("-unityzebra", "");
+        boundary.zebraEndpoint == GetArg("-zebra-compat-url", "");
 }
 
 } // namespace unity

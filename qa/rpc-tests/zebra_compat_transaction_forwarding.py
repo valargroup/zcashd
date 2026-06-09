@@ -13,7 +13,7 @@ from test_framework.util import (
     stop_node,
 )
 
-from unity_polling_sync import FakePollingZebraServer, wait_until
+from zebra_compat_polling_sync import FakePollingZebraServer, wait_until
 
 
 class UnityTransactionForwardingTest(BitcoinTestFramework):
@@ -29,18 +29,18 @@ class UnityTransactionForwardingTest(BitcoinTestFramework):
 
     def unity_args(self, endpoint):
         return [
-            '-unity',
-            '-unityzebra=%s' % endpoint,
-            '-unityzebrarpcuser=user',
-            '-unityzebrarpcpassword=pass',
-            '-unitypollinterval=1',
-            '-unitysyncbatchsize=2',
+            '-zebra-compat',
+            '-zebra-compat-url=%s' % endpoint,
+            '-zebra-compat-rpc-user=user',
+            '-zebra-compat-rpc-password=pass',
+            '-zebra-compat-poll-interval=1',
+            '-zebra-compat-sync-batch-size=2',
         ]
 
     def wait_for_unity_tip(self, unity, source):
         wait_until(lambda: unity.getblockcount() == source.getblockcount() and
                    unity.getbestblockhash() == source.getbestblockhash(), timeout=60)
-        assert_equal(unity.getunityinfo()['sync']['state'], 'synced')
+        assert_equal(unity.getzebracompatinfo()['sync']['state'], 'synced')
 
     def make_signed_tx(self, source):
         utxo = source.listunspent()[0]
@@ -71,7 +71,7 @@ class UnityTransactionForwardingTest(BitcoinTestFramework):
             assert_equal(unity.sendrawtransaction(tx_hex), txid)
             wait_until(lambda: txid in source.getrawmempool(), timeout=60)
             wait_until(lambda: txid in unity.getrawmempool(), timeout=60)
-            wait_until(lambda: unity.getunityinfo()['tx_forwarding']['pending'] == 0, timeout=60)
+            wait_until(lambda: unity.getzebracompatinfo()['tx_forwarding']['pending'] == 0, timeout=60)
 
             source.generate(1)
             self.wait_for_unity_tip(unity, source)
@@ -120,10 +120,10 @@ class UnityTransactionForwardingTest(BitcoinTestFramework):
             wait_until(lambda: grace_txid in unity.getrawmempool(), timeout=60)
             self.wait_for_mirror_poll_after(fake_zebra, before_polls, polls=2)
             assert grace_txid in unity.getrawmempool()
-            assert_equal(unity.getunityinfo()['tx_forwarding']['pending'], 1)
+            assert_equal(unity.getzebracompatinfo()['tx_forwarding']['pending'], 1)
 
             fake_zebra.unhide_mempool_txid(grace_txid)
-            wait_until(lambda: unity.getunityinfo()['tx_forwarding']['pending'] == 0, timeout=60)
+            wait_until(lambda: unity.getzebracompatinfo()['tx_forwarding']['pending'] == 0, timeout=60)
             assert grace_txid in unity.getrawmempool()
 
             stop_node(unity, 1)
