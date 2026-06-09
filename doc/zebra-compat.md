@@ -88,6 +88,20 @@ Confirm `zebra.identity_verified` is `true` and watch `readiness` move from
 `sync.retry_count` and `sync.current_backoff_seconds` surface connectivity
 problems; see **Readiness And Diagnostics** below for the full surface.
 
+## Release Artifacts For Zebra Integration
+
+`zcashd -zebra-compat` is released independently from Zebra. Zebra release CI
+consumes these release artifacts to build `zfnd/zebra-zcashd-compat` images and
+to update managed download metadata.
+
+Each compat release should publish Linux runtime tarballs for:
+
+- `x86_64-pc-linux-gnu` (`linux-x86_64`)
+- `aarch64-linux-gnu` (`linux-aarch64`)
+
+and a consolidated `zcashd-zebra-compat-manifest-<tag>.json` that includes
+artifact URLs and SHA256 values for those targets.
+
 ## Trust Model
 
 zebra-compat trusts the configured Zebra node for data availability, peer selection,
