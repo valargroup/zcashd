@@ -58,16 +58,22 @@ void ResetArgs(const std::string& strArg)
         boost::split(vecArg, strArg, boost::is_any_of(" \t\n\r\f\v"), boost::token_compress_on);
     }
     for (std::string& arg : vecArg) {
+        auto replacePrefix = [&arg](const std::string& legacy, const std::string& current) {
+            if (boost::algorithm::starts_with(arg, legacy)) {
+                arg.replace(0, legacy.size(), current);
+            }
+        };
+
         if (arg == "-unity") arg = "-zebra-compat";
-        if (boost::algorithm::starts_with(arg, "-unityzebra=")) arg.replace(0, 11, "-zebra-compat-url=");
-        if (boost::algorithm::starts_with(arg, "-unityzebracookiefile=")) arg.replace(0, 21, "-zebra-compat-cookiefile=");
-        if (boost::algorithm::starts_with(arg, "-unityzebrarpcuser=")) arg.replace(0, 18, "-zebra-compat-rpc-user=");
-        if (boost::algorithm::starts_with(arg, "-unityzebrarpcpassword=")) arg.replace(0, 22, "-zebra-compat-rpc-password=");
-        if (boost::algorithm::starts_with(arg, "-unitypollinterval=")) arg.replace(0, 18, "-zebra-compat-poll-interval=");
-        if (boost::algorithm::starts_with(arg, "-unitysyncbatchsize=")) arg.replace(0, 19, "-zebra-compat-sync-batch-size=");
-        if (boost::algorithm::starts_with(arg, "-unitysyncdrivebatches=")) arg.replace(0, 22, "-zebra-compat-sync-drive-batches=");
-        if (boost::algorithm::starts_with(arg, "-unitysyncresponsebudgetmb=")) arg.replace(0, 26, "-zebra-compat-sync-response-budget-mb=");
-        if (arg == "-unitytrustedvalidationfixture") arg = "-zebra-compat-trusted-validation-fixture";
+        replacePrefix("-unityzebra=", "-zebra-compat-url=");
+        replacePrefix("-unityzebracookiefile=", "-zebra-compat-cookiefile=");
+        replacePrefix("-unityzebrarpcuser=", "-zebra-compat-rpc-user=");
+        replacePrefix("-unityzebrarpcpassword=", "-zebra-compat-rpc-password=");
+        replacePrefix("-unitypollinterval=", "-zebra-compat-poll-interval=");
+        replacePrefix("-unitysyncbatchsize=", "-zebra-compat-sync-batch-size=");
+        replacePrefix("-unitysyncdrivebatches=", "-zebra-compat-sync-drive-batches=");
+        replacePrefix("-unitysyncresponsebudgetmb=", "-zebra-compat-sync-response-budget-mb=");
+        replacePrefix("-unitytrustedvalidationfixture", "-zebra-compat-trusted-validation-fixture");
         if (arg == "-unityfailtrustedboundarywrite=1") arg = "-zebra-compat-fail-trusted-boundary-write=1";
     }
 
