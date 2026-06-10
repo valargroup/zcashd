@@ -11,6 +11,8 @@
 #include "main.h"
 #include "pow.h"
 #include "uint256.h"
+#include "zebra_compat/metadata.h"
+#include "zebra_compat/zebra_compat.h"
 #include "zcash/History.hpp"
 
 #include <stdint.h>
@@ -20,6 +22,48 @@
 #include <rust/metrics.h>
 
 using namespace std;
+
+namespace {
+
+bool IsTrustedZebraRegtestBoundaryEnabled(const CChainParams& chainParams, unity::TrustedBlockBoundary& boundary)
+{
+    if (chainParams.NetworkIDString() != CBaseChainParams::REGTEST ||
+        !unity::IsTrustedValidationEnabled()) {
+        return false;
+    }
+
+    return unity::GetCachedTrustedBlockBoundary(boundary) &&
+        unity::TrustedBoundaryMatchesConfiguredSource(boundary, chainParams);
+}
+
+CBlockIndex* FindLoadedBlockIndex(
+    const std::vector<CBlockIndex*>& loadedIndexes,
+    const uint256& hash)
+{
+    for (CBlockIndex* pindex : loadedIndexes) {
+        if (pindex != nullptr && pindex->GetBlockHash() == hash) {
+            return pindex;
+        }
+    }
+    return nullptr;
+}
+
+bool TrustedBoundaryCoversLoadedBlock(const CBlockIndex* trustedBoundary, const CBlockIndex* pindex)
+{
+    if (trustedBoundary == nullptr ||
+        pindex == nullptr ||
+        pindex->nHeight > trustedBoundary->nHeight) {
+        return false;
+    }
+
+    const CBlockIndex* ancestor = trustedBoundary;
+    while (ancestor != nullptr && ancestor->nHeight > pindex->nHeight) {
+        ancestor = ancestor->pprev;
+    }
+    return ancestor == pindex;
+}
+
+} // namespace
 
 // NOTE: Per issue #3277, do not use the prefix 'X' or 'x' as they were
 // previously used by DB_SAPLING_ANCHOR and DB_BEST_SAPLING_ANCHOR.
@@ -686,6 +730,7 @@ bool CBlockTreeDB::LoadBlockIndexGuts(
     boost::scoped_ptr<CDBIterator> pcursor(NewIterator());
 
     pcursor->Seek(make_pair(DB_BLOCK_INDEX, uint256()));
+    std::vector<CBlockIndex*> loadedIndexes;
 
     // Load mapBlockIndex
     while (pcursor->Valid()) {
@@ -722,12 +767,7 @@ bool CBlockTreeDB::LoadBlockIndexGuts(
                 pindexNew->hashFinalOrchardRoot = diskindex.hashFinalOrchardRoot;
                 pindexNew->hashChainHistoryRoot = diskindex.hashChainHistoryRoot;
                 pindexNew->hashAuthDataRoot = diskindex.hashAuthDataRoot;
-
-                // Check the block hash against the required difficulty as encoded in the
-                // nBits field. The probability of this succeeding randomly is low enough
-                // that it is a useful check to detect logic or disk storage errors.
-                if (!CheckProofOfWork(pindexNew->GetBlockHash(), pindexNew->nBits, Params().GetConsensus()))
-                    return error("LoadBlockIndex(): CheckProofOfWork failed: %s", pindexNew->ToString());
+                loadedIndexes.push_back(pindexNew);
 
                 // ZIP 221 consistency checks
                 // These checks should only be performed for block index entries marked
@@ -774,6 +814,26 @@ bool CBlockTreeDB::LoadBlockIndexGuts(
             }
         } else {
             break;
+        }
+    }
+
+    unity::TrustedBlockBoundary trustedBoundary;
+    CBlockIndex* trustedBoundaryIndex = nullptr;
+    if (IsTrustedZebraRegtestBoundaryEnabled(chainParams, trustedBoundary)) {
+        trustedBoundaryIndex = FindLoadedBlockIndex(loadedIndexes, trustedBoundary.hash);
+        if (trustedBoundaryIndex != nullptr &&
+            trustedBoundaryIndex->nHeight != trustedBoundary.nHeight) {
+            trustedBoundaryIndex = nullptr;
+        }
+    }
+
+    for (CBlockIndex* pindex : loadedIndexes) {
+        // Check the block hash against the required difficulty as encoded in the
+        // nBits field. The probability of this succeeding randomly is low enough
+        // that it is a useful check to detect logic or disk storage errors.
+        if (!CheckProofOfWork(pindex->GetBlockHash(), pindex->nBits, chainParams.GetConsensus()) &&
+            !TrustedBoundaryCoversLoadedBlock(trustedBoundaryIndex, pindex)) {
+            return error("LoadBlockIndex(): CheckProofOfWork failed: %s", pindex->ToString());
         }
     }
 

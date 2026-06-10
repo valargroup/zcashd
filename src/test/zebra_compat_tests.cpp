@@ -239,6 +239,12 @@ CBlock CreateSolvedBlock(const CChainParams& chainparams, const CScript& scriptP
     SolveBlock(block, chainparams);
     return block;
 }
+
+CScript RandomCoinbaseScript()
+{
+    CKey coinbaseKey = CKey::TestOnlyRandomKey(true);
+    return CScript() << ToByteVector(coinbaseKey.GetPubKey()) << OP_CHECKSIG;
+}
 #endif
 
 struct UnityRegtestSetup : public TestingSetup {
@@ -711,6 +717,41 @@ BOOST_AUTO_TEST_CASE(zebra_client_fails_closed_on_network_mismatch)
 BOOST_AUTO_TEST_CASE(zebra_client_fails_closed_on_genesis_mismatch)
 {
     std::unique_ptr<MockZebraTransport> transport = HealthyMainnetTransport(Params());
+    transport->responses["getblockhash"] = {HTTP_OK, RpcResult(UniValue(HashWithLastChar('9'))).write()};
+    unity::UnityZebraClient client(MockZebraConfig(), std::move(transport));
+
+    unity::ZebraIdentity identity = client.CheckIdentity(Params());
+    BOOST_CHECK(identity.reachable);
+    BOOST_CHECK(!identity.identityVerified);
+    BOOST_CHECK_EQUAL(identity.failure, unity::ZebraIdentity::GENESIS_MISMATCH);
+    BOOST_CHECK(identity.lastError.find("genesis mismatch") != std::string::npos);
+}
+
+BOOST_FIXTURE_TEST_CASE(regtest_identity_accepts_zebra_test_chain_alias, UnityRegtestSetup)
+{
+    std::unique_ptr<MockZebraTransport> transport = HealthyMainnetTransport(Params());
+    UniValue blockchainInfo(UniValue::VOBJ);
+    blockchainInfo.pushKV("chain", CBaseChainParams::TESTNET);
+    blockchainInfo.pushKV("blocks", 123);
+    blockchainInfo.pushKV("bestblockhash", HashWithLastChar('1'));
+    transport->responses["getblockchaininfo"] = {HTTP_OK, RpcResult(blockchainInfo).write()};
+    unity::UnityZebraClient client(MockZebraConfig(), std::move(transport));
+
+    unity::ZebraIdentity identity = client.CheckIdentity(Params());
+    BOOST_CHECK(identity.reachable);
+    BOOST_CHECK(identity.identityVerified);
+    BOOST_CHECK_EQUAL(identity.network, CBaseChainParams::TESTNET);
+    BOOST_CHECK_EQUAL(identity.genesisHash, Params().GetConsensus().hashGenesisBlock.GetHex());
+}
+
+BOOST_FIXTURE_TEST_CASE(regtest_identity_rejects_zebra_test_chain_alias_with_wrong_genesis, UnityRegtestSetup)
+{
+    std::unique_ptr<MockZebraTransport> transport = HealthyMainnetTransport(Params());
+    UniValue blockchainInfo(UniValue::VOBJ);
+    blockchainInfo.pushKV("chain", CBaseChainParams::TESTNET);
+    blockchainInfo.pushKV("blocks", 123);
+    blockchainInfo.pushKV("bestblockhash", HashWithLastChar('1'));
+    transport->responses["getblockchaininfo"] = {HTTP_OK, RpcResult(blockchainInfo).write()};
     transport->responses["getblockhash"] = {HTTP_OK, RpcResult(UniValue(HashWithLastChar('9'))).write()};
     unity::UnityZebraClient client(MockZebraConfig(), std::move(transport));
 
@@ -1233,6 +1274,93 @@ BOOST_AUTO_TEST_CASE(unity_ingests_valid_regtest_block_and_persists_trusted_boun
     BOOST_CHECK(unity::TrustedBoundaryMatchesConfiguredSource(boundary, Params()));
     BOOST_CHECK_EQUAL(boundary.nHeight, result.height);
     BOOST_CHECK_EQUAL(boundary.hash.GetHex(), block.GetHash().GetHex());
+}
+
+BOOST_AUTO_TEST_CASE(trusted_zebra_regtest_accepts_zebra_style_difficulty)
+{
+    ArgsSnapshot snapshot;
+    ApplyUnityArgs("-unity -unityzebra=http://127.0.0.1:8232");
+    unity::ClearTrustedBlockBoundary();
+
+    CBlock block = CreateSolvedBlock(Params(), RandomCoinbaseScript());
+    block.nBits -= 1;
+
+    unity::BlockIngestionResult result = unity::IngestBlock(block, Params());
+    BOOST_CHECK(result.success);
+    BOOST_CHECK(!result.hardFailure);
+}
+
+BOOST_AUTO_TEST_CASE(trusted_zebra_regtest_accepts_zebra_style_equihash)
+{
+    ArgsSnapshot snapshot;
+    ApplyUnityArgs("-unity -unityzebra=http://127.0.0.1:8232");
+    unity::ClearTrustedBlockBoundary();
+
+    CBlock block = CreateSolvedBlock(Params(), RandomCoinbaseScript());
+    block.nSolution = std::vector<unsigned char>(1344, 0);
+
+    unity::BlockIngestionResult result = unity::IngestBlock(block, Params());
+    BOOST_CHECK(result.success);
+    BOOST_CHECK(!result.hardFailure);
+}
+
+BOOST_AUTO_TEST_CASE(full_validation_still_rejects_zebra_style_header)
+{
+    ArgsSnapshot snapshot;
+    ApplyUnityArgs("-zebra-compat -blockvalidation=full");
+    unity::ClearTrustedBlockBoundary();
+
+    CBlock block = CreateSolvedBlock(Params(), RandomCoinbaseScript());
+    block.nBits -= 1;
+    block.nSolution = std::vector<unsigned char>(1344, 0);
+
+    unity::BlockIngestionResult result = unity::IngestBlock(block, Params());
+    BOOST_CHECK(!result.success);
+    BOOST_CHECK(result.hardFailure);
+}
+
+BOOST_AUTO_TEST_CASE(trusted_zebra_regtest_disk_read_only_skips_work_for_boundary_ancestors)
+{
+    ArgsSnapshot snapshot;
+    ApplyUnityArgs("-unity -unityzebra=http://127.0.0.1:8232");
+    unity::ClearTrustedBlockBoundary();
+
+    CBlock trustedBlock = CreateSolvedBlock(Params(), RandomCoinbaseScript());
+    trustedBlock.nSolution = std::vector<unsigned char>(1344, 0);
+
+    unity::BlockIngestionResult result = unity::IngestBlock(trustedBlock, Params());
+    BOOST_REQUIRE(result.success);
+    BOOST_REQUIRE(!result.hardFailure);
+
+    CBlock sideBlock = CreateSolvedBlock(Params(), RandomCoinbaseScript());
+    sideBlock.nSolution = std::vector<unsigned char>(1344, 0);
+
+    CDiskBlockPos sideBlockPos(9999, 0);
+    BOOST_REQUIRE(WriteBlockToDisk(sideBlock, sideBlockPos, Params().MessageStart()));
+
+    uint256 sideBlockHash = sideBlock.GetHash();
+    CBlockIndex sideIndex(sideBlock);
+    {
+        LOCK(cs_main);
+        BOOST_REQUIRE(chainActive.Height() >= 1);
+        BOOST_REQUIRE(chainActive.Tip() != nullptr);
+        BOOST_REQUIRE_EQUAL(chainActive.Tip()->GetBlockHash().GetHex(), trustedBlock.GetHash().GetHex());
+
+        sideIndex.phashBlock = &sideBlockHash;
+        sideIndex.pprev = chainActive[0];
+        sideIndex.nHeight = 1;
+        sideIndex.BuildSkip();
+        sideIndex.nStatus = BLOCK_VALID_TREE | BLOCK_HAVE_DATA;
+        sideIndex.nFile = sideBlockPos.nFile;
+        sideIndex.nDataPos = sideBlockPos.nPos;
+
+        CBlock diskBlock;
+        BOOST_CHECK(!ReadBlockFromDisk(diskBlock, &sideIndex, Params().GetConsensus()));
+        BOOST_CHECK(ReadBlockFromDisk(diskBlock, chainActive.Tip(), Params().GetConsensus()));
+        BOOST_CHECK_EQUAL(diskBlock.GetHash().GetHex(), trustedBlock.GetHash().GetHex());
+    }
+
+    unity::ClearTrustedBlockBoundary();
 }
 
 BOOST_AUTO_TEST_CASE(unity_ingestion_reports_hard_fault_for_wrong_parent_without_advancing_tip)
