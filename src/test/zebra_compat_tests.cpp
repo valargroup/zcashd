@@ -21,6 +21,7 @@
 #include "rpc/protocol.h"
 #include "script/script.h"
 #include "streams.h"
+#include "txdb.h"
 #include "util/system.h"
 
 #include <atomic>
@@ -1024,6 +1025,53 @@ BOOST_AUTO_TEST_CASE(unity_reorg_context_keeps_sticky_fault_when_local_tip_below
     BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "detail").get_str(), "local_tip_not_on_zebra_best_chain_after_reorg");
 }
 
+BOOST_AUTO_TEST_CASE(unity_degrades_transient_when_local_tip_ahead_of_zebra_after_reorg)
+{
+    // Zebra's best chain temporarily shrank (Zebra mid-reorg): local tip is
+    // strictly ahead. Must be a non-sticky transient so the worker applies
+    // backoff instead of polling at full rate.
+    ArgsSnapshot snapshot;
+    ApplyUnityArgs("-unity -unityzebra=http://127.0.0.1:8232");
+
+    const int expectedHeight = 4056200;
+    const std::string expectedHash = HashWithLastChar('c');
+    const int localTipHeight = expectedHeight + 3;
+    const std::string localTipHash = HashWithLastChar('e');
+    const int zebraCurrentHeight = expectedHeight - 2;
+    const std::string zebraCurrentHash = HashWithLastChar('b');
+
+    std::unique_ptr<MockZebraTransport> transport(new MockZebraTransport());
+    UniValue blockchainInfo(UniValue::VOBJ);
+    blockchainInfo.pushKV("chain", Params().NetworkIDString());
+    blockchainInfo.pushKV("blocks", zebraCurrentHeight);
+    blockchainInfo.pushKV("bestblockhash", zebraCurrentHash);
+    transport->responses["getblockchaininfo"] = {HTTP_OK, RpcResult(blockchainInfo).write()};
+    transport->responses["getblockhash"] = {
+        HTTP_OK,
+        RpcResult(UniValue(Params().GetConsensus().hashGenesisBlock.GetHex())).write()};
+
+    unity::UnityZebraClient client(MockZebraConfig(), std::move(transport));
+    unity::UnitySyncTestOutcome outcome = unity::TEST_ValidatePostIngestionTipOnZebraBestChain(
+        client,
+        Params(),
+        localTipHeight,
+        localTipHash,
+        expectedHeight,
+        expectedHash,
+        "local tip mismatch during test",
+        "local_tip_not_on_zebra_best_chain_after_reorg",
+        /*reorgContext=*/true);
+
+    BOOST_CHECK(!outcome.progressed);
+    BOOST_CHECK(!outcome.stickyFault);
+    BOOST_CHECK(outcome.transientFailure);
+
+    UniValue info = unity::GetUnityInfo();
+    UniValue sync = find_value(info.get_obj(), "sync");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "state").get_str(), "degraded");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "detail").get_str(), "zebra_tip_temporarily_behind_local_after_reorg");
+}
+
 BOOST_AUTO_TEST_CASE(unity_degrades_non_sticky_when_zebra_tip_changes_during_chunk_mismatch_handling)
 {
     ArgsSnapshot snapshot;
@@ -1325,7 +1373,7 @@ BOOST_AUTO_TEST_CASE(full_validation_still_rejects_zebra_style_header)
     BOOST_CHECK(result.hardFailure);
 }
 
-BOOST_AUTO_TEST_CASE(trusted_zebra_regtest_disk_read_only_skips_work_for_boundary_ancestors)
+BOOST_AUTO_TEST_CASE(trusted_zebra_regtest_disk_read_skips_work_only_for_indexed_blocks)
 {
     ArgsSnapshot snapshot;
     ApplyUnityArgs("-unity -unityzebra=http://127.0.0.1:8232");
@@ -1364,6 +1412,76 @@ BOOST_AUTO_TEST_CASE(trusted_zebra_regtest_disk_read_only_skips_work_for_boundar
         BOOST_CHECK(!ReadBlockFromDisk(diskBlock, &sideIndex, Params().GetConsensus()));
         BOOST_CHECK(ReadBlockFromDisk(diskBlock, chainActive.Tip(), Params().GetConsensus()));
         BOOST_CHECK_EQUAL(diskBlock.GetHash().GetHex(), trustedBlock.GetHash().GetHex());
+    }
+
+    unity::ClearTrustedBlockBoundary();
+}
+
+BOOST_AUTO_TEST_CASE(trusted_zebra_regtest_reorg_disconnects_remain_loadable)
+{
+    ArgsSnapshot snapshot;
+    ApplyUnityArgs("-unity -unityzebra=http://127.0.0.1:8232");
+    unity::ClearTrustedBlockBoundary();
+
+    // Two competing height-1 blocks built on genesis. The old-branch block
+    // carries Zebra-style header work that fails zcashd's CheckProofOfWork.
+    CBlock oldBranchBlock = CreateSolvedBlock(Params(), RandomCoinbaseScript());
+    CBlock newBranchFirst = CreateSolvedBlock(Params(), RandomCoinbaseScript());
+    oldBranchBlock.nBits = 0x207fffff;
+    BOOST_REQUIRE(!CheckProofOfWork(
+        oldBranchBlock.GetHash(), oldBranchBlock.nBits, Params().GetConsensus()));
+
+    unity::BlockIngestionResult result = unity::IngestBlock(oldBranchBlock, Params());
+    BOOST_REQUIRE(result.success);
+
+    // Extend the competing branch past the old tip so ingestion reorgs to it,
+    // disconnecting the Zebra-style block (built on the old tip at height 2,
+    // then re-pointed at the competing height-1 block).
+    CBlock newBranchSecond = CreateSolvedBlock(Params(), RandomCoinbaseScript());
+    newBranchSecond.hashPrevBlock = newBranchFirst.GetHash();
+
+    result = unity::IngestBlockBatch({newBranchFirst, newBranchSecond}, Params());
+    BOOST_REQUIRE(result.success);
+
+    const uint256 oldBranchHash = oldBranchBlock.GetHash();
+    {
+        LOCK(cs_main);
+        BOOST_REQUIRE_EQUAL(
+            chainActive.Tip()->GetBlockHash().GetHex(), newBranchSecond.GetHash().GetHex());
+
+        // The disconnected old-branch block stays in the index below the
+        // boundary and must remain readable despite failing header work.
+        auto it = mapBlockIndex.find(oldBranchHash);
+        BOOST_REQUIRE(it != mapBlockIndex.end());
+        BOOST_REQUIRE(!chainActive.Contains(it->second));
+
+        CBlock diskBlock;
+        BOOST_CHECK(ReadBlockFromDisk(diskBlock, it->second, Params().GetConsensus()));
+        BOOST_CHECK_EQUAL(diskBlock.GetHash().GetHex(), oldBranchHash.GetHex());
+    }
+
+    // Reloading the block index from disk must also accept the disconnected
+    // block (regression: zcashd restart after a Zebra-driven reorg).
+    FlushStateToDisk();
+    std::map<uint256, CBlockIndex*> scratchIndex;
+    std::function<CBlockIndex*(const uint256&)> insertScratch =
+        [&scratchIndex](const uint256& hash) -> CBlockIndex* {
+            auto inserted = scratchIndex.emplace(hash, nullptr);
+            if (inserted.second) {
+                inserted.first->second = new CBlockIndex();
+                inserted.first->second->phashBlock = &inserted.first->first;
+            }
+            return inserted.first->second;
+        };
+    {
+        LOCK(cs_main);
+        BOOST_CHECK(pblocktree->LoadBlockIndexGuts(insertScratch, Params()));
+    }
+    // The reload check is only meaningful if the disconnected block was
+    // actually persisted and reloaded.
+    BOOST_CHECK_EQUAL(scratchIndex.count(oldBranchHash), 1);
+    for (auto& entry : scratchIndex) {
+        delete entry.second;
     }
 
     unity::ClearTrustedBlockBoundary();
