@@ -50,17 +50,15 @@ CBlockIndex* FindLoadedBlockIndex(
 
 bool TrustedBoundaryCoversLoadedBlock(const CBlockIndex* trustedBoundary, const CBlockIndex* pindex)
 {
-    if (trustedBoundary == nullptr ||
-        pindex == nullptr ||
-        pindex->nHeight > trustedBoundary->nHeight) {
-        return false;
-    }
-
-    const CBlockIndex* ancestor = trustedBoundary;
-    while (ancestor != nullptr && ancestor->nHeight > pindex->nHeight) {
-        ancestor = ancestor->pprev;
-    }
-    return ancestor == pindex;
+    // Zebra-driven reorgs leave disconnected old-branch entries in the block
+    // index. They are no longer ancestors of the trusted boundary but were
+    // accepted from the same trusted Zebra source and can carry Zebra-style
+    // header work, so reload must not re-check it (mirrors
+    // IsTrustedZebraRegtestBlock in main.cpp). Blocks above the boundary
+    // height are still checked normally.
+    return trustedBoundary != nullptr &&
+        pindex != nullptr &&
+        pindex->nHeight <= trustedBoundary->nHeight;
 }
 
 } // namespace
