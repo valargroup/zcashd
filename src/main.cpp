@@ -2322,12 +2322,19 @@ static bool IsTrustedZebraRegtestBlock(const CChainParams& chainparams, const CB
         return false;
     }
 
-    auto it = mapBlockIndex.find(boundary.hash);
-    if (it == mapBlockIndex.end() || it->second->nHeight != boundary.nHeight) {
+    // Only skip work checks for blocks zcashd has actually indexed. Tests and
+    // callers can construct standalone CBlockIndex values, but those must not
+    // inherit trusted-Zebra status just because they are below the boundary.
+    auto blockIt = mapBlockIndex.find(pindex->GetBlockHash());
+    if (blockIt == mapBlockIndex.end() || blockIt->second != pindex) {
         return false;
     }
 
-    return it->second->GetAncestor(pindex->nHeight) == pindex;
+    // During a Zebra-driven reorg, zcashd must disconnect blocks from the old
+    // branch. Those blocks are no longer ancestors of the current trusted
+    // boundary, but they were already accepted from the same trusted Zebra
+    // source and can contain regtest null Equihash solutions.
+    return true;
 }
 
 bool ReadBlockFromDisk(CBlock& block, const CDiskBlockPos& pos, const Consensus::Params& consensusParams, bool fCheckPOW)
