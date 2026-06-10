@@ -2307,7 +2307,30 @@ bool WriteBlockToDisk(const CBlock& block, CDiskBlockPos& pos, const CMessageHea
     return true;
 }
 
-bool ReadBlockFromDisk(CBlock& block, const CDiskBlockPos& pos, const Consensus::Params& consensusParams)
+static bool IsTrustedZebraRegtestBlock(const CChainParams& chainparams, const CBlockIndex* pindex)
+{
+    if (pindex == nullptr ||
+        chainparams.NetworkIDString() != CBaseChainParams::REGTEST ||
+        !unity::IsTrustedValidationEnabled()) {
+        return false;
+    }
+
+    unity::TrustedBlockBoundary boundary;
+    if (!unity::GetCachedTrustedBlockBoundary(boundary) ||
+        !unity::TrustedBoundaryMatchesConfiguredSource(boundary, chainparams) ||
+        pindex->nHeight > boundary.nHeight) {
+        return false;
+    }
+
+    auto it = mapBlockIndex.find(boundary.hash);
+    if (it == mapBlockIndex.end() || it->second->nHeight != boundary.nHeight) {
+        return false;
+    }
+
+    return it->second->GetAncestor(pindex->nHeight) == pindex;
+}
+
+bool ReadBlockFromDisk(CBlock& block, const CDiskBlockPos& pos, const Consensus::Params& consensusParams, bool fCheckPOW)
 {
     block.SetNull();
 
@@ -2325,7 +2348,7 @@ bool ReadBlockFromDisk(CBlock& block, const CDiskBlockPos& pos, const Consensus:
     }
 
     // Check the header
-    if (!(CheckEquihashSolution(&block, consensusParams) &&
+    if (fCheckPOW && !(CheckEquihashSolution(&block, consensusParams) &&
           CheckProofOfWork(block.GetHash(), block.nBits, consensusParams)))
         return error("ReadBlockFromDisk: Errors in block header at %s", pos.ToString());
 
@@ -2339,7 +2362,8 @@ bool ReadBlockFromDisk(CBlock& block, const CBlockIndex* pindex, const Consensus
                 pindex->ToString(), pindex->GetBlockPos().ToString());
     }
 
-    if (!ReadBlockFromDisk(block, pindex->GetBlockPos(), consensusParams))
+    const bool fCheckPOW = !IsTrustedZebraRegtestBlock(Params(), pindex);
+    if (!ReadBlockFromDisk(block, pindex->GetBlockPos(), consensusParams, fCheckPOW))
         return false;
     if (block.GetHash() != pindex->GetBlockHash())
         return error("ReadBlockFromDisk(CBlock&, CBlockIndex*): GetHash() doesn't match index for %s at %s",
@@ -3270,6 +3294,13 @@ bool BlockCheckModeUsesExpensiveChecks(CheckAs blockChecks, bool fCheckpointAnce
     return true;
 }
 
+static bool TrustZebraRegtestHeaderWork(const CChainParams& chainparams, CheckAs blockChecks)
+{
+    return chainparams.NetworkIDString() == CBaseChainParams::REGTEST &&
+        blockChecks == CheckAs::TrustedBlock &&
+        unity::IsTrustedValidationEnabled();
+}
+
 size_t TEST_GetUnityTrustedBlockCandidateCount()
 {
     LOCK(cs_main);
@@ -3330,8 +3361,9 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
     bool fCheckTransactions = ShouldCheckTransactions(chainparams, pindex);
 
     // Check it again to verify JoinSplit proofs, and in case a previous version let a bad block in
+    const bool fCheckPOW = !fJustCheck && !TrustZebraRegtestHeaderWork(chainparams, blockChecks);
     if (!CheckBlock(block, state, chainparams, verifier,
-        !fJustCheck, !fJustCheck, fCheckTransactions))
+        fCheckPOW, !fJustCheck, fCheckTransactions))
     {
         return false;
     }
@@ -5871,7 +5903,8 @@ bool CheckBlock(const CBlock& block,
 
 bool ContextualCheckBlockHeader(
     const CBlockHeader& block, CValidationState& state,
-    const CChainParams& chainParams, CBlockIndex * const pindexPrev)
+    const CChainParams& chainParams, CBlockIndex * const pindexPrev,
+    CheckAs blockChecks)
 {
     const Consensus::Params& consensusParams = chainParams.GetConsensus();
     uint256 hash = block.GetHash();
@@ -5889,7 +5922,8 @@ bool ContextualCheckBlockHeader(
     // `BodyCorruption::HeaderOnly`.
 
     // Check proof of work
-    if (block.nBits != GetNextWorkRequired(pindexPrev, &block, consensusParams)) {
+    if (!TrustZebraRegtestHeaderWork(chainParams, blockChecks) &&
+        block.nBits != GetNextWorkRequired(pindexPrev, &block, consensusParams)) {
         return state.DoS(100, error("%s: incorrect proof of work", __func__),
                          REJECT_INVALID, "bad-diffbits", BodyCorruption::HeaderOnly);
     }
@@ -6024,7 +6058,12 @@ bool ContextualCheckBlock(
     return true;
 }
 
-static bool AcceptBlockHeader(const CBlockHeader& block, CValidationState& state, const CChainParams& chainparams, CBlockIndex** ppindex=NULL)
+static bool AcceptBlockHeader(
+    const CBlockHeader& block,
+    CValidationState& state,
+    const CChainParams& chainparams,
+    CBlockIndex** ppindex = NULL,
+    CheckAs blockChecks = CheckAs::Block)
 {
     AssertLockHeld(cs_main);
     // Check for duplicate
@@ -6041,7 +6080,8 @@ static bool AcceptBlockHeader(const CBlockHeader& block, CValidationState& state
         return true;
     }
 
-    if (!CheckBlockHeader(block, state, chainparams))
+    const bool fCheckPOW = !TrustZebraRegtestHeaderWork(chainparams, blockChecks);
+    if (!CheckBlockHeader(block, state, chainparams, fCheckPOW))
         return false;
 
     // Get prev block index
@@ -6063,7 +6103,7 @@ static bool AcceptBlockHeader(const CBlockHeader& block, CValidationState& state
         }
     }
 
-    if (!ContextualCheckBlockHeader(block, state, chainparams, pindexPrev))
+    if (!ContextualCheckBlockHeader(block, state, chainparams, pindexPrev, blockChecks))
         return false;
 
     if (pindex == NULL)
@@ -6169,14 +6209,21 @@ static bool CheckBlockBodyAuthCommitment(
  * but those CBlock objects are discarded, and then ActivateBestChain is
  * called which is the consensus path in that case.)
  */
-static bool AcceptBlock(const CBlock& block, CValidationState& state, const CChainParams& chainparams, CBlockIndex** ppindex, bool fRequested, const CDiskBlockPos* dbp)
+static bool AcceptBlock(
+    const CBlock& block,
+    CValidationState& state,
+    const CChainParams& chainparams,
+    CBlockIndex** ppindex,
+    bool fRequested,
+    const CDiskBlockPos* dbp,
+    CheckAs blockChecks = CheckAs::Block)
 {
     AssertLockHeld(cs_main);
 
     CBlockIndex *pindexDummy = NULL;
     CBlockIndex *&pindex = ppindex ? *ppindex : pindexDummy;
 
-    if (!AcceptBlockHeader(block, state, chainparams, &pindex))
+    if (!AcceptBlockHeader(block, state, chainparams, &pindex, blockChecks))
         return false;
 
     // The block body has been received but has NOT yet been verified against the
@@ -6249,7 +6296,8 @@ static bool AcceptBlock(const CBlock& block, CValidationState& state, const CCha
     }
 
     bool fCheckTransactions = ShouldCheckTransactions(chainparams, pindex);
-    if ((!CheckBlock(block, state, chainparams, verifier, true, true, fCheckTransactions)) ||
+    const bool fCheckPOW = !TrustZebraRegtestHeaderWork(chainparams, blockChecks);
+    if ((!CheckBlock(block, state, chainparams, verifier, fCheckPOW, true, fCheckTransactions)) ||
          !ContextualCheckBlock(block, state, chainparams, pindex->pprev, fCheckTransactions)) {
         if (state.IsInvalid() && !state.CorruptionPossible()) {
             pindex->nStatus |= BLOCK_FAILED_VALID;
@@ -6382,7 +6430,7 @@ bool ProcessNewTrustedBlockBatch(CValidationState& state, const CChainParams& ch
             MarkBlockAsReceived(hash);
 
             CBlockIndex *pindex = NULL;
-            bool ret = AcceptBlock(block, state, chainparams, &pindex, true, NULL);
+            bool ret = AcceptBlock(block, state, chainparams, &pindex, true, NULL, CheckAs::TrustedBlock);
             if (!ret) {
                 return error("%s: AcceptBlock FAILED", __func__);
             }

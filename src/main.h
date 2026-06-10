@@ -543,33 +543,10 @@ bool GetTimestampIndex(unsigned int high, unsigned int low, bool fActiveOnly,
 
 /** Functions for disk access for blocks */
 bool WriteBlockToDisk(const CBlock& block, CDiskBlockPos& pos, const CMessageHeader::MessageStartChars& messageStart);
-bool ReadBlockFromDisk(CBlock& block, const CDiskBlockPos& pos, const Consensus::Params& consensusParams);
+bool ReadBlockFromDisk(CBlock& block, const CDiskBlockPos& pos, const Consensus::Params& consensusParams, bool fCheckPOW = true);
 bool ReadBlockFromDisk(CBlock& block, const CBlockIndex* pindex, const Consensus::Params& consensusParams);
 
 /** Functions for validating blocks and updating the block tree */
-
-/** Context-independent validity checks */
-
-bool CheckBlockHeader(const CBlockHeader& block, CValidationState& state,
-    const CChainParams& chainparams,
-    bool fCheckPOW = true);
-
-bool CheckBlock(const CBlock& block, CValidationState& state,
-                const CChainParams& chainparams,
-                ProofVerifier& verifier,
-                bool fCheckPOW,
-                bool fCheckMerkleRoot,
-                bool fCheckTransactions);
-
-/** Context-dependent validity checks.
- *  By "context", we mean only the previous block headers, but not the UTXO
- *  set; UTXO-related validity checks are done in ConnectBlock(). */
-bool ContextualCheckBlockHeader(const CBlockHeader& block, CValidationState& state,
-                                const CChainParams& chainparams, CBlockIndex *pindexPrev);
-bool ContextualCheckBlock(const CBlock& block, CValidationState& state,
-                          const CChainParams& chainparams,
-                          CBlockIndex *pindexPrev,
-                          bool fCheckTransactions);
 
 /**
  * How a given block should be checked.
@@ -591,6 +568,30 @@ enum class CheckAs {
     BlockTemplate,
     SlowBenchmark,
 };
+
+/** Context-independent validity checks */
+
+bool CheckBlockHeader(const CBlockHeader& block, CValidationState& state,
+    const CChainParams& chainparams,
+    bool fCheckPOW = true);
+
+bool CheckBlock(const CBlock& block, CValidationState& state,
+                const CChainParams& chainparams,
+                ProofVerifier& verifier,
+                bool fCheckPOW,
+                bool fCheckMerkleRoot,
+                bool fCheckTransactions);
+
+/** Context-dependent validity checks.
+ *  By "context", we mean only the previous block headers, but not the UTXO
+ *  set; UTXO-related validity checks are done in ConnectBlock(). */
+bool ContextualCheckBlockHeader(const CBlockHeader& block, CValidationState& state,
+                                const CChainParams& chainparams, CBlockIndex *pindexPrev,
+                                CheckAs blockChecks = CheckAs::Block);
+bool ContextualCheckBlock(const CBlock& block, CValidationState& state,
+                          const CChainParams& chainparams,
+                          CBlockIndex *pindexPrev,
+                          bool fCheckTransactions);
 
 bool BlockCheckModeUsesExpensiveChecks(CheckAs blockChecks, bool fCheckpointAncestor);
 size_t TEST_GetUnityTrustedBlockCandidateCount();

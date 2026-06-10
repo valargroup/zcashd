@@ -823,7 +823,13 @@ ZebraIdentity UnityZebraClient::CheckIdentity(const CChainParams& chainparams)
         identity.blocks = info.blocks;
         identity.genesisHash = GetBlockHash(0);
 
-        if (identity.network != chainparams.NetworkIDString()) {
+        const std::string expectedGenesis = chainparams.GetConsensus().hashGenesisBlock.GetHex();
+        const bool genesisMatches = identity.genesisHash == expectedGenesis;
+        const bool regtestChainAlias =
+            chainparams.NetworkIDString() == CBaseChainParams::REGTEST &&
+            identity.network == CBaseChainParams::TESTNET;
+
+        if (identity.network != chainparams.NetworkIDString() && !regtestChainAlias) {
             identity.failure = ZebraIdentity::NETWORK_MISMATCH;
             identity.lastError = strprintf(
                 "Zebra network mismatch: expected %s, got %s",
@@ -832,8 +838,7 @@ ZebraIdentity UnityZebraClient::CheckIdentity(const CChainParams& chainparams)
             return identity;
         }
 
-        const std::string expectedGenesis = chainparams.GetConsensus().hashGenesisBlock.GetHex();
-        if (identity.genesisHash != expectedGenesis) {
+        if (!genesisMatches) {
             identity.failure = ZebraIdentity::GENESIS_MISMATCH;
             identity.lastError = strprintf(
                 "Zebra genesis mismatch: expected %s, got %s",
