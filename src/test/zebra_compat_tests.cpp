@@ -55,7 +55,7 @@ void ResetArgs(const std::string& strArg)
 {
     std::vector<std::string> vecArg;
     if (strArg.size()) {
-        boost::split(vecArg, strArg, boost::is_space(), boost::token_compress_on);
+        boost::split(vecArg, strArg, boost::is_any_of(" \t\n\r\f\v"), boost::token_compress_on);
     }
     for (std::string& arg : vecArg) {
         if (arg == "-unity") arg = "-zebra-compat";

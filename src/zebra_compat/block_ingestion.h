@@ -2,8 +2,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php .
 
-#ifndef BITCOIN_UNITY_BLOCK_INGESTION_H
-#define BITCOIN_UNITY_BLOCK_INGESTION_H
+#ifndef ZCASH_ZEBRA_COMPAT_BLOCK_INGESTION_H
+#define ZCASH_ZEBRA_COMPAT_BLOCK_INGESTION_H
 
 #include <string>
 #include <vector>
@@ -27,4 +27,4 @@ void RecordBlockIngestionResult(const BlockIngestionResult& result);
 
 } // namespace unity
 
-#endif // BITCOIN_UNITY_BLOCK_INGESTION_H
+#endif // ZCASH_ZEBRA_COMPAT_BLOCK_INGESTION_H

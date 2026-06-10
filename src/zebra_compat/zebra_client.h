@@ -2,8 +2,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php .
 
-#ifndef BITCOIN_UNITY_ZEBRA_CLIENT_H
-#define BITCOIN_UNITY_ZEBRA_CLIENT_H
+#ifndef ZCASH_ZEBRA_COMPAT_ZEBRA_CLIENT_H
+#define ZCASH_ZEBRA_COMPAT_ZEBRA_CLIENT_H
 
 #include "fs.h"
 
@@ -163,4 +163,4 @@ size_t ZebraRpcMaxResponseBodySize();
 
 } // namespace unity
 
-#endif // BITCOIN_UNITY_ZEBRA_CLIENT_H
+#endif // ZCASH_ZEBRA_COMPAT_ZEBRA_CLIENT_H
