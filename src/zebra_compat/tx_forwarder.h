@@ -2,8 +2,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php .
 
-#ifndef BITCOIN_UNITY_TX_FORWARDER_H
-#define BITCOIN_UNITY_TX_FORWARDER_H
+#ifndef ZCASH_ZEBRA_COMPAT_TX_FORWARDER_H
+#define ZCASH_ZEBRA_COMPAT_TX_FORWARDER_H
 
 #include "uint256.h"
 
@@ -53,4 +53,4 @@ size_t MaxPendingForwardedTransactions();
 
 } // namespace unity
 
-#endif // BITCOIN_UNITY_TX_FORWARDER_H
+#endif // ZCASH_ZEBRA_COMPAT_TX_FORWARDER_H

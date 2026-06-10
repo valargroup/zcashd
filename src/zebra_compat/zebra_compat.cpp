@@ -26,7 +26,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include <boost/bind.hpp>
+#include <boost/bind/bind.hpp>
 #include <boost/thread.hpp>
 #include <univalue.h>
 

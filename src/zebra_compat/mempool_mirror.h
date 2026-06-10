@@ -2,8 +2,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php .
 
-#ifndef BITCOIN_UNITY_MEMPOOL_MIRROR_H
-#define BITCOIN_UNITY_MEMPOOL_MIRROR_H
+#ifndef ZCASH_ZEBRA_COMPAT_MEMPOOL_MIRROR_H
+#define ZCASH_ZEBRA_COMPAT_MEMPOOL_MIRROR_H
 
 #include <cstddef>
 #include <stdint.h>
@@ -47,4 +47,4 @@ size_t MaxMempoolMirrorDivergenceDetails();
 
 } // namespace unity
 
-#endif // BITCOIN_UNITY_MEMPOOL_MIRROR_H
+#endif // ZCASH_ZEBRA_COMPAT_MEMPOOL_MIRROR_H

@@ -2,8 +2,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php .
 
-#ifndef BITCOIN_UNITY_METADATA_H
-#define BITCOIN_UNITY_METADATA_H
+#ifndef ZCASH_ZEBRA_COMPAT_METADATA_H
+#define ZCASH_ZEBRA_COMPAT_METADATA_H
 
 #include "serialize.h"
 #include "uint256.h"
@@ -47,4 +47,4 @@ bool TrustedBoundaryMatchesConfiguredSource(const TrustedBlockBoundary& boundary
 
 } // namespace unity
 
-#endif // BITCOIN_UNITY_METADATA_H
+#endif // ZCASH_ZEBRA_COMPAT_METADATA_H
