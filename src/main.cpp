@@ -7033,7 +7033,11 @@ bool CVerifyDB::VerifyDB(const CChainParams& chainparams, CCoinsView *coinsview,
 
         // check level 1: verify block validity
         fCheckTransactions = ShouldCheckTransactions(chainparams, pindex);
-        if (nCheckLevel >= 1 && !CheckBlock(block, state, chainparams, verifier, true, true, fCheckTransactions))
+        // Trusted Zebra regtest blocks carry Zebra-style header work that
+        // fails zcashd's PoW/Equihash checks; skip header work for them at
+        // startup verification just like disk reads and index reloads do.
+        const bool fCheckHeaderWork = !IsTrustedZebraRegtestBlock(chainparams, pindex);
+        if (nCheckLevel >= 1 && !CheckBlock(block, state, chainparams, verifier, fCheckHeaderWork, true, fCheckTransactions))
             return error("VerifyDB(): *** found bad block at %d, hash=%s\n", pindex->nHeight, pindex->GetBlockHash().ToString());
 
         // check level 2: verify undo validity
