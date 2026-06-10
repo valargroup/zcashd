@@ -1423,41 +1423,46 @@ BOOST_AUTO_TEST_CASE(trusted_zebra_regtest_reorg_disconnects_remain_loadable)
     ApplyUnityArgs("-unity -unityzebra=http://127.0.0.1:8232");
     unity::ClearTrustedBlockBoundary();
 
-    // Two competing height-1 blocks built on genesis. The old-branch block
-    // carries Zebra-style header work that fails zcashd's CheckProofOfWork.
-    CBlock oldBranchBlock = CreateSolvedBlock(Params(), RandomCoinbaseScript());
-    CBlock newBranchFirst = CreateSolvedBlock(Params(), RandomCoinbaseScript());
-    oldBranchBlock.nBits = 0x207fffff;
+    // Two competing height-1 blocks built on genesis. The off-chain block
+    // carries Zebra-style header work that deterministically fails zcashd's
+    // CheckProofOfWork (target above the regtest powLimit), like the blocks a
+    // Zebra-driven reorg leaves disconnected. It must be created before any
+    // ingestion so no block template is ever built on its bogus nBits.
+    CBlock activeBranchFirst = CreateSolvedBlock(Params(), RandomCoinbaseScript());
+    CBlock offChainBlock = CreateSolvedBlock(Params(), RandomCoinbaseScript());
+    offChainBlock.nBits = 0x207fffff;
     BOOST_REQUIRE(!CheckProofOfWork(
-        oldBranchBlock.GetHash(), oldBranchBlock.nBits, Params().GetConsensus()));
+        offChainBlock.GetHash(), offChainBlock.nBits, Params().GetConsensus()));
 
-    unity::BlockIngestionResult result = unity::IngestBlock(oldBranchBlock, Params());
+    unity::BlockIngestionResult result = unity::IngestBlock(activeBranchFirst, Params());
     BOOST_REQUIRE(result.success);
 
-    // Extend the competing branch past the old tip so ingestion reorgs to it,
-    // disconnecting the Zebra-style block (built on the old tip at height 2,
-    // then re-pointed at the competing height-1 block).
-    CBlock newBranchSecond = CreateSolvedBlock(Params(), RandomCoinbaseScript());
-    newBranchSecond.hashPrevBlock = newBranchFirst.GetHash();
-
-    result = unity::IngestBlockBatch({newBranchFirst, newBranchSecond}, Params());
+    // The Zebra-style block lands in the index without activating (the
+    // first-seen branch has more work than its near-zero-work header).
+    result = unity::IngestBlock(offChainBlock, Params());
     BOOST_REQUIRE(result.success);
 
-    const uint256 oldBranchHash = oldBranchBlock.GetHash();
+    // Extend the active branch so the trusted boundary rises above the
+    // off-chain block's height.
+    CBlock activeBranchSecond = CreateSolvedBlock(Params(), RandomCoinbaseScript());
+    result = unity::IngestBlock(activeBranchSecond, Params());
+    BOOST_REQUIRE(result.success);
+
+    const uint256 offChainHash = offChainBlock.GetHash();
     {
         LOCK(cs_main);
         BOOST_REQUIRE_EQUAL(
-            chainActive.Tip()->GetBlockHash().GetHex(), newBranchSecond.GetHash().GetHex());
+            chainActive.Tip()->GetBlockHash().GetHex(), activeBranchSecond.GetHash().GetHex());
 
-        // The disconnected old-branch block stays in the index below the
-        // boundary and must remain readable despite failing header work.
-        auto it = mapBlockIndex.find(oldBranchHash);
+        // The off-chain block stays in the index below the boundary and must
+        // remain readable despite failing header work.
+        auto it = mapBlockIndex.find(offChainHash);
         BOOST_REQUIRE(it != mapBlockIndex.end());
         BOOST_REQUIRE(!chainActive.Contains(it->second));
 
         CBlock diskBlock;
         BOOST_CHECK(ReadBlockFromDisk(diskBlock, it->second, Params().GetConsensus()));
-        BOOST_CHECK_EQUAL(diskBlock.GetHash().GetHex(), oldBranchHash.GetHex());
+        BOOST_CHECK_EQUAL(diskBlock.GetHash().GetHex(), offChainHash.GetHex());
     }
 
     // Reloading the block index from disk must also accept the disconnected
@@ -1479,7 +1484,7 @@ BOOST_AUTO_TEST_CASE(trusted_zebra_regtest_reorg_disconnects_remain_loadable)
     }
     // The reload check is only meaningful if the disconnected block was
     // actually persisted and reloaded.
-    BOOST_CHECK_EQUAL(scratchIndex.count(oldBranchHash), 1);
+    BOOST_CHECK_EQUAL(scratchIndex.count(offChainHash), 1);
     for (auto& entry : scratchIndex) {
         delete entry.second;
     }
