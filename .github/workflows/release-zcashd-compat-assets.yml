@@ -24,9 +24,6 @@ jobs:
           - name: linux-x86_64
             host: x86_64-pc-linux-gnu
             cross_deps: ""
-          - name: linux-aarch64
-            host: aarch64-linux-gnu
-            cross_deps: g++-aarch64-linux-gnu
     steps:
       - uses: actions/checkout@v6.0.3
 

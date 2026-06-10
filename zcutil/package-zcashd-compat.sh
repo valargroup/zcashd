@@ -69,9 +69,6 @@ case "$HOST_TRIPLE" in
   x86_64-pc-linux-gnu)
     PLATFORM_ID="linux-x86_64"
     ;;
-  aarch64-linux-gnu)
-    PLATFORM_ID="linux-aarch64"
-    ;;
   *)
     echo "Unsupported host triple: $HOST_TRIPLE" >&2
     exit 2
