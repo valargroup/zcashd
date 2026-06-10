@@ -94,6 +94,25 @@ void ApplyUnityArgs(const std::string& strArg)
     unity::InitParameterInteraction();
 }
 
+// test_bitcoin does not link init.o (duplicate globals with test_bitcoin.cpp), so
+// mirror init.cpp's listen-related interactions that run after unity::InitParameterInteraction().
+void ApplyInitCppListenInteractions()
+{
+    if (mapArgs.count("-bind")) {
+        SoftSetBoolArg("-listen", true);
+    }
+    if (mapArgs.count("-whitebind")) {
+        SoftSetBoolArg("-listen", true);
+    }
+}
+
+void ApplyFullParameterInteraction(const std::string& strArg)
+{
+    ResetArgs(strArg);
+    unity::InitParameterInteraction();
+    ApplyInitCppListenInteractions();
+}
+
 std::string HashWithLastChar(char last)
 {
     return std::string(63, '0') + last;
@@ -307,14 +326,50 @@ BOOST_AUTO_TEST_CASE(unity_rejects_trusted_zebra_without_zebra_source)
     BOOST_CHECK_EQUAL(unity::ValidateParameterInteraction(), "");
 }
 
+BOOST_AUTO_TEST_CASE(zebra_compat_forces_p2p_off_despite_legacy_config)
+{
+    ArgsSnapshot snapshot;
+
+    ApplyFullParameterInteraction("-unity -listen=1");
+    BOOST_CHECK(!GetBoolArg("-listen", true));
+    BOOST_CHECK(!unity::IsP2PEnabled());
+    BOOST_CHECK(!GetBoolArg("-dnsseed", true));
+    BOOST_CHECK(!GetBoolArg("-listenonion", true));
+    BOOST_CHECK_EQUAL(unity::ValidateParameterInteraction(), "");
+
+    ApplyFullParameterInteraction("-unity -p2p=1");
+    BOOST_CHECK(!GetBoolArg("-listen", true));
+    BOOST_CHECK(!unity::IsP2PEnabled());
+    BOOST_CHECK_EQUAL(unity::ValidateParameterInteraction(), "");
+
+    ApplyFullParameterInteraction("-unity -listen=1 -dnsseed=1 -listenonion=1");
+    BOOST_CHECK(!GetBoolArg("-listen", true));
+    BOOST_CHECK(!GetBoolArg("-dnsseed", true));
+    BOOST_CHECK(!GetBoolArg("-listenonion", true));
+    BOOST_CHECK_EQUAL(unity::ValidateParameterInteraction(), "");
+
+    ApplyFullParameterInteraction("-unity -listen=1 -bind=127.0.0.1:8233");
+    BOOST_CHECK(!GetBoolArg("-listen", true));
+    BOOST_CHECK_NE(unity::ValidateParameterInteraction(), "");
+
+    ApplyFullParameterInteraction("-unity -listen=1 -connect=127.0.0.1");
+    BOOST_CHECK(!GetBoolArg("-listen", true));
+    BOOST_CHECK_NE(unity::ValidateParameterInteraction(), "");
+}
+
+BOOST_AUTO_TEST_CASE(zebra_compat_bind_interaction_does_not_enable_listen)
+{
+    ArgsSnapshot snapshot;
+    ApplyFullParameterInteraction("-unity -bind=127.0.0.1:8233");
+
+    BOOST_CHECK(!GetBoolArg("-listen", true));
+    BOOST_CHECK(!unity::IsP2PEnabled());
+    BOOST_CHECK_NE(unity::ValidateParameterInteraction(), "");
+}
+
 BOOST_AUTO_TEST_CASE(unity_rejects_p2p_conflicts)
 {
     ArgsSnapshot snapshot;
-    ApplyUnityArgs("-unity -p2p=1");
-    BOOST_CHECK_NE(unity::ValidateParameterInteraction(), "");
-
-    ApplyUnityArgs("-unity -listen=1");
-    BOOST_CHECK_NE(unity::ValidateParameterInteraction(), "");
 
     ApplyUnityArgs("-unity -connect=127.0.0.1");
     BOOST_CHECK_NE(unity::ValidateParameterInteraction(), "");
@@ -323,12 +378,6 @@ BOOST_AUTO_TEST_CASE(unity_rejects_p2p_conflicts)
     BOOST_CHECK_NE(unity::ValidateParameterInteraction(), "");
 
     ApplyUnityArgs("-unity -seednode=127.0.0.1");
-    BOOST_CHECK_NE(unity::ValidateParameterInteraction(), "");
-
-    ApplyUnityArgs("-unity -dnsseed=1");
-    BOOST_CHECK_NE(unity::ValidateParameterInteraction(), "");
-
-    ApplyUnityArgs("-unity -listenonion=1");
     BOOST_CHECK_NE(unity::ValidateParameterInteraction(), "");
 }
 

@@ -90,6 +90,11 @@ bool HasExplicitValues(const std::string& arg)
     return mapMultiArgs.count(arg) > 0 && !mapMultiArgs[arg].empty();
 }
 
+void ForceBoolArg(const std::string& arg, bool value)
+{
+    mapArgs[arg] = value ? "1" : "0";
+}
+
 void ForceOffP2POption(const std::string& arg)
 {
     if (SoftSetBoolArg(arg, false)) {
@@ -1081,12 +1086,17 @@ void InitParameterInteraction()
         if (SoftSetArg("-blocksource", BLOCK_SOURCE_ZEBRA)) {
             LogPrintf("zebra-compat parameter interaction: -zebra-compat=1 -> setting -blocksource=zebra\n");
         }
-        if (SoftSetBoolArg("-p2p", false)) {
-            LogPrintf("zebra-compat parameter interaction: -zebra-compat=1 -> setting -p2p=0\n");
-        }
         if (SoftSetArg("-blockvalidation", BLOCK_VALIDATION_TRUSTED_ZEBRA)) {
             LogPrintf("zebra-compat parameter interaction: -zebra-compat=1 -> setting -blockvalidation=trusted-zebra\n");
         }
+        ForceBoolArg("-p2p", false);
+        LogPrintf("zebra-compat parameter interaction: -zebra-compat=1 -> forcing -p2p=0\n");
+        ForceBoolArg("-listen", false);
+        LogPrintf("zebra-compat parameter interaction: -zebra-compat=1 -> forcing -listen=0\n");
+        ForceBoolArg("-dnsseed", false);
+        LogPrintf("zebra-compat parameter interaction: -zebra-compat=1 -> forcing -dnsseed=0\n");
+        ForceBoolArg("-listenonion", false);
+        LogPrintf("zebra-compat parameter interaction: -zebra-compat=1 -> forcing -listenonion=0\n");
     }
 
     if (!IsP2PEnabled()) {
