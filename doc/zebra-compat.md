@@ -97,10 +97,9 @@ to update managed download metadata.
 Each compat release should publish Linux runtime tarballs for:
 
 - `x86_64-pc-linux-gnu` (`linux-x86_64`)
-- `aarch64-linux-gnu` (`linux-aarch64`)
 
 and a consolidated `zcashd-zebra-compat-manifest-<tag>.json` that includes
-artifact URLs and SHA256 values for those targets.
+artifact URLs and SHA256 values for that target.
 
 ## Trust Model
 
