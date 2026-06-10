@@ -79,7 +79,8 @@ UnitySyncTestOutcome TEST_ValidatePostIngestionTipOnZebraBestChain(
     int expectedHeight,
     const std::string& expectedHash,
     const std::string& mismatchError,
-    const std::string& offChainDetail);
+    const std::string& offChainDetail,
+    bool reorgContext = false);
 
 } // namespace unity
 

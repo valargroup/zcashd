@@ -887,6 +887,96 @@ BOOST_AUTO_TEST_CASE(unity_fails_when_local_tip_exceeds_zebra_best_after_chunk_m
     BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "detail").get_str(), "local_tip_not_on_zebra_best_chain_after_chunk");
 }
 
+BOOST_AUTO_TEST_CASE(unity_degrades_non_sticky_for_equal_height_reorg_candidate_not_activated)
+{
+    // Regression: Zebra advertised a competing block at the local tip's height,
+    // the replacement branch was ingested, but ActivateBestChain kept the
+    // previously received equal-work local tip. The reorg path must degrade
+    // non-sticky so the worker retries, instead of freezing in a failed state.
+    ArgsSnapshot snapshot;
+    ApplyUnityArgs("-unity -unityzebra=http://127.0.0.1:8232");
+
+    const int expectedHeight = 4056120;
+    const std::string expectedHash = HashWithLastChar('c');
+    const int localTipHeight = expectedHeight;
+    const std::string localTipHash = HashWithLastChar('e');
+
+    std::unique_ptr<MockZebraTransport> transport(new MockZebraTransport());
+    UniValue blockchainInfo(UniValue::VOBJ);
+    blockchainInfo.pushKV("chain", Params().NetworkIDString());
+    blockchainInfo.pushKV("blocks", expectedHeight);
+    blockchainInfo.pushKV("bestblockhash", expectedHash);
+    transport->responses["getblockchaininfo"] = {HTTP_OK, RpcResult(blockchainInfo).write()};
+    transport->responses["getblockhash"] = {
+        HTTP_OK,
+        RpcResult(UniValue(Params().GetConsensus().hashGenesisBlock.GetHex())).write()};
+
+    unity::UnityZebraClient client(MockZebraConfig(), std::move(transport));
+    unity::UnitySyncTestOutcome outcome = unity::TEST_ValidatePostIngestionTipOnZebraBestChain(
+        client,
+        Params(),
+        localTipHeight,
+        localTipHash,
+        expectedHeight,
+        expectedHash,
+        "local tip mismatch during test",
+        "local_tip_not_on_zebra_best_chain_after_reorg",
+        /*reorgContext=*/true);
+
+    BOOST_CHECK(!outcome.progressed);
+    BOOST_CHECK(!outcome.stickyFault);
+    BOOST_CHECK(!outcome.transientFailure);
+
+    UniValue info = unity::GetUnityInfo();
+    UniValue sync = find_value(info.get_obj(), "sync");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "state").get_str(), "degraded");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "detail").get_str(), "zebra_equal_work_reorg_not_activated");
+}
+
+BOOST_AUTO_TEST_CASE(unity_reorg_context_keeps_sticky_fault_when_local_tip_below_zebra_best)
+{
+    // In the reorg context, an off-chain local tip strictly below Zebra's best
+    // height is not the equal-height race and must remain a sticky fault.
+    ArgsSnapshot snapshot;
+    ApplyUnityArgs("-unity -unityzebra=http://127.0.0.1:8232");
+
+    const int expectedHeight = 4056121;
+    const std::string expectedHash = HashWithLastChar('c');
+    const int localTipHeight = expectedHeight - 1;
+    const std::string localTipHash = HashWithLastChar('e');
+
+    std::unique_ptr<MockZebraTransport> transport(new MockZebraTransport());
+    UniValue blockchainInfo(UniValue::VOBJ);
+    blockchainInfo.pushKV("chain", Params().NetworkIDString());
+    blockchainInfo.pushKV("blocks", expectedHeight);
+    blockchainInfo.pushKV("bestblockhash", expectedHash);
+    transport->responses["getblockchaininfo"] = {HTTP_OK, RpcResult(blockchainInfo).write()};
+    transport->responses["getblockhash"] = {
+        HTTP_OK,
+        RpcResult(UniValue(Params().GetConsensus().hashGenesisBlock.GetHex())).write()};
+
+    unity::UnityZebraClient client(MockZebraConfig(), std::move(transport));
+    unity::UnitySyncTestOutcome outcome = unity::TEST_ValidatePostIngestionTipOnZebraBestChain(
+        client,
+        Params(),
+        localTipHeight,
+        localTipHash,
+        expectedHeight,
+        expectedHash,
+        "local tip mismatch during test",
+        "local_tip_not_on_zebra_best_chain_after_reorg",
+        /*reorgContext=*/true);
+
+    BOOST_CHECK(!outcome.progressed);
+    BOOST_CHECK(outcome.stickyFault);
+    BOOST_CHECK(!outcome.transientFailure);
+
+    UniValue info = unity::GetUnityInfo();
+    UniValue sync = find_value(info.get_obj(), "sync");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "state").get_str(), "failed");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "detail").get_str(), "local_tip_not_on_zebra_best_chain_after_reorg");
+}
+
 BOOST_AUTO_TEST_CASE(unity_degrades_non_sticky_when_zebra_tip_changes_during_chunk_mismatch_handling)
 {
     ArgsSnapshot snapshot;
