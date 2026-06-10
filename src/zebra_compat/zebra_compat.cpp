@@ -454,7 +454,8 @@ SyncOutcome ValidatePostIngestionTipOnZebraBestChain(
     int expectedHeight,
     const std::string& expectedHash,
     const std::string& mismatchError,
-    const std::string& offChainDetail)
+    const std::string& offChainDetail,
+    bool reorgContext)
 {
     ZebraIdentity current = client.CheckIdentity(chainparams);
     UpdateZebraStatus(current);
@@ -507,6 +508,26 @@ SyncOutcome ValidatePostIngestionTipOnZebraBestChain(
             "zebra_tip_changed_during_sync",
             strprintf("Zebra tip changed from %s at height %d to %s at height %d during Unity sync",
                       expectedHash, expectedHeight, current.bestBlockHash, current.blocks));
+        return {false, false};
+    }
+
+    // Equal-height reorg race: Zebra advertised a competing block at the local
+    // tip's height, the replacement branch was ingested, but ActivateBestChain
+    // kept the previously received equal-work local tip active. This is not a
+    // hard fault: either Zebra extends its branch (making it strictly more
+    // work) or Zebra reorgs back to the local branch. Degrade non-sticky so
+    // the worker retries after refreshing Zebra's best chain.
+    if (reorgContext && localTip.height == current.blocks) {
+        UpdateSyncStatus(
+            "ready",
+            "degraded",
+            "zebra_equal_work_reorg_not_activated",
+            strprintf(
+                "ActivateBestChain kept local equal-work tip %s at height %d instead of Zebra tip %s; "
+                "retrying after Zebra best chain refresh",
+                localTip.hash,
+                localTip.height,
+                current.bestBlockHash));
         return {false, false};
     }
 
@@ -625,7 +646,8 @@ SyncOutcome SyncUnityReorgToZebraBest(
             zebraBestHash,
             strprintf("local tip after Zebra reorg is %s at height %d, expected %s at height %d",
                       newTip.hash, newTip.height, zebraBestHash, zebraBestHeight),
-            "local_tip_not_on_zebra_best_chain_after_reorg");
+            "local_tip_not_on_zebra_best_chain_after_reorg",
+            /*reorgContext=*/true);
     }
 
     UpdateSyncedTip(newTip);
@@ -764,7 +786,8 @@ SyncOutcome RunForwardSyncPipelined(
                 zebraBestHash,
                 strprintf("local tip after Unity chunk is %s at height %d, expected %s at height %d",
                           newTip.hash, newTip.height, current.hashes.back(), current.endHeight),
-                "local_tip_not_on_zebra_best_chain_after_chunk");
+                "local_tip_not_on_zebra_best_chain_after_chunk",
+                /*reorgContext=*/false);
         }
 
         UpdateSyncedTip(newTip);
@@ -1437,7 +1460,8 @@ UnitySyncTestOutcome TEST_ValidatePostIngestionTipOnZebraBestChain(
     int expectedHeight,
     const std::string& expectedHash,
     const std::string& mismatchError,
-    const std::string& offChainDetail)
+    const std::string& offChainDetail,
+    bool reorgContext)
 {
     LocalTipSnapshot localTip;
     localTip.height = localTipHeight;
@@ -1450,7 +1474,8 @@ UnitySyncTestOutcome TEST_ValidatePostIngestionTipOnZebraBestChain(
         expectedHeight,
         expectedHash,
         mismatchError,
-        offChainDetail);
+        offChainDetail,
+        reorgContext);
 
     UnitySyncTestOutcome testOutcome;
     testOutcome.progressed = outcome.progressed;
