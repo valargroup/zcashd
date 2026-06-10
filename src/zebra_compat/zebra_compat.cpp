@@ -500,6 +500,25 @@ SyncOutcome ValidatePostIngestionTipOnZebraBestChain(
         return {true, false};
     }
 
+    // Zebra's best chain temporarily shrank after the reorg (e.g. Zebra itself
+    // is mid-reorg): local tip is strictly ahead. Not a hard fault; retry with
+    // backoff so the worker loop waits for Zebra to catch up. Check before the
+    // tip-changed branch because the expected height is irrelevant here.
+    if (reorgContext && localTip.height > current.blocks) {
+        UpdateSyncStatus(
+            "ready",
+            "degraded",
+            "zebra_tip_temporarily_behind_local_after_reorg",
+            strprintf(
+                "local tip %s at height %d is ahead of Zebra best tip %s at height %d after reorg; "
+                "retrying after Zebra best chain refresh",
+                localTip.hash,
+                localTip.height,
+                current.bestBlockHash,
+                current.blocks));
+        return {false, false, true};
+    }
+
     if (current.blocks != expectedHeight ||
         current.bestBlockHash != expectedHash) {
         UpdateSyncStatus(
