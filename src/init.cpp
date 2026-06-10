@@ -1817,6 +1817,15 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
                         CleanupBlockRevFiles();
                 }
 
+                // Open the Unity metadata database before loading the block
+                // index: LoadBlockIndex consults the cached trusted block
+                // boundary to skip header work checks for trusted Zebra
+                // regtest blocks (see LoadBlockIndexGuts).
+                if (unity::IsTrustedValidationEnabled() && !unity::InitUnityMetadata()) {
+                    strLoadError = _("Error opening Unity metadata database");
+                    break;
+                }
+
                 if (!LoadBlockIndex()) {
                     strLoadError = _("Error loading block database");
                     break;
@@ -1876,11 +1885,6 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
                 if (fHavePruned && GetArg("-checkblocks", DEFAULT_CHECKBLOCKS) > MIN_BLOCKS_TO_KEEP) {
                     LogPrintf("Prune: pruned datadir may not have more than %d blocks; -checkblocks=%d may fail\n",
                         MIN_BLOCKS_TO_KEEP, GetArg("-checkblocks", DEFAULT_CHECKBLOCKS));
-                }
-
-                if (unity::IsTrustedValidationEnabled() && !unity::InitUnityMetadata()) {
-                    strLoadError = _("Error opening Unity metadata database");
-                    break;
                 }
 
                 {
