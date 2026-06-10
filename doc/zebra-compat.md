@@ -64,6 +64,15 @@ authentication:
 ```
 
 `-zebra-compat` expands to `-blocksource=zebra -p2p=0 -blockvalidation=trusted-zebra`.
+When `-zebra-compat` is active, `zcashd` also force-disables `-listen=0`,
+`-dnsseed=0`, and `-listenonion=0` in memory, even if a legacy `zcash.conf`
+still contains `listen=1` or `p2p=1`. Those values remain on disk but are not
+used. Options such as `bind=`, `connect=`, and `addnode=` are not overridden;
+startup fails with a clear validation error instead.
+
+When Zebra supervises `zcashd`, it also passes `-p2p=0` and `-listen=0` on the
+command line before `zcashd_extra_args`. CLI arguments win over `zcash.conf`.
+
 If you cannot share the cookie file (for example a remote Zebra host), use
 static credentials instead:
 
@@ -115,12 +124,76 @@ Operators should run Zebra locally or over a private authenticated network.
 Production zebra-compat mode requires Zebra RPC authentication. Public unauthenticated
 Zebra endpoints must not be used for production zebra-compat mode.
 
+## Configuration
+
+### `zcash.conf` requirements
+
+`zcashd` requires a configuration file in its datadir before startup. The file
+can be minimal:
+
+```conf
+i-am-aware-zcashd-will-be-replaced-by-zebrad-and-zallet-in-2025=1
+```
+
+Zebra supervised deployments do not create or overwrite `zcash.conf`; provide
+this file (or a migrated legacy config with P2P peer options removed) before
+the first supervised start.
+
+### P2P flags in compat mode
+
+These flags are P2P-only. None are needed for zebra-compat operation:
+
+| Flag | Compat behavior |
+|---|---|
+| `-p2p=0` | Master switch: no `StartNode()`, blocks come from Zebra RPC |
+| `-listen=0` | No inbound peer connections or network P2P port bind |
+| `-dnsseed=0` | No DNS peer discovery |
+| `-listenonion=0` | No Tor hidden service for inbound P2P |
+
+With `-zebra-compat`, `zcashd` forces all four off regardless of `zcash.conf`.
+Supervised starts add `-p2p=0` and `-listen=0` on the CLI as defense in depth.
+
+Peer-directing options (`bind=`, `whitebind=`, `connect=`, `addnode=`,
+`seednode=`, etc.) are not silently ignored; remove them from `zcash.conf` or
+startup fails.
+
+`-dns` (general hostname resolution) is separate from `-dnsseed` and is not
+forced off. Wallet RPC (`-rpcbind`, `-rpcport`) is unrelated to `-listen`.
+
+### Three different endpoints (supervised deployments)
+
+| Endpoint | Typical address | Purpose |
+|---|---|---|
+| Zebra user RPC | `127.0.0.1:8232` | Operator JSON-RPC; `-zebra-compat-url` points here |
+| Zebra compat RPC | `127.0.0.1:28232` | Cookie-auth channel from supervised `zcashd` to Zebra |
+| Zebra network P2P | `0.0.0.0:8233` / `:18233` | Zebra syncs from the Zcash network |
+| zcashd network P2P | disabled | Must not bind 8233/18233 in compat mode |
+
+Do not point `-zebra-compat-url` at the compat RPC port (`28232`); use the
+main Zebra RPC listener configured in `[rpc].listen_addr`.
+
+### Validate P2P is disabled
+
+```sh
+./src/zcash-cli getzebracompatinfo   # expect "p2p": false, "blocksource": "zebra"
+./src/zcash-cli getconnectioncount   # expect 0
+./src/zcash-cli getpeerinfo          # expect []
+```
+
+Confirm `zcashd` is not listening on the network P2P port:
+
+```sh
+ss -ltnp 'sport = :18233'   # testnet
+ss -ltnp 'sport = :8233'    # mainnet
+```
+
 ## Deployment Topology
 
 Recommended single-host topology:
 
 ```text
 Zebra JSON-RPC 127.0.0.1:8232  <---authenticated HTTP---  zcashd -zebra-compat
+Zebra compat RPC 127.0.0.1:28232 <---cookie auth (supervised only)---  zcashd
 Zebra P2P enabled                                      zcashd P2P disabled
 ```
 
