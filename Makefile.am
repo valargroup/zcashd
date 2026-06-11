@@ -13,7 +13,7 @@ SUBDIRS = src
 if ENABLE_MAN
 SUBDIRS += doc/man
 endif
-.PHONY: deploy FORCE rpc-tests
+.PHONY: deploy FORCE rpc-tests compat-test-soak
 
 if BUILD_BITCOIN_LIBS
 pkgconfigdir = $(libdir)/pkgconfig
@@ -175,6 +175,9 @@ distclean-local:
 
 rpc-tests: $(BITCOIND_BIN)
 	qa/pull-tester/rpc-tests.py $(RPC_TEST)
+
+compat-test-soak: $(BITCOIND_BIN)
+	qa/pull-tester/rpc-tests.py --nozmq zebra_compat_chaos_soak.py
 
 test-security-check:
 if TARGET_DARWIN

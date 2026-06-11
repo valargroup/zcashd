@@ -107,12 +107,31 @@ public:
 
 class ZebraRpcError : public std::runtime_error {
 public:
+    enum Kind {
+        TRANSPORT,
+        AUTHENTICATION,
+        HTTP_STATUS,
+        RPC_ERROR,
+        MALFORMED_RESPONSE,
+    };
+
     // Creates an RPC-layer error with HTTP status and optional JSON-RPC code.
     ZebraRpcError(
         const std::string& message,
         int httpStatus,
         bool hasRpcCode,
         int rpcCode);
+
+    // Creates a typed RPC-layer error with HTTP status and optional JSON-RPC code.
+    ZebraRpcError(
+        const std::string& message,
+        Kind kind,
+        int httpStatus,
+        bool hasRpcCode,
+        int rpcCode);
+
+    // Returns the coarse error kind used by identity classification.
+    Kind ErrorKind() const;
 
     // Returns the HTTP status associated with the RPC response, or zero when
     // the transport did not receive a response.
@@ -125,6 +144,7 @@ public:
     int RpcCode() const;
 
 private:
+    Kind kind;
     int httpStatus;
     bool hasRpcCode;
     int rpcCode;

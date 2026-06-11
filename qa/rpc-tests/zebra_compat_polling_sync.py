@@ -32,6 +32,8 @@ class FakePollingZebraServer:
 
     def __init__(self, source_node):
         self.source_url = source_node.url
+        self.rpc_user = 'user'
+        self.rpc_password = 'pass'
         self.server = None
         self.thread = None
         self.lock = threading.Lock()
@@ -48,7 +50,9 @@ class FakePollingZebraServer:
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):
-                expected_auth = 'Basic ' + base64.b64encode(b'user:pass').decode('ascii')
+                with fake.lock:
+                    expected_credentials = ('%s:%s' % (fake.rpc_user, fake.rpc_password)).encode('utf8')
+                expected_auth = 'Basic ' + base64.b64encode(expected_credentials).decode('ascii')
                 if self.headers.get('Authorization') != expected_auth:
                     self.send_response(401)
                     self.end_headers()
@@ -151,13 +155,26 @@ class FakePollingZebraServer:
         return 'http://127.0.0.1:%d' % self.server.server_address[1]
 
     def source_rpc(self):
-        return AuthServiceProxy(self.source_url)
+        with self.lock:
+            source_url = self.source_url
+        return AuthServiceProxy(source_url)
+
+    def set_source_node(self, source_node):
+        with self.lock:
+            self.source_url = source_node.url
+
+    def set_rpc_credentials(self, user, password):
+        with self.lock:
+            self.rpc_user = user
+            self.rpc_password = password
 
     def stop(self):
         if self.server is not None:
             self.server.shutdown()
             self.thread.join()
             self.server.server_close()
+            self.server = None
+            self.thread = None
 
     def saw_batched_block_fetch(self):
         with self.lock:
