@@ -1044,8 +1044,8 @@ else
     AC_CHECK_HEADER([openssl/ssl.h],, AC_MSG_ERROR(openssl headers missing),)
     AC_CHECK_LIB([event],[main],EVENT_LIBS=-levent,AC_MSG_ERROR(libevent missing))
     AC_CHECK_LIB([event_openssl],[main],EVENT_OPENSSL_LIBS=-levent_openssl,AC_MSG_ERROR(libevent_openssl missing))
-    AC_CHECK_LIB([ssl],[SSL_new],SSL_LIBS=-lssl,AC_MSG_ERROR(libssl missing))
     AC_CHECK_LIB([crypto],[CRYPTO_new_ex_data],CRYPTO_LIBS=-lcrypto,AC_MSG_ERROR(libcrypto missing))
+    AC_CHECK_LIB([ssl],[SSL_new],SSL_LIBS=-lssl,AC_MSG_ERROR(libssl missing),[$CRYPTO_LIBS])
     if test x$TARGET_OS != xwindows; then
       AC_CHECK_LIB([event_pthreads],[main],EVENT_PTHREADS_LIBS=-levent_pthreads,AC_MSG_ERROR(libevent_pthreads missing))
     fi
