@@ -29,6 +29,7 @@
 #endif
 
 #include <stdint.h>
+#include <list>
 #include <variant>
 
 #include <boost/assign/list_of.hpp>
@@ -37,6 +38,18 @@
 #include <rust/bridge.h>
 
 using namespace std;
+
+static void ThrowAcceptToMemoryPoolError(const CValidationState& state, bool fMissingInputs)
+{
+    if (state.IsInvalid()) {
+        throw JSONRPCError(RPC_TRANSACTION_REJECTED, strprintf("%i: %s", state.GetRejectCode(), state.GetRejectReason()));
+    } else {
+        if (fMissingInputs) {
+            throw JSONRPCError(RPC_TRANSACTION_ERROR, "Missing inputs");
+        }
+        throw JSONRPCError(RPC_TRANSACTION_ERROR, state.GetRejectReason());
+    }
+}
 
 void ScriptPubKeyToJSON(const CScript& scriptPubKey, UniValue& out, bool fIncludeHex)
 {
@@ -1284,6 +1297,7 @@ UniValue sendrawtransaction(const UniValue& params, bool fHelp)
         if (params.size() > 1)
             fOverrideFees = params[1].get_bool();
 
+        bool fAcceptedLocally = false;
         {
             LOCK(cs_main);
             if (tx.IsCoinBase()) {
@@ -1292,6 +1306,7 @@ UniValue sendrawtransaction(const UniValue& params, bool fHelp)
 
             CCoinsViewCache &view = *pcoinsTip;
             const CCoins* existingCoins = view.AccessCoins(hashTx);
+            bool fHaveMempool = mempool.exists(hashTx);
             bool fHaveChain = existingCoins && existingCoins->nHeight < 1000000000;
             if (fHaveChain) {
                 throw JSONRPCError(RPC_TRANSACTION_ALREADY_IN_CHAIN, "transaction already in block chain");
@@ -1309,10 +1324,24 @@ UniValue sendrawtransaction(const UniValue& params, bool fHelp)
                     }
                 }
             }
+
+            if (!fHaveMempool) {
+                CValidationState state;
+                bool fMissingInputs = false;
+                if (!AcceptToMemoryPool(chainparams, mempool, state, tx, true, &fMissingInputs, !fOverrideFees)) {
+                    ThrowAcceptToMemoryPoolError(state, fMissingInputs);
+                }
+                fAcceptedLocally = true;
+            }
         }
 
         zebra_compat::TxForwardingResult forwardResult = zebra_compat::ForwardRawTransaction(txHex, hashTx);
         if (!forwardResult.success) {
+            if (fAcceptedLocally) {
+                LOCK(cs_main);
+                std::list<CTransaction> removed;
+                mempool.remove(tx, removed, true);
+            }
             throw JSONRPCError(forwardResult.rpcErrorCode, forwardResult.error);
         }
 
@@ -1371,14 +1400,7 @@ UniValue sendrawtransaction(const UniValue& params, bool fHelp)
         CValidationState state;
         bool fMissingInputs;
         if (!AcceptToMemoryPool(chainparams, mempool, state, tx, true, &fMissingInputs, !fOverrideFees)) {
-            if (state.IsInvalid()) {
-                throw JSONRPCError(RPC_TRANSACTION_REJECTED, strprintf("%i: %s", state.GetRejectCode(), state.GetRejectReason()));
-            } else {
-                if (fMissingInputs) {
-                    throw JSONRPCError(RPC_TRANSACTION_ERROR, "Missing inputs");
-                }
-                throw JSONRPCError(RPC_TRANSACTION_ERROR, state.GetRejectReason());
-            }
+            ThrowAcceptToMemoryPoolError(state, fMissingInputs);
         }
     } else if (fHaveChain) {
         throw JSONRPCError(RPC_TRANSACTION_ALREADY_IN_CHAIN, "transaction already in block chain");
