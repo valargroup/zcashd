@@ -23,6 +23,7 @@ The lower-level knobs are available for testing and staged rollout:
 -zebra-compat-poll-interval=<seconds>
 -zebra-compat-sync-batch-size=<blocks>
 -zebra-compat-sync-response-budget-mb=<MiB>
+-zebra-compat-zebra-rpc-max-response-body-bytes=<bytes>
 ```
 
 ## Quick Start
@@ -163,8 +164,17 @@ forced off. Wallet RPC (`-rpcbind`, `-rpcport`) is unrelated to `-listen`.
 
 ### Sync batch size, response budget, and reorg depth
 
-`-zebra-compat-sync-batch-size` defaults to `30`. The effective value is also
-bounded by `-zebra-compat-sync-response-budget-mb`, which defaults to `128` MiB:
+Three settings must agree when increasing zebra-compat sync depth:
+
+- `-zebra-compat-sync-batch-size=<blocks>`: how many raw blocks zcashd asks
+  Zebra for in one JSON-RPC batch. It defaults to `30`.
+- `-zebra-compat-sync-response-budget-mb=<MiB>`: zcashd's memory budget for one
+  batched raw-block response. It defaults to `128` MiB and bounds the effective
+  sync batch size.
+- Zebra `rpc.max_response_body_size`: Zebra's own HTTP response-body limit. It
+  must be large enough for the same batch response.
+
+zcashd computes its memory-clamped maximum batch size as:
 
 ```text
 effective max = floor((budget - 1 MiB) / (2 * MAX_BLOCK_SIZE + 1024))
@@ -180,25 +190,35 @@ one replacement branch. Branches longer than one batch fail sticky with
 `99`, so setting the batch size above `99` does not increase followable reorg
 depth.
 
-Zebra's RPC `max_response_body_size` must be at least as large as zcashd's
-response budget because JSON-RPC batch responses are limited as one response
-body. Zebra's zcashd-compat listener floors this value at `128` MiB for the
-default zcashd budget.
+When `-zebra-compat-zebra-rpc-max-response-body-bytes=<bytes>` is set, zcashd
+also validates that Zebra's configured `rpc.max_response_body_size` can carry
+the effective sync batch. Zebra sets this flag automatically when it supervises
+zcashd. If zcashd is managed externally, set it explicitly to get the same
+fail-early validation.
 
-For an 80-block batch, raise both sides to a round `320` MiB budget:
+For an externally managed 80-block batch, raise zcashd's response budget and
+pass Zebra's configured response limit to zcashd:
 
 ```sh
 ./src/zcashd -zebra-compat \
   -zebra-compat-sync-batch-size=80 \
   -zebra-compat-sync-response-budget-mb=320 \
+  -zebra-compat-zebra-rpc-max-response-body-bytes=335544320 \
   -zebra-compat-url=http://127.0.0.1:8232 \
   -zebra-compat-cookiefile=/path/to/zebra/.cookie
 ```
+
+Configure Zebra with the matching response-body limit:
 
 ```toml
 [rpc]
 max_response_body_size = 335544320
 ```
+
+If Zebra supervises zcashd, put only the zcashd batch and response-budget
+settings in Zebra's `zcashd_extra_args`; Zebra passes
+`-zebra-compat-zebra-rpc-max-response-body-bytes=<effective limit>`
+automatically.
 
 ### Three different endpoints (supervised deployments)
 
