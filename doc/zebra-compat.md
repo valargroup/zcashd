@@ -143,9 +143,10 @@ can be minimal:
 i-am-aware-zcashd-will-be-replaced-by-zebrad-and-zallet-in-2025=1
 ```
 
-Zebra supervised deployments do not create or overwrite `zcash.conf`; provide
-this file (or a migrated legacy config with P2P peer options removed) before
-the first supervised start.
+Zebra supervised deployments create this minimal `zcash.conf` atomically when
+the datadir has no config. Existing operator configs are never overwritten; for
+migrated datadirs, remove legacy P2P peer options before the first supervised
+start.
 
 ### P2P flags in compat mode
 
@@ -167,6 +168,14 @@ startup fails.
 
 `-dns` (general hostname resolution) is separate from `-dnsseed` and is not
 forced off. Wallet RPC (`-rpcbind`, `-rpcport`) is unrelated to `-listen`.
+
+### Migration rollout
+
+For existing zcashd datadirs, keep the datadir in place and migrate the config
+instead of starting from a fresh wallet directory. Remove legacy P2P
+peer-directing options first, then do a staged rollout by starting with
+`-blocksource=zebra -p2p=0 -blockvalidation=full` if you want local full block
+validation before switching to the `-zebra-compat` trusted-validation preset.
 
 ### Sync batch size, response budget, and reorg depth
 
@@ -348,6 +357,11 @@ When using `-zebra-compat-cookiefile`, zcashd rereads the cookie during ingest
 polling. Zebra restarts that regenerate the cookie file should recover through
 normal retry/backoff without restarting zcashd, as long as the cookie file path
 and endpoint URL stay the same.
+
+Alert if `getzebracompatinfo.sync.detail` remains
+`zebra_authentication_retry` for more than a few minutes. That state is
+intentionally retryable for cookie rotation, but a persistently wrong cookie path
+or file contents needs operator action.
 
 If the trusted boundary does not match, zebra-compat must not silently apply the old
 trusted-source decision to a different source. Reconfirm the local data

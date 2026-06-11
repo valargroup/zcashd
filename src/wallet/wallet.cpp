@@ -5042,6 +5042,55 @@ std::vector<uint256> CWallet::ResendWalletTransactionsBefore(int64_t nTime)
 {
     std::vector<uint256> result;
 
+    if (zebra_compat::IsEnabled()) {
+        struct ResendCandidate {
+            uint256 txid;
+            std::string txHex;
+        };
+        std::vector<ResendCandidate> candidates;
+        {
+            // Snapshot eligible wallet transactions while holding wallet and chain
+            // locks, including txs evicted from the local mempool but not mined.
+            LOCK2(cs_main, cs_wallet);
+            multimap<unsigned int, const CWalletTx*> mapSorted;
+            for (const std::pair<const uint256, CWalletTx>& item : mapWallet)
+            {
+                const CWalletTx& wtx = item.second;
+                if (wtx.nTimeReceived > nTime)
+                    continue;
+                mapSorted.insert(make_pair(wtx.nTimeReceived, &wtx));
+            }
+            for (std::pair<const unsigned int, const CWalletTx*>& item : mapSorted)
+            {
+                const CWalletTx& wtx = *item.second;
+                // Resend only viable unmined transactions: evicted wallet txs still need
+                // recovery, but expired/expiring or wallet-conflicted txs would just
+                // generate repeated Zebra rejections on every resend cycle.
+                if (!wtx.IsCoinBase() &&
+                    wtx.GetDepthInMainChain(std::nullopt) <= 0 &&
+                    !IsExpiringSoonTx(wtx, chainActive.Height() + 1) &&
+                    wtx.GetConflicts().empty()) {
+                    const CTransaction txToForward = (CTransaction)wtx;
+                    candidates.push_back({txToForward.GetHash(), EncodeHexTx(txToForward)});
+                }
+            }
+        }
+
+        // Forward to Zebra after releasing wallet locks; HTTP can block.
+        for (const ResendCandidate& candidate : candidates) {
+            zebra_compat::TxForwardingResult forwardResult =
+                zebra_compat::ForwardRawTransaction(candidate.txHex, candidate.txid);
+            if (forwardResult.success) {
+                LogPrintf("zebra-compat wallet rebroadcast forwarded wtx %s\n", candidate.txid.ToString());
+                result.push_back(candidate.txid);
+            } else {
+                LogPrintf("zebra-compat wallet rebroadcast failed for wtx %s: %s\n",
+                          candidate.txid.ToString(), forwardResult.error);
+            }
+        }
+        return result;
+    }
+
     LOCK(cs_wallet);
     // Sort them in chronological order
     multimap<unsigned int, CWalletTx*> mapSorted;
