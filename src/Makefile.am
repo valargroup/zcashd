@@ -664,7 +664,10 @@ zcashd_LDADD += \
   $(BOOST_LIBS) \
   $(BDB_LIBS) \
   $(EVENT_PTHREADS_LIBS) \
+  $(EVENT_OPENSSL_LIBS) \
   $(EVENT_LIBS) \
+  $(SSL_LIBS) \
+  $(CRYPTO_LIBS) \
   $(ZMQ_LIBS) \
   $(LIBZCASH_LIBS)
 

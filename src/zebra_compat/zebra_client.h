@@ -30,8 +30,9 @@ struct ZebraEndpoint {
 struct ZebraAuth {
     std::string user;
     std::string password;
+    bool disabled = false;
 
-    // Returns true when both Basic auth fields are present.
+    // Returns true when Basic auth should be sent with Zebra RPC requests.
     bool IsConfigured() const;
 
     // Builds the HTTP Basic Authorization header value from configured auth.
@@ -41,6 +42,7 @@ struct ZebraAuth {
 struct ZebraClientConfig {
     ZebraEndpoint endpoint;
     ZebraAuth auth;
+    std::string tlsCaFile;
     int timeoutSeconds = 30;
 };
 

@@ -153,6 +153,8 @@ void ResetArgs(const std::string& strArg)
         replacePrefix("-zebra-compat-timeout=", "-zebra-compat-timeout=");
         replacePrefix("-zebra-compat-zebra-rpc-max-response-body-bytes=", "-zebra-compat-zebra-rpc-max-response-body-bytes=");
         replacePrefix("-zebra-compat-allow-remote-http=", "-zebra-compat-allow-remote-http=");
+        replacePrefix("-zebra-compat-no-auth=", "-zebra-compat-no-auth=");
+        replacePrefix("-zebra-compat-tls-ca-file=", "-zebra-compat-tls-ca-file=");
         replacePrefix("-zebra-compat-trusted-validation-fixture", "-zebra-compat-trusted-validation-fixture");
     }
 
@@ -480,6 +482,38 @@ BOOST_AUTO_TEST_CASE(zebra_client_config_accepts_loopback_http_endpoints)
     }
 }
 
+BOOST_AUTO_TEST_CASE(zebra_client_config_accepts_https_endpoints)
+{
+    ArgsSnapshot snapshot;
+    const std::vector<std::string> urls = {
+        "https://127.0.0.1:8232",
+        "https://10.0.0.2:8232",
+    };
+
+    for (const std::string& url : urls) {
+        ApplyZebraCompatArgs(
+            "-zebra-compat-url=" + url +
+            " -zebra-compat-rpc-user=user -zebra-compat-rpc-password=pass");
+        zebra_compat::ZebraClientConfig config;
+        std::string error;
+        BOOST_CHECK_MESSAGE(zebra_compat::LoadZebraClientConfig(config, error), error);
+        BOOST_CHECK_EQUAL(config.endpoint.url, url);
+        BOOST_CHECK_EQUAL(config.endpoint.scheme, "https");
+        BOOST_CHECK(config.tlsCaFile.empty());
+    }
+}
+
+BOOST_AUTO_TEST_CASE(zebra_client_config_uses_https_default_port)
+{
+    ArgsSnapshot snapshot;
+    zebra_compat::ZebraEndpoint endpoint;
+    std::string error;
+
+    BOOST_CHECK_MESSAGE(zebra_compat::ParseZebraEndpoint("https://127.0.0.1", endpoint, error), error);
+    BOOST_CHECK_EQUAL(endpoint.scheme, "https");
+    BOOST_CHECK_EQUAL(endpoint.port, 443);
+}
+
 BOOST_AUTO_TEST_CASE(zebra_client_config_uses_configured_timeout)
 {
     ArgsSnapshot snapshot;
@@ -537,6 +571,97 @@ BOOST_AUTO_TEST_CASE(zebra_client_config_allows_remote_plain_http_with_override)
     std::string error;
     BOOST_CHECK_MESSAGE(zebra_compat::LoadZebraClientConfig(config, error), error);
     BOOST_CHECK_EQUAL(config.endpoint.host, "10.0.0.2");
+}
+
+BOOST_AUTO_TEST_CASE(zebra_client_config_allows_https_no_auth)
+{
+    ArgsSnapshot snapshot;
+    ApplyZebraCompatArgs(
+        "-zebra-compat-url=https://10.0.0.2:8232"
+        " -zebra-compat-no-auth=1");
+
+    zebra_compat::ZebraClientConfig config;
+    std::string error;
+    BOOST_CHECK_MESSAGE(zebra_compat::LoadZebraClientConfig(config, error), error);
+    BOOST_CHECK(!config.auth.IsConfigured());
+    BOOST_CHECK(config.auth.disabled);
+}
+
+BOOST_AUTO_TEST_CASE(zebra_client_config_rejects_http_no_auth)
+{
+    ArgsSnapshot snapshot;
+    ApplyZebraCompatArgs(
+        "-zebra-compat-url=http://127.0.0.1:8232"
+        " -zebra-compat-no-auth=1");
+
+    zebra_compat::ZebraClientConfig config;
+    std::string error;
+    BOOST_CHECK(!zebra_compat::LoadZebraClientConfig(config, error));
+    BOOST_CHECK(error.find("https://") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(zebra_client_config_rejects_no_auth_with_credentials)
+{
+    ArgsSnapshot snapshot;
+    ApplyZebraCompatArgs(
+        "-zebra-compat-url=https://127.0.0.1:8232"
+        " -zebra-compat-no-auth=1"
+        " -zebra-compat-rpc-user=user -zebra-compat-rpc-password=pass");
+
+    zebra_compat::ZebraClientConfig config;
+    std::string error;
+    BOOST_CHECK(!zebra_compat::LoadZebraClientConfig(config, error));
+    BOOST_CHECK(error.find("-zebra-compat-no-auth") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(zebra_client_config_requires_https_for_tls_ca_file)
+{
+    ArgsSnapshot snapshot;
+    ApplyZebraCompatArgs(
+        "-zebra-compat-url=http://127.0.0.1:8232"
+        " -zebra-compat-rpc-user=user -zebra-compat-rpc-password=pass"
+        " -zebra-compat-tls-ca-file=/tmp/ca.pem");
+
+    zebra_compat::ZebraClientConfig config;
+    std::string error;
+    BOOST_CHECK(!zebra_compat::LoadZebraClientConfig(config, error));
+    BOOST_CHECK(error.find("-zebra-compat-tls-ca-file") != std::string::npos);
+
+    ApplyZebraCompatArgs(
+        "-zebra-compat-url=https://127.0.0.1:8232"
+        " -zebra-compat-rpc-user=user -zebra-compat-rpc-password=pass"
+        " -zebra-compat-tls-ca-file=/tmp/ca.pem");
+
+    error.clear();
+    BOOST_CHECK_MESSAGE(zebra_compat::LoadZebraClientConfig(config, error), error);
+    BOOST_CHECK_EQUAL(config.tlsCaFile, "/tmp/ca.pem");
+}
+
+BOOST_AUTO_TEST_CASE(zebra_client_config_reload_clears_previous_tls_auth_state)
+{
+    ArgsSnapshot snapshot;
+    ApplyZebraCompatArgs(
+        "-zebra-compat-url=https://127.0.0.1:8232"
+        " -zebra-compat-no-auth=1"
+        " -zebra-compat-tls-ca-file=/tmp/ca.pem");
+
+    zebra_compat::ZebraClientConfig config;
+    std::string error;
+    BOOST_CHECK_MESSAGE(zebra_compat::LoadZebraClientConfig(config, error), error);
+    BOOST_CHECK(config.auth.disabled);
+    BOOST_CHECK_EQUAL(config.tlsCaFile, "/tmp/ca.pem");
+
+    ApplyZebraCompatArgs(
+        "-zebra-compat-url=https://127.0.0.1:8232"
+        " -zebra-compat-rpc-user=user -zebra-compat-rpc-password=pass");
+
+    error.clear();
+    BOOST_CHECK_MESSAGE(zebra_compat::LoadZebraClientConfig(config, error), error);
+    BOOST_CHECK(config.auth.IsConfigured());
+    BOOST_CHECK(!config.auth.disabled);
+    BOOST_CHECK_EQUAL(config.auth.user, "user");
+    BOOST_CHECK_EQUAL(config.auth.password, "pass");
+    BOOST_CHECK(config.tlsCaFile.empty());
 }
 
 BOOST_AUTO_TEST_CASE(zebra_client_config_fails_closed_for_unresolved_plain_http_names)
