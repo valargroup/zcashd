@@ -104,8 +104,9 @@ bool MissingZebraMempoolParent(const CTransaction& tx, const std::set<std::strin
     return false;
 }
 
-void RemoveTransactionsNotInZebra(const std::set<std::string>& zebraTxIds, int& removed)
+size_t RemoveTransactionsNotInZebra(const std::set<std::string>& zebraTxIds, int& removed)
 {
+    size_t retainedForwarded = 0;
     ExpireForwardedTransactions();
     for (const std::string& txid : zebraTxIds) {
         MarkForwardedTransactionObserved(txid);
@@ -117,6 +118,7 @@ void RemoveTransactionsNotInZebra(const std::set<std::string>& zebraTxIds, int& 
             continue;
         }
         if (ShouldKeepForwardedTransaction(txid)) {
+            retainedForwarded++;
             LogPrint("mempool", "zebra-compat mempool mirror retained forwarded txid %s pending Zebra mempool observation\n", txid);
             continue;
         }
@@ -131,6 +133,17 @@ void RemoveTransactionsNotInZebra(const std::set<std::string>& zebraTxIds, int& 
         removed += removedTxs.size();
         LogPrint("mempool", "zebra-compat mempool mirror removed txid %s absent from Zebra mempool\n", txid);
     }
+    return retainedForwarded;
+}
+
+int ComputeMempoolLag(int zebraSize, int localSize, size_t divergent, size_t retainedForwarded)
+{
+    const int localMissing = std::max<int>(0, zebraSize - localSize);
+    const int localExtra = std::max<int>(0, localSize - zebraSize);
+    const size_t explainedMissing = std::min<size_t>(static_cast<size_t>(localMissing), divergent);
+    const size_t explainedExtra = std::min<size_t>(static_cast<size_t>(localExtra), retainedForwarded);
+    return static_cast<int>(static_cast<size_t>(localMissing) - explainedMissing) +
+        static_cast<int>(static_cast<size_t>(localExtra) - explainedExtra);
 }
 
 void ResetDivergenceSamples()
@@ -160,6 +173,7 @@ void UpdateMirrorStatus(
     const std::set<std::string>& zebraTxIds,
     int zebraReportedSize,
     size_t divergent,
+    size_t retainedForwarded,
     const std::string& error)
 {
     MempoolMirrorStatus status;
@@ -168,12 +182,10 @@ void UpdateMirrorStatus(
     status.zebraSize = zebraReportedSize >= 0 ? zebraReportedSize : static_cast<int>(zebraTxIds.size());
     status.localSize = mempool.size();
     status.divergent = divergent;
+    status.forwardedPending = retainedForwarded;
     status.lastError = error;
 
-    const int localMissing = std::max<int>(0, status.zebraSize - status.localSize);
-    const int localExtra = std::max<int>(0, status.localSize - status.zebraSize);
-    const size_t explainedMissing = std::min<size_t>(static_cast<size_t>(localMissing), status.divergent);
-    status.lag = static_cast<int>(static_cast<size_t>(localMissing) - explainedMissing) + localExtra;
+    status.lag = ComputeMempoolLag(status.zebraSize, status.localSize, status.divergent, retainedForwarded);
 
     LOCK(cs_mempool_mirror);
     status.divergentDetails = g_divergent_transactions.size();
@@ -304,9 +316,10 @@ MempoolMirrorResult SyncMempoolMirrorOnce(ZebraCompatClient& client, const CChai
         std::vector<std::string> missingTxIds;
         std::set<std::string> localTxIdsSnapshot;
         size_t missingCount = 0;
+        size_t retainedForwarded = 0;
         {
             LOCK(cs_main);
-            RemoveTransactionsNotInZebra(zebraTxIds, result.removed);
+            retainedForwarded = RemoveTransactionsNotInZebra(zebraTxIds, result.removed);
 
             const std::set<std::string> localTxIds = LocalMempoolTxIds();
             localTxIdsSnapshot = localTxIds;
@@ -361,7 +374,7 @@ MempoolMirrorResult SyncMempoolMirrorOnce(ZebraCompatClient& client, const CChai
                 static_cast<int>(missingCount),
                 static_cast<int>(missingTxIds.size()));
         }
-        UpdateMirrorStatus(zebraTxIds, zebraInfo.size, result.divergent, statusError);
+        UpdateMirrorStatus(zebraTxIds, zebraInfo.size, result.divergent, retainedForwarded, statusError);
         result.success = true;
         return result;
     } catch (const std::exception& e) {
@@ -396,6 +409,7 @@ UniValue MempoolMirrorStatusToJSON()
     obj.pushKV("divergent", static_cast<int64_t>(status.divergent));
     obj.pushKV("divergent_detail_sample_size", static_cast<int64_t>(status.divergentDetails));
     obj.pushKV("divergent_detail_overflow", static_cast<int64_t>(status.divergentDetailOverflow));
+    obj.pushKV("forwarded_pending", static_cast<int64_t>(status.forwardedPending));
     if (status.zebraSize >= 0) {
         obj.pushKV("zebra_size", status.zebraSize);
     } else {
@@ -425,6 +439,15 @@ size_t MaxMempoolMirrorTxIdsPerPoll()
 size_t MaxMempoolMirrorDivergenceDetails()
 {
     return MAX_DIVERGENCE_DETAILS;
+}
+
+int TEST_ComputeMempoolMirrorLag(
+    int zebraSize,
+    int localSize,
+    size_t divergent,
+    size_t retainedForwarded)
+{
+    return ComputeMempoolLag(zebraSize, localSize, divergent, retainedForwarded);
 }
 
 } // namespace zebra_compat

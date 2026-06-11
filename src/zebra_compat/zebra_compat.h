@@ -24,6 +24,7 @@ class thread_group;
 namespace zebra_compat {
 
 class ZebraCompatClient;
+struct MempoolMirrorStatus;
 
 static const char* const BLOCK_SOURCE_P2P = "p2p";
 static const char* const BLOCK_SOURCE_ZEBRA = "zebra";
@@ -125,6 +126,22 @@ ZebraCompatSyncTestOutcome TEST_SyncZebraCompatOnce(
     ZebraCompatClient& client,
     ZebraCompatClient& prefetchClient,
     const CChainParams& chainparams);
+
+void TEST_ResetReadinessHysteresis();
+
+void TEST_SetZebraCompatStatusForReadiness(
+    bool identityVerified,
+    bool tipMatchedZebra,
+    const std::string& serviceState = "ready",
+    const std::string& syncState = "synced");
+
+std::string TEST_ComputeZebraCompatReadiness(
+    bool enabled,
+    bool initialBlockDownload,
+    bool txForwardingTransportReady,
+    const MempoolMirrorStatus& mirrorStatus,
+    bool notificationsCaughtUp,
+    int64_t now);
 
 } // namespace zebra_compat
 

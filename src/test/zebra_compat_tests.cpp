@@ -147,6 +147,37 @@ void ApplyZebraCompatArgs(const std::string& strArg)
     zebra_compat::InitParameterInteraction();
 }
 
+zebra_compat::MempoolMirrorStatus FreshReadyMirrorStatus(int64_t now)
+{
+    zebra_compat::MempoolMirrorStatus status;
+    status.lastUpdate = now;
+    status.zebraSize = 0;
+    status.localSize = 0;
+    return status;
+}
+
+void ResetZebraCompatReadinessTestState()
+{
+    zebra_compat::TEST_ResetReadinessHysteresis();
+    zebra_compat::TEST_SetZebraCompatStatusForReadiness(
+        /*identityVerified=*/false,
+        /*tipMatchedZebra=*/false,
+        /*serviceState=*/"stopped",
+        /*syncState=*/"degraded");
+}
+
+struct ScopedZebraCompatReadinessTestState {
+    ScopedZebraCompatReadinessTestState()
+    {
+        ResetZebraCompatReadinessTestState();
+    }
+
+    ~ScopedZebraCompatReadinessTestState()
+    {
+        ResetZebraCompatReadinessTestState();
+    }
+};
+
 // test_bitcoin does not link init.o (duplicate globals with test_bitcoin.cpp), so
 // mirror init.cpp's listen-related interactions that run after zebra_compat::InitParameterInteraction().
 void ApplyInitCppListenInteractions()
@@ -1081,6 +1112,157 @@ BOOST_AUTO_TEST_CASE(mempool_mirror_bounds_large_poll_batches_and_divergence_det
     BOOST_CHECK(status.lastError.find("reconciled 1024 this poll") != std::string::npos);
 }
 
+BOOST_AUTO_TEST_CASE(mempool_mirror_treats_forwarded_pending_local_extra_as_explained)
+{
+    BOOST_CHECK_EQUAL(zebra_compat::TEST_ComputeMempoolMirrorLag(
+        /*zebraSize=*/0,
+        /*localSize=*/1,
+        /*divergent=*/0,
+        /*retainedForwarded=*/1), 0);
+    BOOST_CHECK_EQUAL(zebra_compat::TEST_ComputeMempoolMirrorLag(
+        /*zebraSize=*/0,
+        /*localSize=*/2,
+        /*divergent=*/0,
+        /*retainedForwarded=*/1), 1);
+}
+
+BOOST_AUTO_TEST_CASE(zebra_compat_readiness_allows_mempool_divergence_metric)
+{
+    ArgsSnapshot snapshot;
+    ScopedZebraCompatReadinessTestState readinessState;
+    ResetArgs("-zebra-compat-poll-interval=5");
+    zebra_compat::TEST_SetZebraCompatStatusForReadiness(/*identityVerified=*/true, /*tipMatchedZebra=*/true);
+
+    zebra_compat::MempoolMirrorStatus mirror = FreshReadyMirrorStatus(/*now=*/1000);
+    mirror.divergent = 7;
+
+    BOOST_CHECK_EQUAL(zebra_compat::TEST_ComputeZebraCompatReadiness(
+        /*enabled=*/true,
+        /*initialBlockDownload=*/false,
+        /*txForwardingTransportReady=*/true,
+        mirror,
+        /*notificationsCaughtUp=*/true,
+        /*now=*/1000), "ready");
+}
+
+BOOST_AUTO_TEST_CASE(zebra_compat_readiness_hysteresis_smooths_transient_degradation)
+{
+    ArgsSnapshot snapshot;
+    ScopedZebraCompatReadinessTestState readinessState;
+    ResetArgs("-zebra-compat-poll-interval=5");
+    zebra_compat::TEST_SetZebraCompatStatusForReadiness(/*identityVerified=*/true, /*tipMatchedZebra=*/true);
+
+    zebra_compat::MempoolMirrorStatus mirror = FreshReadyMirrorStatus(/*now=*/1000);
+    BOOST_CHECK_EQUAL(zebra_compat::TEST_ComputeZebraCompatReadiness(
+        /*enabled=*/true,
+        /*initialBlockDownload=*/false,
+        /*txForwardingTransportReady=*/true,
+        mirror,
+        /*notificationsCaughtUp=*/true,
+        /*now=*/1000), "ready");
+
+    mirror.lastUpdate = 990;
+    BOOST_CHECK_EQUAL(zebra_compat::TEST_ComputeZebraCompatReadiness(
+        /*enabled=*/true,
+        /*initialBlockDownload=*/false,
+        /*txForwardingTransportReady=*/true,
+        mirror,
+        /*notificationsCaughtUp=*/true,
+        /*now=*/1001), "ready");
+    BOOST_CHECK_EQUAL(zebra_compat::TEST_ComputeZebraCompatReadiness(
+        /*enabled=*/true,
+        /*initialBlockDownload=*/false,
+        /*txForwardingTransportReady=*/true,
+        mirror,
+        /*notificationsCaughtUp=*/true,
+        /*now=*/1011), "degraded");
+}
+
+BOOST_AUTO_TEST_CASE(zebra_compat_readiness_reports_degraded_before_first_ready_and_failed_immediately)
+{
+    ArgsSnapshot snapshot;
+    ScopedZebraCompatReadinessTestState readinessState;
+    ResetArgs("-zebra-compat-poll-interval=5");
+    zebra_compat::MempoolMirrorStatus mirror = FreshReadyMirrorStatus(/*now=*/1000);
+
+    zebra_compat::TEST_SetZebraCompatStatusForReadiness(/*identityVerified=*/true, /*tipMatchedZebra=*/false);
+    BOOST_CHECK_EQUAL(zebra_compat::TEST_ComputeZebraCompatReadiness(
+        /*enabled=*/true,
+        /*initialBlockDownload=*/false,
+        /*txForwardingTransportReady=*/true,
+        mirror,
+        /*notificationsCaughtUp=*/true,
+        /*now=*/1000), "degraded");
+
+    zebra_compat::TEST_SetZebraCompatStatusForReadiness(/*identityVerified=*/true, /*tipMatchedZebra=*/true);
+    BOOST_CHECK_EQUAL(zebra_compat::TEST_ComputeZebraCompatReadiness(
+        /*enabled=*/true,
+        /*initialBlockDownload=*/false,
+        /*txForwardingTransportReady=*/true,
+        mirror,
+        /*notificationsCaughtUp=*/true,
+        /*now=*/1001), "ready");
+
+    zebra_compat::TEST_SetZebraCompatStatusForReadiness(
+        /*identityVerified=*/true,
+        /*tipMatchedZebra=*/true,
+        /*serviceState=*/"failed",
+        /*syncState=*/"failed");
+    BOOST_CHECK_EQUAL(zebra_compat::TEST_ComputeZebraCompatReadiness(
+        /*enabled=*/true,
+        /*initialBlockDownload=*/false,
+        /*txForwardingTransportReady=*/true,
+        mirror,
+        /*notificationsCaughtUp=*/true,
+        /*now=*/1002), "failed");
+}
+
+BOOST_AUTO_TEST_CASE(zebra_compat_successful_ingestion_preserves_matched_tip_for_readiness)
+{
+    ArgsSnapshot snapshot;
+    ScopedZebraCompatReadinessTestState readinessState;
+    ResetArgs("-zebra-compat-poll-interval=5");
+    zebra_compat::TEST_SetZebraCompatStatusForReadiness(/*identityVerified=*/true, /*tipMatchedZebra=*/true);
+
+    zebra_compat::BlockIngestionResult result;
+    result.success = true;
+    result.hash = HashWithLastChar('5');
+    result.height = 1;
+    zebra_compat::RecordBlockIngestionResult(result);
+
+    zebra_compat::MempoolMirrorStatus mirror = FreshReadyMirrorStatus(/*now=*/1000);
+    BOOST_CHECK_EQUAL(zebra_compat::TEST_ComputeZebraCompatReadiness(
+        /*enabled=*/true,
+        /*initialBlockDownload=*/false,
+        /*txForwardingTransportReady=*/true,
+        mirror,
+        /*notificationsCaughtUp=*/true,
+        /*now=*/1000), "ready");
+}
+
+BOOST_AUTO_TEST_CASE(zebra_compat_failed_ingestion_clears_matched_tip_for_readiness)
+{
+    ArgsSnapshot snapshot;
+    ScopedZebraCompatReadinessTestState readinessState;
+    ResetArgs("-zebra-compat-poll-interval=5");
+    zebra_compat::TEST_SetZebraCompatStatusForReadiness(/*identityVerified=*/true, /*tipMatchedZebra=*/true);
+
+    zebra_compat::BlockIngestionResult result;
+    result.success = false;
+    result.hardFailure = false;
+    result.error = "injected block ingestion error";
+    zebra_compat::RecordBlockIngestionResult(result);
+
+    zebra_compat::MempoolMirrorStatus mirror = FreshReadyMirrorStatus(/*now=*/1000);
+    BOOST_CHECK_EQUAL(zebra_compat::TEST_ComputeZebraCompatReadiness(
+        /*enabled=*/true,
+        /*initialBlockDownload=*/false,
+        /*txForwardingTransportReady=*/true,
+        mirror,
+        /*notificationsCaughtUp=*/true,
+        /*now=*/1000), "degraded");
+}
+
 BOOST_AUTO_TEST_CASE(zebra_compat_sync_batch_size_is_clamped_by_memory_budget)
 {
     ArgsSnapshot snapshot;
@@ -1667,6 +1849,7 @@ BOOST_AUTO_TEST_CASE(getzebracompatinfo_reports_minimal_status)
     BOOST_CHECK_EQUAL(find_value(mempoolMirror.get_obj(), "divergent").get_int(), 0);
     BOOST_CHECK_EQUAL(find_value(mempoolMirror.get_obj(), "divergent_detail_sample_size").get_int(), 0);
     BOOST_CHECK_EQUAL(find_value(mempoolMirror.get_obj(), "divergent_detail_overflow").get_int(), 0);
+    BOOST_CHECK_EQUAL(find_value(mempoolMirror.get_obj(), "forwarded_pending").get_int(), 0);
 
     UniValue txForwarding = find_value(info.get_obj(), "tx_forwarding");
     BOOST_CHECK(txForwarding.isObject());
