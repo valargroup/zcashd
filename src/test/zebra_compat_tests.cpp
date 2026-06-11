@@ -74,6 +74,7 @@ void ResetArgs(const std::string& strArg)
         replacePrefix("-zebra-compat-sync-batch-size=", "-zebra-compat-sync-batch-size=");
         replacePrefix("-zebra-compat-sync-drive-batches=", "-zebra-compat-sync-drive-batches=");
         replacePrefix("-zebra-compat-sync-response-budget-mb=", "-zebra-compat-sync-response-budget-mb=");
+        replacePrefix("-zebra-compat-zebra-rpc-max-response-body-bytes=", "-zebra-compat-zebra-rpc-max-response-body-bytes=");
         replacePrefix("-zebra-compat-trusted-validation-fixture", "-zebra-compat-trusted-validation-fixture");
         if (arg == "-zebra-compat-fail-trusted-boundary-write=1") arg = "-zebra-compat-fail-trusted-boundary-write=1";
     }
@@ -747,6 +748,30 @@ BOOST_AUTO_TEST_CASE(zebra_compat_sync_batch_size_80_requires_raised_budget)
     BOOST_CHECK_EQUAL(zebra_compat::ValidateParameterInteraction(), "");
     BOOST_CHECK_EQUAL(zebra_compat::ZebraCompatSyncBatchSize(), 80);
     BOOST_CHECK_EQUAL(zebra_compat::ZebraRpcMaxResponseBodySize(), 321130496);
+}
+
+BOOST_AUTO_TEST_CASE(zebra_compat_validates_configured_zebra_rpc_response_limit)
+{
+    ArgsSnapshot snapshot;
+    ResetArgs(
+        "-zebra-compat-sync-batch-size=80 "
+        "-zebra-compat-sync-response-budget-mb=320 "
+        "-zebra-compat-zebra-rpc-max-response-body-bytes=134217728");
+
+    const std::string tooLowError = zebra_compat::ValidateParameterInteraction();
+    BOOST_CHECK(
+        tooLowError.find("-zebra-compat-zebra-rpc-max-response-body-bytes=134217728") !=
+        std::string::npos);
+    BOOST_CHECK(tooLowError.find("321130496") != std::string::npos);
+
+    ResetArgs(
+        "-zebra-compat-sync-batch-size=80 "
+        "-zebra-compat-sync-response-budget-mb=320 "
+        "-zebra-compat-zebra-rpc-max-response-body-bytes=321130496");
+    BOOST_CHECK_EQUAL(zebra_compat::ValidateParameterInteraction(), "");
+
+    ResetArgs("-zebra-compat-zebra-rpc-max-response-body-bytes=0");
+    BOOST_CHECK(zebra_compat::ValidateParameterInteraction().find("must be at least 1") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(zebra_compat_retry_backoff_is_bounded)

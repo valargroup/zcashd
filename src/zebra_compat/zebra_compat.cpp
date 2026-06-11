@@ -20,6 +20,7 @@
 
 #include <atomic>
 #include <algorithm>
+#include <cstdint>
 #include <future>
 #include <map>
 #include <memory>
@@ -1151,6 +1152,25 @@ std::string ValidateParameterInteraction()
         return "-zebra-compat-sync-batch-size=" + std::to_string(configuredSyncBatchSize) +
             " exceeds zebra-compat's raw block response memory budget; use " +
             std::to_string(effectiveSyncBatchSize) + " or lower";
+    }
+
+    const std::string zebraRpcMaxResponseBodyArg = "-zebra-compat-zebra-rpc-max-response-body-bytes";
+    if (IsExplicitlySet(zebraRpcMaxResponseBodyArg)) {
+        const int64_t configuredZebraRpcMaxResponseBodySize =
+            GetArg(zebraRpcMaxResponseBodyArg, int64_t{0});
+        if (configuredZebraRpcMaxResponseBodySize < 1) {
+            return zebraRpcMaxResponseBodyArg + " must be at least 1";
+        }
+
+        const size_t requiredZebraRpcMaxResponseBodySize = ZebraRpcMaxResponseBodySize();
+        if (static_cast<uint64_t>(configuredZebraRpcMaxResponseBodySize) <
+            static_cast<uint64_t>(requiredZebraRpcMaxResponseBodySize)) {
+            return zebraRpcMaxResponseBodyArg + "=" +
+                std::to_string(configuredZebraRpcMaxResponseBodySize) +
+                " is too small for zebra-compat's sync batch; "
+                "set Zebra rpc.max_response_body_size to " +
+                std::to_string(requiredZebraRpcMaxResponseBodySize) + " or higher";
+        }
     }
 
     return "";
