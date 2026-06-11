@@ -289,13 +289,19 @@ Use `getzebracompatinfo` as the primary monitoring surface. The top-level
 - `ready`: Zebra identity is verified, the local tip matches Zebra's best tip,
   the local tip has left IBD, validation notifications have caught up, Zebra
   transaction forwarding has no transport failure, and the Zebra mempool mirror
-  has a fresh successful poll with no lag, divergence, or current error.
+  has a fresh successful poll with no unexplained lag or current error.
 - `degraded`: zebra-compat can keep running but is waiting, syncing, retrying,
-  lagging, waiting for notification catch-up, has a stale or failed mempool
-  mirror, or has non-fatal mempool/forwarding diagnostics.
+  persistently lagging, waiting for notification catch-up, has a stale or
+  failed mempool mirror, or has non-fatal mempool/forwarding diagnostics.
 - `failed`: zebra-compat has hit a hard sync or identity fault and will not advance
   past that fault without operator action.
 - `disabled`: zebra-compat mode is not enabled.
+
+After the node has reached `ready`, transient non-failed conditions are held
+through a short hysteresis window of roughly two poll intervals before the
+top-level value changes to `degraded`. This keeps exchange-facing alerts stable
+across ordinary block-ingest and mempool-poll timing windows. Hard `failed`
+states are still reported immediately.
 
 The `sync` object carries the current detailed state, last error, local lag,
 and retry/backoff counters. The `metrics` object repeats the script-friendly
@@ -304,7 +310,12 @@ transport health, and validation-notification catch-up. Ordinary Zebra
 rejections of invalid user transactions remain visible in
 `tx_forwarding.last_error`, but they do not make the node degraded; transport
 and connectivity failures are reported separately as
-`tx_forwarding.last_transport_error`. The `limits` object exposes hard bounds
+`tx_forwarding.last_transport_error`. Mempool divergence is reported through
+`mempool_mirror.divergent` and `metrics.mempool_divergent` as a diagnostic
+rather than a hard readiness gate, because local and Zebra policy can differ
+benignly. Recently forwarded transactions that are retained locally while
+waiting for Zebra's next mempool observation are reported as pending and are
+treated as explained rather than lag. The `limits` object exposes hard bounds
 such as `sync_batch_size`, `zebra_rpc_max_response_body_bytes`, pending
 forwarded transactions, and per-poll mempool reconciliation limits.
 

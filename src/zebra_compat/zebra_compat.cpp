@@ -66,6 +66,8 @@ struct ZebraCompatStatus {
     int consecutiveRetryCount = 0;
     int currentBackoffSeconds = 0;
     int64_t nextRetryTime = 0;
+    bool readinessWasReady = false;
+    int64_t readinessDegradedSince = 0;
 };
 
 struct ZebraSourceView {
@@ -1032,12 +1034,66 @@ bool IsZebraCompatSynced()
 bool IsMempoolMirrorReady(const MempoolMirrorStatus& status, int64_t now)
 {
     if (status.lastUpdate <= 0 || !status.lastError.empty() ||
-        status.lag != 0 || status.divergent != 0) {
+        status.lag != 0) {
         return false;
     }
 
     const int64_t maxAge = std::max<int64_t>(ZebraCompatPollIntervalSeconds() * 2, 1);
     return now - status.lastUpdate <= maxAge;
+}
+
+std::string ComputeRawReadiness(
+    bool enabled,
+    const ZebraCompatStatus& status,
+    bool initialBlockDownload,
+    bool txForwardingTransportReady,
+    bool mirrorReady,
+    bool notificationsCaughtUp)
+{
+    if (!enabled) {
+        return "disabled";
+    }
+    if (status.serviceState == "failed" || status.syncState == "failed") {
+        return "failed";
+    }
+    if (status.zebra.identityVerified &&
+        status.tipMatchedZebra &&
+        !initialBlockDownload &&
+        txForwardingTransportReady &&
+        mirrorReady &&
+        notificationsCaughtUp) {
+        return "ready";
+    }
+    return "degraded";
+}
+
+std::string ApplyReadinessHysteresis(const std::string& rawReadiness, int64_t now, bool allowHysteresis)
+{
+    LOCK(cs_zebra_compat_status);
+    if (!allowHysteresis && rawReadiness == "degraded") {
+        g_status.readinessWasReady = false;
+        g_status.readinessDegradedSince = 0;
+        return rawReadiness;
+    }
+    if (rawReadiness == "ready") {
+        g_status.readinessWasReady = true;
+        g_status.readinessDegradedSince = 0;
+        return rawReadiness;
+    }
+    if (rawReadiness != "degraded") {
+        g_status.readinessWasReady = false;
+        g_status.readinessDegradedSince = 0;
+        return rawReadiness;
+    }
+    if (!g_status.readinessWasReady) {
+        return rawReadiness;
+    }
+    if (g_status.readinessDegradedSince <= 0 || now < g_status.readinessDegradedSince) {
+        g_status.readinessDegradedSince = now;
+    }
+
+    const int64_t degradeAfter = std::max<int64_t>(ZebraCompatPollIntervalSeconds() * 2, 1);
+    return now - g_status.readinessDegradedSince >= degradeAfter ? "degraded" : "ready";
 }
 
 void SleepZebraCompatRetry(int& consecutiveRetryCount, bool countTransientFailure)
@@ -1381,12 +1437,12 @@ void RecordBlockIngestionResult(const BlockIngestionResult& result)
 {
     LOCK(cs_zebra_compat_status);
     g_status.lastIngestion = result;
-    g_status.tipMatchedZebra = false;
     if (result.success) {
         g_status.syncState = "degraded";
         g_status.syncDetail = "last_block_ingested";
         g_status.lastError.clear();
     } else {
+        g_status.tipMatchedZebra = false;
         g_status.syncState = result.hardFailure ? "failed" : "degraded";
         g_status.syncDetail = result.hardFailure ? "hard_sync_fault" : "block_ingestion_error";
         g_status.lastError = result.error;
@@ -1403,11 +1459,12 @@ UniValue GetZebraCompatInfo()
         LOCK(cs_zebra_compat_status);
         status = g_status;
     }
+    const bool serviceStarted = g_zebra_compat_started.load();
     const MempoolMirrorStatus mirrorStatus = GetMempoolMirrorStatus();
     const TxForwardingStatus txStatus = GetTxForwardingStatus();
 
     obj.pushKV("enabled", enabled);
-    obj.pushKV("service_state", enabled ? (g_zebra_compat_started ? status.serviceState : "stopped") : "disabled");
+    obj.pushKV("service_state", enabled ? (serviceStarted ? status.serviceState : "stopped") : "disabled");
     obj.pushKV("blocksource", GetArg("-blocksource", BLOCK_SOURCE_P2P));
     obj.pushKV("p2p", IsP2PEnabled());
     obj.pushKV("blockvalidation", GetArg("-blockvalidation", BLOCK_VALIDATION_FULL));
@@ -1454,19 +1511,16 @@ UniValue GetZebraCompatInfo()
     const int64_t now = GetTime();
     const bool mirrorReady = IsMempoolMirrorReady(mirrorStatus, now);
     const bool txForwardingTransportReady = txStatus.lastTransportError.empty();
-    std::string readiness = "degraded";
-    if (!enabled) {
-        readiness = "disabled";
-    } else if (status.serviceState == "failed" || status.syncState == "failed") {
-        readiness = "failed";
-    } else if (status.zebra.identityVerified &&
-               status.tipMatchedZebra &&
-               !initialBlockDownload &&
-               txForwardingTransportReady &&
-               mirrorReady &&
-               notificationsCaughtUp) {
-        readiness = "ready";
-    }
+    const std::string rawReadiness = serviceStarted || !enabled ?
+        ComputeRawReadiness(
+            enabled,
+            status,
+            initialBlockDownload,
+            txForwardingTransportReady,
+            mirrorReady,
+            notificationsCaughtUp) :
+        "degraded";
+    const std::string readiness = ApplyReadinessHysteresis(rawReadiness, now, serviceStarted);
     obj.pushKV("readiness", readiness);
 
     UniValue ingestion(UniValue::VOBJ);
@@ -1704,6 +1758,49 @@ ZebraCompatSyncTestOutcome TEST_SyncZebraCompatOnce(
     testOutcome.stickyFault = outcome.stickyFault;
     testOutcome.transientFailure = outcome.transientFailure;
     return testOutcome;
+}
+
+void TEST_ResetReadinessHysteresis()
+{
+    LOCK(cs_zebra_compat_status);
+    g_status.readinessWasReady = false;
+    g_status.readinessDegradedSince = 0;
+}
+
+void TEST_SetZebraCompatStatusForReadiness(
+    bool identityVerified,
+    bool tipMatchedZebra,
+    const std::string& serviceState,
+    const std::string& syncState)
+{
+    LOCK(cs_zebra_compat_status);
+    g_status.serviceState = serviceState;
+    g_status.syncState = syncState;
+    g_status.zebra.identityVerified = identityVerified;
+    g_status.tipMatchedZebra = tipMatchedZebra;
+}
+
+std::string TEST_ComputeZebraCompatReadiness(
+    bool enabled,
+    bool initialBlockDownload,
+    bool txForwardingTransportReady,
+    const MempoolMirrorStatus& mirrorStatus,
+    bool notificationsCaughtUp,
+    int64_t now)
+{
+    ZebraCompatStatus status;
+    {
+        LOCK(cs_zebra_compat_status);
+        status = g_status;
+    }
+    const std::string rawReadiness = ComputeRawReadiness(
+        enabled,
+        status,
+        initialBlockDownload,
+        txForwardingTransportReady,
+        IsMempoolMirrorReady(mirrorStatus, now),
+        notificationsCaughtUp);
+    return ApplyReadinessHysteresis(rawReadiness, now, /*allowHysteresis=*/true);
 }
 
 } // namespace zebra_compat

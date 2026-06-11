@@ -25,6 +25,7 @@ struct MempoolMirrorStatus {
     size_t divergent = 0;
     size_t divergentDetails = 0;
     size_t divergentDetailOverflow = 0;
+    size_t forwardedPending = 0;
     int zebraSize = -1;
     int localSize = 0;
     std::string lastError;
@@ -56,6 +57,12 @@ size_t MaxMempoolMirrorTxIdsPerPoll();
 
 // Returns the maximum number of divergent txids retained for status details.
 size_t MaxMempoolMirrorDivergenceDetails();
+
+int TEST_ComputeMempoolMirrorLag(
+    int zebraSize,
+    int localSize,
+    size_t divergent,
+    size_t retainedForwarded);
 
 } // namespace zebra_compat
 
