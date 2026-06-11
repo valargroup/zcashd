@@ -103,6 +103,30 @@ struct ChainParamsSnapshot {
     }
 };
 
+struct ZebraCompatStartedSnapshot {
+    ZebraCompatStartedSnapshot(bool started)
+    {
+        zebra_compat::TEST_SetZebraCompatStarted(started);
+    }
+
+    ~ZebraCompatStartedSnapshot()
+    {
+        zebra_compat::TEST_SetZebraCompatStarted(false);
+    }
+};
+
+struct ZebraCompatStickyFaultSnapshot {
+    ZebraCompatStickyFaultSnapshot(bool stickyFault)
+    {
+        zebra_compat::TEST_SetZebraCompatStickyFault(stickyFault);
+    }
+
+    ~ZebraCompatStickyFaultSnapshot()
+    {
+        zebra_compat::TEST_SetZebraCompatStickyFault(false);
+    }
+};
+
 void ResetArgs(const std::string& strArg)
 {
     std::vector<std::string> vecArg;
@@ -1817,6 +1841,7 @@ BOOST_AUTO_TEST_CASE(getzebracompatinfo_reports_minimal_status)
     ApplyZebraCompatArgs("-zebra-compat");
     zebra_compat::ResetMempoolMirrorForTesting();
     zebra_compat::ResetTxForwardingForTesting();
+    ZebraCompatStickyFaultSnapshot stickyFault(false);
 
     UniValue info = CallRPC("getzebracompatinfo");
     BOOST_CHECK(find_value(info.get_obj(), "enabled").get_bool());
@@ -1829,6 +1854,8 @@ BOOST_AUTO_TEST_CASE(getzebracompatinfo_reports_minimal_status)
     UniValue sync = find_value(info.get_obj(), "sync");
     BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "state").get_str(), "degraded");
     BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "detail").get_str(), "waiting_for_zebra_endpoint");
+    BOOST_CHECK(!find_value(sync.get_obj(), "sticky_fault").get_bool());
+    BOOST_CHECK(!find_value(sync.get_obj(), "retry_requested").get_bool());
     BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "retry_count").get_int(), 0);
     BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "current_backoff_seconds").get_int(), 0);
     BOOST_CHECK(find_value(sync.get_obj(), "next_retry").isNull());
@@ -1878,6 +1905,88 @@ BOOST_AUTO_TEST_CASE(getzebracompatinfo_reports_minimal_status)
     BOOST_CHECK_EQUAL(find_value(limits.get_obj(), "mempool_txids_per_poll").get_int(), static_cast<int>(zebra_compat::MaxMempoolMirrorTxIdsPerPoll()));
     BOOST_CHECK_EQUAL(find_value(limits.get_obj(), "mempool_divergence_details").get_int(), static_cast<int>(zebra_compat::MaxMempoolMirrorDivergenceDetails()));
     BOOST_CHECK_EQUAL(find_value(limits.get_obj(), "pending_forwarded_transactions").get_int(), static_cast<int>(zebra_compat::MaxPendingForwardedTransactions()));
+}
+
+BOOST_AUTO_TEST_CASE(zebracompatretry_noops_without_sticky_fault)
+{
+    ArgsSnapshot snapshot;
+    ApplyZebraCompatArgs("-zebra-compat");
+    ZebraCompatStickyFaultSnapshot stickyFault(false);
+
+    UniValue result = CallRPC("zebracompatretry");
+    BOOST_CHECK(!find_value(result.get_obj(), "retry_requested").get_bool());
+    BOOST_CHECK(!find_value(result.get_obj(), "sticky_fault").get_bool());
+    BOOST_CHECK(!find_value(result.get_obj(), "worker_running").get_bool());
+    BOOST_CHECK_EQUAL(find_value(result.get_obj(), "state").get_str(), "degraded");
+    BOOST_CHECK_EQUAL(find_value(result.get_obj(), "detail").get_str(), "waiting_for_zebra_endpoint");
+}
+
+BOOST_AUTO_TEST_CASE(zebracompatretry_does_not_queue_retry_without_worker)
+{
+    ArgsSnapshot snapshot;
+    ApplyZebraCompatArgs("-zebra-compat");
+    ZebraCompatStickyFaultSnapshot stickyFault(true);
+
+    UniValue result = CallRPC("zebracompatretry");
+    BOOST_CHECK(!find_value(result.get_obj(), "retry_requested").get_bool());
+    BOOST_CHECK(find_value(result.get_obj(), "sticky_fault").get_bool());
+    BOOST_CHECK(!find_value(result.get_obj(), "worker_running").get_bool());
+
+    UniValue info = CallRPC("getzebracompatinfo");
+    UniValue sync = find_value(info.get_obj(), "sync");
+    BOOST_CHECK(find_value(sync.get_obj(), "sticky_fault").get_bool());
+    BOOST_CHECK(!find_value(sync.get_obj(), "retry_requested").get_bool());
+}
+
+BOOST_AUTO_TEST_CASE(zebracompatretry_requests_one_worker_pass_for_sticky_fault)
+{
+    ArgsSnapshot snapshot;
+    ApplyZebraCompatArgs("-zebra-compat");
+    ZebraCompatStartedSnapshot started(true);
+    ZebraCompatStickyFaultSnapshot stickyFault(true);
+
+    UniValue before = CallRPC("getzebracompatinfo");
+    UniValue beforeSync = find_value(before.get_obj(), "sync");
+    BOOST_CHECK(find_value(beforeSync.get_obj(), "sticky_fault").get_bool());
+    BOOST_CHECK(!find_value(beforeSync.get_obj(), "retry_requested").get_bool());
+
+    UniValue result = CallRPC("zebracompatretry");
+    BOOST_CHECK(find_value(result.get_obj(), "retry_requested").get_bool());
+    BOOST_CHECK(find_value(result.get_obj(), "sticky_fault").get_bool());
+    BOOST_CHECK(find_value(result.get_obj(), "worker_running").get_bool());
+
+    UniValue after = CallRPC("getzebracompatinfo");
+    UniValue afterSync = find_value(after.get_obj(), "sync");
+    BOOST_CHECK(!find_value(afterSync.get_obj(), "sticky_fault").get_bool());
+    BOOST_CHECK(find_value(afterSync.get_obj(), "retry_requested").get_bool());
+    BOOST_CHECK_EQUAL(find_value(afterSync.get_obj(), "retry_count").get_int(), 0);
+    BOOST_CHECK_EQUAL(find_value(afterSync.get_obj(), "current_backoff_seconds").get_int(), 0);
+    BOOST_CHECK(find_value(afterSync.get_obj(), "next_retry").isNull());
+
+    const int zebraBestHeight = 4056000;
+    const std::string zebraBestHash = HashWithLastChar('a');
+    const int localTipHeight = zebraBestHeight + 200;
+    const std::string localTipHash = HashWithLastChar('f');
+    const std::string localHashAtZebraHeight = HashWithLastChar('b');
+    std::unique_ptr<MockZebraTransport> transport(new MockZebraTransport());
+    zebra_compat::ZebraCompatClient client(MockZebraConfig(), std::move(transport));
+    zebra_compat::ZebraCompatSyncTestOutcome outcome = zebra_compat::TEST_SyncZebraTipBelowReorgWindow(
+        client,
+        Params(),
+        localTipHeight,
+        localTipHash,
+        zebraBestHeight,
+        zebraBestHash,
+        /*haveLocalHashAtZebraHeight=*/true,
+        localHashAtZebraHeight);
+    BOOST_CHECK(outcome.stickyFault);
+
+    UniValue restuck = CallRPC("getzebracompatinfo");
+    UniValue restuckSync = find_value(restuck.get_obj(), "sync");
+    BOOST_CHECK(find_value(restuckSync.get_obj(), "sticky_fault").get_bool());
+    BOOST_CHECK(!find_value(restuckSync.get_obj(), "retry_requested").get_bool());
+    BOOST_CHECK_EQUAL(find_value(restuckSync.get_obj(), "state").get_str(), "failed");
+    BOOST_CHECK_EQUAL(find_value(restuckSync.get_obj(), "detail").get_str(), "over_policy_reorg");
 }
 
 BOOST_AUTO_TEST_CASE(getzebracompatinfo_reports_configured_timeout_limit)

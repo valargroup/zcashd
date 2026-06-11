@@ -14,6 +14,8 @@
 
 namespace {
 
+// Implements `getzebracompatinfo`. Accepts no parameters and throws help text
+// for help requests or invalid arity.
 UniValue getzebracompatinfo(const UniValue& params, bool fHelp)
 {
     if (fHelp || params.size() != 0) {
@@ -89,6 +91,8 @@ UniValue getzebracompatinfo(const UniValue& params, bool fHelp)
             "    \"last_common_ancestor_height\": n|null,\n"
             "    \"last_common_ancestor_hash\": \"...\"|null,\n"
             "    \"lag\": n|null,\n"
+            "    \"sticky_fault\": true|false,\n"
+            "    \"retry_requested\": true|false,\n"
             "    \"retry_count\": n,\n"
             "    \"current_backoff_seconds\": n,\n"
             "    \"next_retry\": n|null\n"
@@ -124,10 +128,44 @@ UniValue getzebracompatinfo(const UniValue& params, bool fHelp)
     return zebra_compat::GetZebraCompatInfo();
 }
 
+// Implements `zebracompatretry`. Accepts no parameters and requests one worker
+// pass only when a sticky fault is currently parked.
+UniValue zebracompatretry(const UniValue& params, bool fHelp)
+{
+    if (fHelp || params.size() != 0) {
+        throw std::runtime_error(
+            "zebracompatretry\n"
+            "\nRequests one fresh zebra-compat sync pass after a sticky fault parks the worker.\n"
+            "If the underlying condition is still present, the worker will fail sticky again.\n"
+            "\nResult:\n"
+            "{\n"
+            "  \"retry_requested\": true|false,\n"
+            "  \"sticky_fault\": true|false,\n"
+            "  \"worker_running\": true|false,\n"
+            "  \"state\": \"...\",\n"
+            "  \"detail\": \"...\"\n"
+            "}\n"
+            "\nExamples:\n"
+            + HelpExampleCli("zebracompatretry", "")
+            + HelpExampleRpc("zebracompatretry", "")
+        );
+    }
+
+    zebra_compat::ZebraCompatRetryResult retry = zebra_compat::RetryZebraCompatStickyFault();
+    UniValue obj(UniValue::VOBJ);
+    obj.pushKV("retry_requested", retry.retryRequested);
+    obj.pushKV("sticky_fault", retry.stickyFault);
+    obj.pushKV("worker_running", retry.workerRunning);
+    obj.pushKV("state", retry.state);
+    obj.pushKV("detail", retry.detail);
+    return obj;
+}
+
 static const CRPCCommand commands[] =
 { //  category              name                      actor (function)         okSafeMode
   //  --------------------- ------------------------  -----------------------  ----------
     { "zebra-compat",       "getzebracompatinfo",     &getzebracompatinfo,     true  },
+    { "zebra-compat",       "zebracompatretry",       &zebracompatretry,       true  },
 };
 
 } // namespace
