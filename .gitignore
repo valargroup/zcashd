@@ -133,3 +133,7 @@ src/fuzz.cpp
 .env
 poetry.lock
 stako/**/*
+
+# Local editor / language-server artifacts
+.cache/
+compile_commands.json
