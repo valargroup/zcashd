@@ -3322,6 +3322,14 @@ __attribute__((weak)) void TEST_MaybeCrashAfterZebraCompatTrustedBoundaryWrite()
 {
 }
 
+// Test binaries can override this weak no-op to inject a trusted-boundary
+// persistence failure. Production builds keep the empty implementation, so
+// there is no runtime switch capable of failing the validation path.
+__attribute__((weak)) bool TEST_ShouldFailZebraCompatTrustedBoundaryWrite()
+{
+    return false;
+}
+
 static bool CheckBlockBodyAuthCommitment(
     const CBlock& block,
     int nHeight,
@@ -4596,6 +4604,9 @@ namespace {
 
 bool PersistZebraCompatTrustedBoundary(const zebra_compat::TrustedBlockBoundary& boundary)
 {
+    if (TEST_ShouldFailZebraCompatTrustedBoundaryWrite()) {
+        return false;
+    }
     return zebra_compat::WriteTrustedBlockBoundary(boundary);
 }
 

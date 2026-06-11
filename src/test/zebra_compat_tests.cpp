@@ -5,6 +5,7 @@
 #include "test/test_bitcoin.h"
 #include "test/test_util.h"
 #include "arith_uint256.h"
+#include "chainparamsbase.h"
 #include "core_io.h"
 #include "zebra_compat/mempool_mirror.h"
 #include "zebra_compat/zebra_compat.h"
@@ -43,6 +44,7 @@
 namespace {
 
 std::atomic_bool g_crash_after_trusted_boundary_write_for_testing(false);
+std::atomic_bool g_fail_trusted_boundary_write_for_testing(false);
 
 } // namespace
 
@@ -54,6 +56,15 @@ void TEST_MaybeCrashAfterZebraCompatTrustedBoundaryWrite()
     if (g_crash_after_trusted_boundary_write_for_testing.load()) {
         throw std::runtime_error("zebra-compat trusted boundary crash after persist injected");
     }
+}
+
+// Overrides main.cpp's weak no-op hook in test_bitcoin. The production binary
+// has no mutable failure switch; this test override also refuses to inject the
+// failure while mainnet chain params are selected.
+bool TEST_ShouldFailZebraCompatTrustedBoundaryWrite()
+{
+    return Params().NetworkIDString() != CBaseChainParams::MAIN &&
+        g_fail_trusted_boundary_write_for_testing.load();
 }
 
 namespace {
@@ -79,6 +90,16 @@ struct ScopedZebraCompatTrustedBoundaryCrash {
     ~ScopedZebraCompatTrustedBoundaryCrash()
     {
         g_crash_after_trusted_boundary_write_for_testing.store(false);
+    }
+};
+
+struct ChainParamsSnapshot {
+    std::string chain;
+
+    ChainParamsSnapshot() : chain(Params().NetworkIDString()) {}
+    ~ChainParamsSnapshot()
+    {
+        SelectParams(chain);
     }
 };
 
@@ -108,7 +129,6 @@ void ResetArgs(const std::string& strArg)
         replacePrefix("-zebra-compat-zebra-rpc-max-response-body-bytes=", "-zebra-compat-zebra-rpc-max-response-body-bytes=");
         replacePrefix("-zebra-compat-allow-remote-http=", "-zebra-compat-allow-remote-http=");
         replacePrefix("-zebra-compat-trusted-validation-fixture", "-zebra-compat-trusted-validation-fixture");
-        if (arg == "-zebra-compat-fail-trusted-boundary-write=1") arg = "-zebra-compat-fail-trusted-boundary-write=1";
     }
 
     vecArg.insert(vecArg.begin(), "testbitcoin");
@@ -308,6 +328,18 @@ CScript RandomCoinbaseScript()
 
 struct ZebraCompatRegtestSetup : public TestingSetup {
     ZebraCompatRegtestSetup() : TestingSetup(CBaseChainParams::REGTEST) {}
+};
+
+struct TrustedBoundaryWriteFailureGuard {
+    TrustedBoundaryWriteFailureGuard()
+    {
+        g_fail_trusted_boundary_write_for_testing.store(true);
+    }
+
+    ~TrustedBoundaryWriteFailureGuard()
+    {
+        g_fail_trusted_boundary_write_for_testing.store(false);
+    }
 };
 
 } // namespace
@@ -552,8 +584,23 @@ BOOST_AUTO_TEST_CASE(zebra_compat_rejects_trusted_zebra_without_zebra_source)
     ApplyZebraCompatArgs("-blockvalidation=trusted-zebra");
     BOOST_CHECK_NE(zebra_compat::ValidateParameterInteraction(), "");
 
+    ChainParamsSnapshot chainSnapshot;
+    SelectParams(CBaseChainParams::REGTEST);
     ApplyZebraCompatArgs("-blockvalidation=trusted-zebra -zebra-compat-trusted-validation-fixture=1");
     BOOST_CHECK_EQUAL(zebra_compat::ValidateParameterInteraction(), "");
+}
+
+BOOST_AUTO_TEST_CASE(zebra_compat_rejects_test_flags_on_mainnet)
+{
+    ArgsSnapshot snapshot;
+    ChainParamsSnapshot chainSnapshot;
+    SelectParams(CBaseChainParams::MAIN);
+
+    ApplyZebraCompatArgs("-zebra-compat-trusted-validation-fixture=1");
+    BOOST_CHECK(
+        zebra_compat::ValidateParameterInteraction().find(
+            "-zebra-compat-trusted-validation-fixture may not be used on mainnet") !=
+        std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(zebra_compat_forces_p2p_off_despite_legacy_config)
@@ -2071,7 +2118,7 @@ BOOST_AUTO_TEST_CASE(zebra_compat_batch_middle_block_failure_does_not_process_la
 BOOST_AUTO_TEST_CASE(zebra_compat_trusted_boundary_write_failure_reports_fault_before_activation)
 {
     ArgsSnapshot snapshot;
-    ApplyZebraCompatArgs("-zebra-compat -zebra-compat-url=http://127.0.0.1:8232 -zebra-compat-fail-trusted-boundary-write=1");
+    ApplyZebraCompatArgs("-zebra-compat -zebra-compat-url=http://127.0.0.1:8232");
     zebra_compat::ClearTrustedBlockBoundary();
     int oldHeight = -1;
     uint256 oldTip;
@@ -2085,6 +2132,7 @@ BOOST_AUTO_TEST_CASE(zebra_compat_trusted_boundary_write_failure_reports_fault_b
     CScript scriptPubKey = CScript() << ToByteVector(coinbaseKey.GetPubKey()) << OP_CHECKSIG;
     CBlock block = CreateSolvedBlock(Params(), scriptPubKey);
 
+    TrustedBoundaryWriteFailureGuard failTrustedBoundaryWrite;
     zebra_compat::BlockIngestionResult result = zebra_compat::IngestBlock(block, Params());
     BOOST_CHECK(!result.success);
     BOOST_CHECK(result.hardFailure);

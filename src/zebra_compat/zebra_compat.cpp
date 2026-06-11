@@ -5,6 +5,7 @@
 #include "zebra_compat/zebra_compat.h"
 
 #include "chainparams.h"
+#include "chainparamsbase.h"
 #include "core_io.h"
 #include "main.h"
 #include "rpc/protocol.h"
@@ -84,6 +85,17 @@ bool IsTrustedValidationTestFixtureEnabled()
 bool IsExplicitlySet(const std::string& arg)
 {
     return mapArgs.count(arg) > 0;
+}
+
+std::string ValidateNoMainnetTestFlags()
+{
+    if (Params().NetworkIDString() != CBaseChainParams::MAIN) {
+        return "";
+    }
+    if (IsExplicitlySet("-zebra-compat-trusted-validation-fixture")) {
+        return "-zebra-compat-trusted-validation-fixture may not be used on mainnet";
+    }
+    return "";
 }
 
 bool HasExplicitValues(const std::string& arg)
@@ -1221,6 +1233,11 @@ void InitParameterInteraction()
 
 std::string ValidateParameterInteraction()
 {
+    std::string optionError = ValidateNoMainnetTestFlags();
+    if (!optionError.empty()) {
+        return optionError;
+    }
+
     const std::string blockSource = GetArg("-blocksource", BLOCK_SOURCE_P2P);
     if (!IsOneOf(blockSource, {BLOCK_SOURCE_P2P, BLOCK_SOURCE_ZEBRA})) {
         return strprintf("Invalid -blocksource value '%s'. Expected 'p2p' or 'zebra'.", blockSource);
@@ -1245,7 +1262,7 @@ std::string ValidateParameterInteraction()
         return "-blocksource=zebra requires -p2p=0";
     }
 
-    std::string optionError = ValidateP2PDisabledConflicts();
+    optionError = ValidateP2PDisabledConflicts();
     if (!optionError.empty()) {
         return optionError;
     }
