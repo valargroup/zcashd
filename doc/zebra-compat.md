@@ -170,7 +170,7 @@ forced off. Wallet RPC (`-rpcbind`, `-rpcport`) is unrelated to `-listen`.
 
 ### Sync batch size, response budget, and reorg depth
 
-Three settings must agree when increasing zebra-compat sync depth:
+Three settings must agree when increasing zebra-compat sync batch size:
 
 - `-zebra-compat-sync-batch-size=<blocks>`: how many raw blocks zcashd asks
   Zebra for in one JSON-RPC batch. It defaults to `30`.
@@ -192,11 +192,11 @@ With the default budget, the memory-clamped maximum is `33`. If the configured
 batch size exceeds that maximum, startup fails with a memory-budget validation
 error and reports the largest usable value.
 
-The same batch size bounds the deepest Zebra reorg that `zcashd` can follow in
-one replacement branch. Branches longer than one batch fail sticky with
-`reorg_branch_too_large`. `zcashd` also has an absolute `MAX_REORG_LENGTH` of
-`99`, so setting the batch size above `99` does not increase followable reorg
-depth.
+The batch size bounds each Zebra RPC acquisition request, not the total
+replacement branch length for a reorg. When Zebra's best chain reorgs, zcashd
+fetches the replacement branch in bounded batches and then ingests the complete
+branch once. Followable reorg depth is still capped by zcashd's absolute
+`MAX_REORG_LENGTH` of `99` disconnected blocks.
 
 When `-zebra-compat-zebra-rpc-max-response-body-bytes=<bytes>` is set, zcashd
 also validates that Zebra's configured `rpc.max_response_body_size` can carry

@@ -163,6 +163,10 @@ class FakePollingZebraServer:
         with self.lock:
             return any(len(methods) > 1 and methods[0] == 'getblock' for methods in self.batch_calls)
 
+    def block_fetch_batch_count(self):
+        with self.lock:
+            return sum(1 for methods in self.batch_calls if methods and methods[0] == 'getblock')
+
     def set_fail_getblock_batch(self, value):
         with self.lock:
             self.fail_getblock_batch = value
@@ -300,7 +304,7 @@ class ZebraCompatPollingSyncTest(BitcoinTestFramework):
             fork_hash = source.getblockhash(fork_height)
             old_branch_child = source.getblockhash(fork_height + 1)
             source.invalidateblock(old_branch_child)
-            source.generate(2)
+            source.generate(3)
             self.wait_for_zebra_compat_tip(zebra_compat, source)
             assert_equal(zebra_compat.getblockhash(fork_height), fork_hash)
             assert_equal(zebra_compat.getblockhash(fork_height + 1), source.getblockhash(fork_height + 1))
@@ -317,16 +321,18 @@ class ZebraCompatPollingSyncTest(BitcoinTestFramework):
             zebra_compat = start_node(1, self.options.tmpdir, self.zebra_compat_args(endpoint))
             self.wait_for_zebra_compat_tip(zebra_compat, source)
 
-            local_tip_before_large_branch = zebra_compat.getbestblockhash()
-            large_branch_fork_height = source.getblockcount() - 1
-            large_branch_child = source.getblockhash(large_branch_fork_height + 1)
-            source.invalidateblock(large_branch_child)
+            local_tip_before_chunked_branch = zebra_compat.getbestblockhash()
+            chunked_branch_fetch_batches_before = fake_zebra.block_fetch_batch_count()
+            chunked_branch_fork_height = source.getblockcount() - 1
+            chunked_branch_child = source.getblockhash(chunked_branch_fork_height + 1)
+            source.invalidateblock(chunked_branch_child)
             source.generate(3)
-            wait_until(lambda: zebra_compat.getzebracompatinfo()['sync']['detail'] == 'reorg_branch_too_large')
-            large_branch_info = zebra_compat.getzebracompatinfo()
-            assert_equal(large_branch_info['readiness'], 'failed')
-            assert_equal(large_branch_info['sync']['state'], 'failed')
-            assert_equal(zebra_compat.getbestblockhash(), local_tip_before_large_branch)
+            self.wait_for_zebra_compat_tip(zebra_compat, source)
+            assert_equal(zebra_compat.getblockhash(chunked_branch_fork_height),
+                         source.getblockhash(chunked_branch_fork_height))
+            assert zebra_compat.getbestblockhash() != local_tip_before_chunked_branch
+            assert (fake_zebra.block_fetch_batch_count() >=
+                    chunked_branch_fetch_batches_before + 2)
             stop_node(zebra_compat, 1)
             stop_node(source, 0)
         finally:

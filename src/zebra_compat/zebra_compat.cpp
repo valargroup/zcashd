@@ -674,40 +674,47 @@ SyncOutcome SyncZebraCompatReorgToZebraBest(
         return {false, true};
     }
 
-    const int branchLength = zebraBestHeight - ancestor.height;
-    if (branchLength > ZebraCompatSyncBatchSize()) {
-        // CP7 keeps the no-partial-branch contract by bounding the whole
-        // replacement branch to one configured acquisition batch. CP10 can
-        // replace this with chunked accept plus a single activation.
-        UpdateSyncStatus(
-            "failed",
-            "failed",
-            "reorg_branch_too_large",
-            strprintf("Zebra replacement branch has %d blocks, exceeding zebra-compat batch limit %d",
-                      branchLength, ZebraCompatSyncBatchSize()));
-        return {false, true};
-    }
-
     UpdateSyncStatus("ready", "syncing", "fetching_zebra_reorg_branch");
     const int startHeight = ancestor.height + 1;
-    const std::vector<std::string> hashes =
-        GetZebraBestChainHashes(client, startHeight, zebraBestHeight);
-    if (hashes.empty() || hashes.back() != zebraBestHash) {
-        UpdateSyncStatus(
-            "ready",
-            "degraded",
-            "zebra_tip_changed_during_sync",
-            strprintf("Zebra replacement branch no longer ends at expected tip %s at height %d",
-                      zebraBestHash, zebraBestHeight));
-        return {false, false};
-    }
-    const std::vector<std::string> rawBlocks = client.GetRawBlocks(hashes);
-
+    const int branchLength = zebraBestHeight - ancestor.height;
+    const int batch = ZebraCompatSyncBatchSize();
     std::vector<CBlock> blocks;
-    std::string decodeError;
-    if (!DecodeFetchedBlocks(hashes, rawBlocks, ancestor.hash, blocks, decodeError)) {
-        UpdateSyncStatus("failed", "failed", "zebra_block_data_error", decodeError);
-        return {false, true};
+    blocks.reserve(branchLength);
+    std::string expectedPrevHash = ancestor.hash;
+    // Keep each Zebra RPC response bounded, but preserve the no-partial-reorg
+    // contract by handing the complete replacement branch to ingestion once.
+    for (int chunkStart = startHeight; chunkStart <= zebraBestHeight; chunkStart += batch) {
+        const int chunkEnd = std::min(zebraBestHeight, chunkStart + batch - 1);
+        const std::vector<std::string> hashes =
+            GetZebraBestChainHashes(client, chunkStart, chunkEnd);
+        if (hashes.size() != static_cast<size_t>(chunkEnd - chunkStart + 1)) {
+            UpdateSyncStatus(
+                "failed",
+                "failed",
+                "zebra_block_data_error",
+                strprintf("Zebra returned %d hashes for reorg branch heights %d-%d",
+                          static_cast<int>(hashes.size()), chunkStart, chunkEnd));
+            return {false, true};
+        }
+        if (chunkEnd == zebraBestHeight && hashes.back() != zebraBestHash) {
+            UpdateSyncStatus(
+                "ready",
+                "degraded",
+                "zebra_tip_changed_during_sync",
+                strprintf("Zebra replacement branch no longer ends at expected tip %s at height %d",
+                          zebraBestHash, zebraBestHeight));
+            return {false, false};
+        }
+        const std::vector<std::string> rawBlocks = client.GetRawBlocks(hashes);
+
+        std::vector<CBlock> chunkBlocks;
+        std::string decodeError;
+        if (!DecodeFetchedBlocks(hashes, rawBlocks, expectedPrevHash, chunkBlocks, decodeError)) {
+            UpdateSyncStatus("failed", "failed", "zebra_block_data_error", decodeError);
+            return {false, true};
+        }
+        expectedPrevHash = chunkBlocks.back().GetHash().GetHex();
+        blocks.insert(blocks.end(), chunkBlocks.begin(), chunkBlocks.end());
     }
 
     BlockIngestionResult result = IngestBlockBatch(blocks, chainparams);

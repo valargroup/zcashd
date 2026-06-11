@@ -726,6 +726,32 @@ BOOST_AUTO_TEST_CASE(zebra_client_uses_batch_calls_for_block_ranges)
     BOOST_CHECK_EQUAL(rawTransport->batchCalls[1][0], "getblock");
 }
 
+BOOST_AUTO_TEST_CASE(zebra_client_chunks_raw_block_batches_at_sync_batch_size)
+{
+    ArgsSnapshot snapshot;
+    ResetArgs("-zebra-compat-sync-batch-size=2");
+
+    std::unique_ptr<MockZebraTransport> transport = HealthyMainnetTransport(Params());
+    MockZebraTransport* rawTransport = transport.get();
+    zebra_compat::ZebraCompatClient client(MockZebraConfig(), std::move(transport));
+
+    std::vector<std::string> rawBlocks = client.GetRawBlocks(std::vector<std::string>{
+        HashWithLastChar('1'),
+        HashWithLastChar('2'),
+        HashWithLastChar('3'),
+        HashWithLastChar('4'),
+        HashWithLastChar('5')});
+
+    BOOST_CHECK_EQUAL(rawBlocks.size(), 5);
+    BOOST_REQUIRE_EQUAL(rawTransport->batchCalls.size(), 3);
+    BOOST_CHECK_EQUAL(rawTransport->batchCalls[0].size(), 2);
+    BOOST_CHECK_EQUAL(rawTransport->batchCalls[1].size(), 2);
+    BOOST_CHECK_EQUAL(rawTransport->batchCalls[2].size(), 1);
+    BOOST_CHECK_EQUAL(rawTransport->batchCalls[0][0], "getblock");
+    BOOST_CHECK_EQUAL(rawTransport->batchCalls[1][0], "getblock");
+    BOOST_CHECK_EQUAL(rawTransport->batchCalls[2][0], "getblock");
+}
+
 BOOST_AUTO_TEST_CASE(zebra_compat_common_ancestor_search_finds_highest_shared_height)
 {
     std::vector<std::string> localHashes{
