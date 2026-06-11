@@ -325,6 +325,11 @@ int ZebraCompatSyncBatchSize()
     return static_cast<int>(configured);
 }
 
+int ZebraCompatTimeoutSeconds()
+{
+    return std::max<int64_t>(1, GetArg("-zebra-compat-timeout", DEFAULT_HTTP_SERVER_TIMEOUT));
+}
+
 bool ZebraAuth::IsConfigured() const
 {
     return !user.empty() && !password.empty();
@@ -442,7 +447,7 @@ bool LoadZebraClientConfig(ZebraClientConfig& config, std::string& error)
         config.auth.password = password;
     }
 
-    config.timeoutSeconds = DEFAULT_HTTP_SERVER_TIMEOUT;
+    config.timeoutSeconds = ZebraCompatTimeoutSeconds();
     return true;
 }
 

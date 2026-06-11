@@ -378,6 +378,7 @@ std::string HelpMessage(HelpMessageMode mode)
     strUsage += HelpMessageOpt("-zebra-compat-sync-batch-size=<n>", _("zebra-compat Zebra polling block batch size; also bounds the deepest Zebra reorg zcashd can follow (default: 30)"));
     strUsage += HelpMessageOpt("-zebra-compat-sync-drive-batches=<n>", _("Number of acquisition batches one forward-sync pass drives before refreshing Zebra's tip; batches within a pass are fetched and applied concurrently (default: 64)"));
     strUsage += HelpMessageOpt("-zebra-compat-sync-response-budget-mb=<n>", _("Maximum cumulative size in MiB of one Zebra getblock batch response, bounding the effective sync batch size (default: 128). Zebra's max_response_body_size must be at least this large"));
+    strUsage += HelpMessageOpt("-zebra-compat-timeout=<seconds>", strprintf(_("Timeout during Zebra RPC requests (default: %d)"), DEFAULT_HTTP_SERVER_TIMEOUT));
     strUsage += HelpMessageOpt("-zebra-compat-zebra-rpc-max-response-body-bytes=<n>", _("Zebra's configured RPC max_response_body_size in bytes; when set, zebra-compat validates it can carry the configured sync batch"));
     strUsage += HelpMessageOpt("-zebra-compat-url=<scheme://host:port>", _("Zebra JSON-RPC endpoint for zebra-compat mode"));
     strUsage += HelpMessageOpt("-zebra-compat-allow-remote-http", _("Allow zebra-compat to connect to a non-loopback http:// Zebra RPC endpoint, sending Basic authentication credentials in cleartext (dangerous; use only with a trusted tunnel or private network)"));

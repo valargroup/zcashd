@@ -226,6 +226,9 @@ bool LoadZebraClientConfig(ZebraClientConfig& config, std::string& error);
 // Returns the effective block acquisition batch size after memory-budget clamps.
 int ZebraCompatSyncBatchSize();
 
+// Returns the Zebra RPC timeout in seconds.
+int ZebraCompatTimeoutSeconds();
+
 // Returns the maximum accepted Zebra RPC response body in bytes.
 size_t ZebraRpcMaxResponseBodySize();
 

@@ -11,6 +11,7 @@
 #include "zebra_compat/metadata.h"
 #include "zebra_compat/tx_forwarder.h"
 #include "zebra_compat/zebra_client.h"
+#include "httpserver.h"
 #ifdef ENABLE_MINING
 #include "crypto/equihash.h"
 #include "miner.h"
@@ -75,6 +76,7 @@ void ResetArgs(const std::string& strArg)
         replacePrefix("-zebra-compat-sync-batch-size=", "-zebra-compat-sync-batch-size=");
         replacePrefix("-zebra-compat-sync-drive-batches=", "-zebra-compat-sync-drive-batches=");
         replacePrefix("-zebra-compat-sync-response-budget-mb=", "-zebra-compat-sync-response-budget-mb=");
+        replacePrefix("-zebra-compat-timeout=", "-zebra-compat-timeout=");
         replacePrefix("-zebra-compat-zebra-rpc-max-response-body-bytes=", "-zebra-compat-zebra-rpc-max-response-body-bytes=");
         replacePrefix("-zebra-compat-allow-remote-http=", "-zebra-compat-allow-remote-http=");
         replacePrefix("-zebra-compat-trusted-validation-fixture", "-zebra-compat-trusted-validation-fixture");
@@ -317,6 +319,9 @@ BOOST_AUTO_TEST_CASE(zebra_compat_rejects_invalid_option_values)
 
     ApplyZebraCompatArgs("-blockvalidation=bad");
     BOOST_CHECK_NE(zebra_compat::ValidateParameterInteraction(), "");
+
+    ApplyZebraCompatArgs("-zebra-compat-timeout=0");
+    BOOST_CHECK(zebra_compat::ValidateParameterInteraction().find("-zebra-compat-timeout must be at least 1") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(zebra_client_config_accepts_loopback_http_endpoints)
@@ -336,6 +341,31 @@ BOOST_AUTO_TEST_CASE(zebra_client_config_accepts_loopback_http_endpoints)
         BOOST_CHECK_MESSAGE(zebra_compat::LoadZebraClientConfig(config, error), error);
         BOOST_CHECK_EQUAL(config.endpoint.url, url);
     }
+}
+
+BOOST_AUTO_TEST_CASE(zebra_client_config_uses_configured_timeout)
+{
+    ArgsSnapshot snapshot;
+    ApplyZebraCompatArgs(
+        "-zebra-compat-url=http://127.0.0.1:8232"
+        " -zebra-compat-rpc-user=user -zebra-compat-rpc-password=pass");
+
+    zebra_compat::ZebraClientConfig defaultConfig;
+    std::string error;
+    BOOST_CHECK_MESSAGE(zebra_compat::LoadZebraClientConfig(defaultConfig, error), error);
+    BOOST_CHECK_EQUAL(defaultConfig.timeoutSeconds, DEFAULT_HTTP_SERVER_TIMEOUT);
+    BOOST_CHECK_EQUAL(zebra_compat::ZebraCompatTimeoutSeconds(), DEFAULT_HTTP_SERVER_TIMEOUT);
+
+    ApplyZebraCompatArgs(
+        "-zebra-compat-url=http://127.0.0.1:8232"
+        " -zebra-compat-rpc-user=user -zebra-compat-rpc-password=pass"
+        " -zebra-compat-timeout=120");
+
+    zebra_compat::ZebraClientConfig customConfig;
+    error.clear();
+    BOOST_CHECK_MESSAGE(zebra_compat::LoadZebraClientConfig(customConfig, error), error);
+    BOOST_CHECK_EQUAL(customConfig.timeoutSeconds, 120);
+    BOOST_CHECK_EQUAL(zebra_compat::ZebraCompatTimeoutSeconds(), 120);
 }
 
 BOOST_AUTO_TEST_CASE(zebra_client_config_rejects_remote_plain_http_by_default)
@@ -1560,9 +1590,20 @@ BOOST_AUTO_TEST_CASE(getzebracompatinfo_reports_minimal_status)
     BOOST_CHECK_EQUAL(find_value(limits.get_obj(), "poll_interval_seconds").get_int(), 5);
     BOOST_CHECK_EQUAL(find_value(limits.get_obj(), "max_retry_backoff_seconds").get_int(), 60);
     BOOST_CHECK_EQUAL(find_value(limits.get_obj(), "sync_batch_size").get_int(), zebra_compat::ZebraCompatSyncBatchSize());
+    BOOST_CHECK_EQUAL(find_value(limits.get_obj(), "zebra_rpc_timeout_seconds").get_int(), DEFAULT_HTTP_SERVER_TIMEOUT);
     BOOST_CHECK_EQUAL(find_value(limits.get_obj(), "mempool_txids_per_poll").get_int(), static_cast<int>(zebra_compat::MaxMempoolMirrorTxIdsPerPoll()));
     BOOST_CHECK_EQUAL(find_value(limits.get_obj(), "mempool_divergence_details").get_int(), static_cast<int>(zebra_compat::MaxMempoolMirrorDivergenceDetails()));
     BOOST_CHECK_EQUAL(find_value(limits.get_obj(), "pending_forwarded_transactions").get_int(), static_cast<int>(zebra_compat::MaxPendingForwardedTransactions()));
+}
+
+BOOST_AUTO_TEST_CASE(getzebracompatinfo_reports_configured_timeout_limit)
+{
+    ArgsSnapshot snapshot;
+    ApplyZebraCompatArgs("-zebra-compat -zebra-compat-timeout=120");
+
+    UniValue info = CallRPC("getzebracompatinfo");
+    UniValue limits = find_value(info.get_obj(), "limits");
+    BOOST_CHECK_EQUAL(find_value(limits.get_obj(), "zebra_rpc_timeout_seconds").get_int(), 120);
 }
 
 BOOST_AUTO_TEST_CASE(sendrawtransaction_zebra_compat_rejects_local_preflight_before_zebra_forwarding)
