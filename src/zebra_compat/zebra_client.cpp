@@ -298,10 +298,6 @@ ZebraIdentity::Failure ClassifyIdentityRpcError(const ZebraRpcError& error)
         return ZebraIdentity::MALFORMED_RESPONSE;
     }
 
-    if (error.ErrorKind() == ZebraRpcError::RPC_ERROR) {
-        return ZebraIdentity::MALFORMED_RESPONSE;
-    }
-
     return ZebraIdentity::TRANSIENT;
 }
 

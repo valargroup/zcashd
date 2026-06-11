@@ -221,7 +221,7 @@ public:
     std::string SendRawTransaction(const std::string& txHex);
 
     // Verifies Zebra's network, genesis, best hash, and height against local
-    // chain parameters. Transport and malformed-response errors are classified.
+    // chain parameters. Transport, RPC, and malformed-response errors are classified.
     ZebraIdentity CheckIdentity(const CChainParams& chainparams);
 
 private:
