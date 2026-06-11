@@ -293,10 +293,12 @@ bool IsLoopbackAddress(const CNetAddr& addr)
     return addr.IsLocal();
 }
 
-bool ZebraEndpointResolvesToLoopbackOnly(const ZebraEndpoint& endpoint)
+bool ZebraEndpointResolvesToLoopbackOnly(const ZebraEndpoint& endpoint, bool& lookupFailed)
 {
+    lookupFailed = false;
     std::vector<CNetAddr> addresses;
     if (!LookupHost(endpoint.host.c_str(), addresses, 0, true) || addresses.empty()) {
+        lookupFailed = true;
         return false;
     }
 
@@ -445,7 +447,15 @@ bool LoadZebraClientConfig(ZebraClientConfig& config, std::string& error)
         return false;
     }
 
-    const bool endpointIsLoopback = ZebraEndpointResolvesToLoopbackOnly(config.endpoint);
+    bool endpointLookupFailed = false;
+    const bool endpointIsLoopback =
+        ZebraEndpointResolvesToLoopbackOnly(config.endpoint, endpointLookupFailed);
+    if (endpointLookupFailed) {
+        error = strprintf(
+            "Zebra RPC endpoint hostname lookup failed for %s",
+            config.endpoint.url);
+        return false;
+    }
     if (!endpointIsLoopback && !GetBoolArg("-zebra-compat-allow-remote-http", false)) {
         error = strprintf(
             "Refusing insecure Zebra RPC endpoint %s: http:// uses Basic authentication in cleartext "

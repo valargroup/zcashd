@@ -3,6 +3,8 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or https://www.opensource.org/licenses/mit-license.php .
 
+import time
+
 from decimal import Decimal
 
 from test_framework.authproxy import JSONRPCException
@@ -22,6 +24,7 @@ class ZebraCompatTransactionForwardingTest(BitcoinTestFramework):
         super().__init__()
         self.cache_behavior = 'clean'
         self.num_nodes = 2
+        self.mock_time = int(time.time())
 
     def setup_network(self, split=False):
         self.nodes = []
@@ -36,6 +39,7 @@ class ZebraCompatTransactionForwardingTest(BitcoinTestFramework):
             '-zebra-compat-rpc-password=pass',
             '-zebra-compat-poll-interval=1',
             '-zebra-compat-sync-batch-size=2',
+            '-mocktime=%d' % self.mock_time,
         ]
 
     def wait_for_zebra_compat_tip(self, zebra_compat, source):
@@ -151,6 +155,23 @@ class ZebraCompatTransactionForwardingTest(BitcoinTestFramework):
             fake_zebra.unhide_mempool_txid(grace_txid)
             wait_until(lambda: zebra_compat.getzebracompatinfo()['tx_forwarding']['pending'] == 0, timeout=60)
             assert grace_txid in zebra_compat.getrawmempool()
+
+            auto_rebroadcast_txid = zebra_compat.sendtoaddress(source.getnewaddress(), Decimal('0.1'))
+            wait_until(lambda: auto_rebroadcast_txid in source.getrawmempool(), timeout=60)
+            wait_until(lambda: auto_rebroadcast_txid in zebra_compat.getrawmempool(), timeout=60)
+            assert_equal(fake_zebra.sendrawtransaction_count(auto_rebroadcast_txid), 1)
+
+            fake_zebra.hide_mempool_txid(auto_rebroadcast_txid)
+            auto_rebroadcast_count = fake_zebra.sendrawtransaction_count(auto_rebroadcast_txid)
+            zebra_compat.setmocktime(self.mock_time + 7200)
+            before_auto_rebroadcast_polls = fake_zebra.mempool_poll_count()
+            self.wait_for_mirror_poll_after(fake_zebra, before_auto_rebroadcast_polls)
+            wait_until(lambda: auto_rebroadcast_txid not in zebra_compat.getrawmempool(), timeout=60)
+
+            wait_until(lambda: fake_zebra.sendrawtransaction_count(auto_rebroadcast_txid) > auto_rebroadcast_count, timeout=60)
+            fake_zebra.unhide_mempool_txid(auto_rebroadcast_txid)
+            wait_until(lambda: auto_rebroadcast_txid in zebra_compat.getrawmempool(), timeout=60)
+            zebra_compat.setmocktime(0)
 
             stop_node(zebra_compat, 1)
             stop_node(source, 0)

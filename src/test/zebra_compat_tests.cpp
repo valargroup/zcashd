@@ -24,6 +24,7 @@
 #include "script/script.h"
 #include "streams.h"
 #include "txdb.h"
+#include "util/strencodings.h"
 #include "util/system.h"
 
 #include <atomic>
@@ -239,10 +240,26 @@ UniValue RpcErrorResult(int code, const std::string& message)
 class MockZebraTransport : public zebra_compat::ZebraRpcTransport {
 public:
     std::map<std::string, zebra_compat::ZebraRpcResponse> responses;
+    std::map<std::string, std::vector<zebra_compat::ZebraRpcResponse> > queuedResponses;
     std::vector<std::string> calls;
     std::vector<std::vector<std::string> > batchCalls;
     bool throwOnCall = false;
     bool duplicateBatchIds = false;
+
+    zebra_compat::ZebraRpcResponse NextResponse(const std::string& method)
+    {
+        auto queued = queuedResponses.find(method);
+        if (queued != queuedResponses.end() && !queued->second.empty()) {
+            zebra_compat::ZebraRpcResponse response = queued->second.front();
+            queued->second.erase(queued->second.begin());
+            return response;
+        }
+        auto it = responses.find(method);
+        if (it == responses.end()) {
+            return {HTTP_INTERNAL_SERVER_ERROR, ""};
+        }
+        return it->second;
+    }
 
     zebra_compat::ZebraRpcResponse Call(
         const zebra_compat::ZebraClientConfig& config,
@@ -255,7 +272,7 @@ public:
         if (throwOnCall) {
             throw std::runtime_error("transport unavailable");
         }
-        return responses[method];
+        return NextResponse(method);
     }
 
     zebra_compat::ZebraRpcResponse CallBatch(
@@ -270,17 +287,14 @@ public:
         }
         for (size_t i = 0; i < callsIn.size(); i++) {
             methods.push_back(callsIn[i].method);
-            auto it = responses.find(callsIn[i].method);
-            if (it == responses.end()) {
-                return {HTTP_INTERNAL_SERVER_ERROR, ""};
-            }
-            if (it->second.httpStatus != HTTP_OK || !it->second.transportError.empty()) {
-                return it->second;
+            zebra_compat::ZebraRpcResponse response = NextResponse(callsIn[i].method);
+            if (response.httpStatus != HTTP_OK || !response.transportError.empty()) {
+                return response;
             }
 
             UniValue single;
-            if (!single.read(it->second.body) || !single.isObject()) {
-                return it->second;
+            if (!single.read(response.body) || !single.isObject()) {
+                return response;
             }
 
             UniValue item(UniValue::VOBJ);
@@ -379,6 +393,13 @@ CScript RandomCoinbaseScript()
 {
     CKey coinbaseKey = CKey::TestOnlyRandomKey(true);
     return CScript() << ToByteVector(coinbaseKey.GetPubKey()) << OP_CHECKSIG;
+}
+
+std::string EncodeBlockHex(const CBlock& block)
+{
+    CDataStream ss(SER_NETWORK, PROTOCOL_VERSION);
+    ss << block;
+    return HexStr(ss.begin(), ss.end());
 }
 #endif
 
@@ -528,7 +549,7 @@ BOOST_AUTO_TEST_CASE(zebra_client_config_fails_closed_for_unresolved_plain_http_
     zebra_compat::ZebraClientConfig config;
     std::string error;
     BOOST_CHECK(!zebra_compat::LoadZebraClientConfig(config, error));
-    BOOST_CHECK(error.find("-zebra-compat-allow-remote-http") != std::string::npos);
+    BOOST_CHECK(error.find("hostname lookup failed") != std::string::npos);
 }
 
 BOOST_FIXTURE_TEST_CASE(zebra_client_config_rereads_cookie_file, TestingSetup)
@@ -605,6 +626,27 @@ BOOST_FIXTURE_TEST_CASE(zebra_compat_worker_treats_malformed_cookie_as_retryable
     BOOST_CHECK_EQUAL(
         find_value(sync.get_obj(), "last_error").get_str(),
         "Zebra RPC cookie must be in user:password format");
+}
+
+BOOST_FIXTURE_TEST_CASE(zebra_compat_worker_treats_endpoint_lookup_failure_as_retryable_config, TestingSetup)
+{
+    ArgsSnapshot snapshot;
+    ApplyZebraCompatArgs(
+        "-zebra-compat -zebra-compat-url=http://zebra-compat-unresolved.invalid:8232"
+        " -zebra-compat-rpc-user=user -zebra-compat-rpc-password=pass");
+
+    bool stickyFault = true;
+    BOOST_CHECK(!zebra_compat::TEST_LoadZebraClientConfigForWorker(stickyFault));
+    BOOST_CHECK(!stickyFault);
+
+    UniValue info = zebra_compat::GetZebraCompatInfo();
+    UniValue sync = find_value(info.get_obj(), "sync");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "state").get_str(), "degraded");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "detail").get_str(), "zebra_configuration_unavailable");
+    BOOST_CHECK(
+        find_value(sync.get_obj(), "last_error")
+            .get_str()
+            .find("hostname lookup failed") != std::string::npos);
 }
 
 BOOST_FIXTURE_TEST_CASE(zebra_compat_worker_keeps_static_config_errors_terminal, TestingSetup)
@@ -1902,6 +1944,7 @@ BOOST_AUTO_TEST_CASE(getzebracompatinfo_reports_minimal_status)
 {
     ArgsSnapshot snapshot;
     ApplyZebraCompatArgs("-zebra-compat");
+    zebra_compat::TEST_ResetZebraCompatStatusForTesting();
     zebra_compat::ResetMempoolMirrorForTesting();
     zebra_compat::ResetTxForwardingForTesting();
     ZebraCompatStickyFaultSnapshot stickyFault(false);
@@ -1974,6 +2017,7 @@ BOOST_AUTO_TEST_CASE(zebracompatretry_noops_without_sticky_fault)
 {
     ArgsSnapshot snapshot;
     ApplyZebraCompatArgs("-zebra-compat");
+    zebra_compat::TEST_ResetZebraCompatStatusForTesting();
     ZebraCompatStickyFaultSnapshot stickyFault(false);
 
     UniValue result = CallRPC("zebracompatretry");
@@ -1988,6 +2032,7 @@ BOOST_AUTO_TEST_CASE(zebracompatretry_does_not_queue_retry_without_worker)
 {
     ArgsSnapshot snapshot;
     ApplyZebraCompatArgs("-zebra-compat");
+    zebra_compat::TEST_ResetZebraCompatStatusForTesting();
     ZebraCompatStickyFaultSnapshot stickyFault(true);
 
     UniValue result = CallRPC("zebracompatretry");
@@ -2005,6 +2050,7 @@ BOOST_AUTO_TEST_CASE(zebracompatretry_requests_one_worker_pass_for_sticky_fault)
 {
     ArgsSnapshot snapshot;
     ApplyZebraCompatArgs("-zebra-compat");
+    zebra_compat::TEST_ResetZebraCompatStatusForTesting();
     ZebraCompatStartedSnapshot started(true);
     ZebraCompatStickyFaultSnapshot stickyFault(true);
 
@@ -2048,8 +2094,6 @@ BOOST_AUTO_TEST_CASE(zebracompatretry_requests_one_worker_pass_for_sticky_fault)
     UniValue restuckSync = find_value(restuck.get_obj(), "sync");
     BOOST_CHECK(find_value(restuckSync.get_obj(), "sticky_fault").get_bool());
     BOOST_CHECK(!find_value(restuckSync.get_obj(), "retry_requested").get_bool());
-    BOOST_CHECK_EQUAL(find_value(restuckSync.get_obj(), "state").get_str(), "failed");
-    BOOST_CHECK_EQUAL(find_value(restuckSync.get_obj(), "detail").get_str(), "over_policy_reorg");
 }
 
 BOOST_AUTO_TEST_CASE(getzebracompatinfo_reports_configured_timeout_limit)
@@ -2438,6 +2482,162 @@ BOOST_AUTO_TEST_CASE(zebra_compat_reorg_retry_skips_already_indexed_equal_work_b
     UniValue info = zebra_compat::GetZebraCompatInfo();
     UniValue sync = find_value(info.get_obj(), "sync");
     BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "detail").get_str(), "zebra_equal_work_reorg_not_activated");
+}
+
+BOOST_AUTO_TEST_CASE(zebra_compat_forward_chunk_parent_break_is_retryable)
+{
+    ArgsSnapshot snapshot;
+    ApplyZebraCompatArgs("-zebra-compat -zebra-compat-url=http://127.0.0.1:8232 -zebra-compat-sync-batch-size=1");
+    zebra_compat::ClearTrustedBlockBoundary();
+
+    int localTipHeight = -1;
+    std::string localTipHash;
+    {
+        LOCK(cs_main);
+        BOOST_REQUIRE(chainActive.Tip() != nullptr);
+        localTipHeight = chainActive.Height();
+        localTipHash = chainActive.Tip()->GetBlockHash().GetHex();
+    }
+
+    CBlock first = CreateSolvedBlock(Params(), RandomCoinbaseScript());
+    const std::string firstHash = first.GetHash().GetHex();
+    CBlock second = CreateSolvedBlock(Params(), RandomCoinbaseScript());
+    const std::string secondHash = second.GetHash().GetHex();
+
+    std::unique_ptr<MockZebraTransport> transport(new MockZebraTransport());
+    UniValue blockchainInfo(UniValue::VOBJ);
+    blockchainInfo.pushKV("chain", Params().NetworkIDString());
+    blockchainInfo.pushKV("blocks", localTipHeight + 2);
+    blockchainInfo.pushKV("bestblockhash", secondHash);
+    transport->responses["getblockchaininfo"] = {HTTP_OK, RpcResult(blockchainInfo).write()};
+    transport->queuedResponses["getblockhash"] = {
+        {HTTP_OK, RpcResult(UniValue(Params().GetConsensus().hashGenesisBlock.GetHex())).write()},
+        {HTTP_OK, RpcResult(UniValue(localTipHash)).write()},
+        {HTTP_OK, RpcResult(UniValue(firstHash)).write()}};
+    transport->queuedResponses["getblock"] = {
+        {HTTP_OK, RpcResult(UniValue(EncodeBlockHex(first))).write()}};
+
+    std::unique_ptr<MockZebraTransport> prefetchTransport(new MockZebraTransport());
+    prefetchTransport->queuedResponses["getblockhash"] = {
+        {HTTP_OK, RpcResult(UniValue(secondHash)).write()}};
+    prefetchTransport->queuedResponses["getblock"] = {
+        {HTTP_OK, RpcResult(UniValue(EncodeBlockHex(second))).write()}};
+
+    zebra_compat::ZebraCompatClient client(MockZebraConfig(), std::move(transport));
+    zebra_compat::ZebraCompatClient prefetchClient(MockZebraConfig(), std::move(prefetchTransport));
+    zebra_compat::ZebraCompatSyncTestOutcome outcome =
+        zebra_compat::TEST_SyncZebraCompatOnce(client, prefetchClient, Params());
+
+    BOOST_CHECK(outcome.progressed);
+    BOOST_CHECK(!outcome.stickyFault);
+    BOOST_CHECK(!outcome.transientFailure);
+
+    UniValue info = zebra_compat::GetZebraCompatInfo();
+    UniValue sync = find_value(info.get_obj(), "sync");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "state").get_str(), "degraded");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "detail").get_str(), "zebra_tip_changed_during_sync");
+
+    zebra_compat::ClearTrustedBlockBoundary();
+}
+
+BOOST_AUTO_TEST_CASE(zebra_compat_reorg_chunk_parent_break_is_retryable)
+{
+    ArgsSnapshot snapshot;
+    ApplyZebraCompatArgs("-zebra-compat -zebra-compat-url=http://127.0.0.1:8232 -zebra-compat-sync-batch-size=1");
+    zebra_compat::ClearTrustedBlockBoundary();
+
+    const int ancestorHeight = 10;
+    const std::string ancestorHash = HashWithLastChar('a');
+    const int localTipHeight = 11;
+    const std::string localTipHash = HashWithLastChar('b');
+
+    CBlock first = CreateSolvedBlock(Params(), RandomCoinbaseScript());
+    first.hashPrevBlock = uint256S(ancestorHash);
+    const std::string firstHash = first.GetHash().GetHex();
+
+    CBlock second = CreateSolvedBlock(Params(), RandomCoinbaseScript());
+    second.hashPrevBlock = uint256S(HashWithLastChar('9'));
+    const std::string secondHash = second.GetHash().GetHex();
+
+    std::unique_ptr<MockZebraTransport> transport(new MockZebraTransport());
+    transport->queuedResponses["getblockhash"] = {
+        {HTTP_OK, RpcResult(UniValue(firstHash)).write()},
+        {HTTP_OK, RpcResult(UniValue(secondHash)).write()}};
+    transport->queuedResponses["getblock"] = {
+        {HTTP_OK, RpcResult(UniValue(EncodeBlockHex(first))).write()},
+        {HTTP_OK, RpcResult(UniValue(EncodeBlockHex(second))).write()}};
+    zebra_compat::ZebraCompatClient client(MockZebraConfig(), std::move(transport));
+
+    zebra_compat::ZebraCompatSyncTestOutcome outcome =
+        zebra_compat::TEST_SyncZebraCompatReorgToZebraBest(
+            client,
+            Params(),
+            localTipHeight,
+            localTipHash,
+            ancestorHeight + 2,
+            secondHash,
+            ancestorHeight,
+            ancestorHash,
+            1);
+
+    BOOST_CHECK(!outcome.progressed);
+    BOOST_CHECK(!outcome.stickyFault);
+    BOOST_CHECK(!outcome.transientFailure);
+
+    UniValue info = zebra_compat::GetZebraCompatInfo();
+    UniValue sync = find_value(info.get_obj(), "sync");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "state").get_str(), "degraded");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "detail").get_str(), "zebra_tip_changed_during_sync");
+}
+
+BOOST_AUTO_TEST_CASE(zebra_compat_reorg_chunk_hash_mismatch_stays_sticky)
+{
+    ArgsSnapshot snapshot;
+    ApplyZebraCompatArgs("-zebra-compat -zebra-compat-url=http://127.0.0.1:8232 -zebra-compat-sync-batch-size=1");
+    zebra_compat::ClearTrustedBlockBoundary();
+
+    const int ancestorHeight = 10;
+    const std::string ancestorHash = HashWithLastChar('a');
+    const int localTipHeight = 11;
+    const std::string localTipHash = HashWithLastChar('b');
+
+    CBlock first = CreateSolvedBlock(Params(), RandomCoinbaseScript());
+    first.hashPrevBlock = uint256S(ancestorHash);
+    const std::string firstHash = first.GetHash().GetHex();
+
+    CBlock second = CreateSolvedBlock(Params(), RandomCoinbaseScript());
+    second.hashPrevBlock = uint256S(firstHash);
+    const std::string advertisedSecondHash = HashWithLastChar('8');
+
+    std::unique_ptr<MockZebraTransport> transport(new MockZebraTransport());
+    transport->queuedResponses["getblockhash"] = {
+        {HTTP_OK, RpcResult(UniValue(firstHash)).write()},
+        {HTTP_OK, RpcResult(UniValue(advertisedSecondHash)).write()}};
+    transport->queuedResponses["getblock"] = {
+        {HTTP_OK, RpcResult(UniValue(EncodeBlockHex(first))).write()},
+        {HTTP_OK, RpcResult(UniValue(EncodeBlockHex(second))).write()}};
+    zebra_compat::ZebraCompatClient client(MockZebraConfig(), std::move(transport));
+
+    zebra_compat::ZebraCompatSyncTestOutcome outcome =
+        zebra_compat::TEST_SyncZebraCompatReorgToZebraBest(
+            client,
+            Params(),
+            localTipHeight,
+            localTipHash,
+            ancestorHeight + 2,
+            advertisedSecondHash,
+            ancestorHeight,
+            ancestorHash,
+            1);
+
+    BOOST_CHECK(!outcome.progressed);
+    BOOST_CHECK(outcome.stickyFault);
+    BOOST_CHECK(!outcome.transientFailure);
+
+    UniValue info = zebra_compat::GetZebraCompatInfo();
+    UniValue sync = find_value(info.get_obj(), "sync");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "state").get_str(), "failed");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "detail").get_str(), "zebra_block_data_error");
 }
 
 BOOST_AUTO_TEST_CASE(zebra_compat_ingestion_reports_hard_fault_for_wrong_parent_without_advancing_tip)

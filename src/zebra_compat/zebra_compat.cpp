@@ -19,6 +19,10 @@
 #include "util/system.h"
 #include "util/time.h"
 
+#ifdef ENABLE_WALLET
+#include "wallet/wallet.h"
+#endif
+
 #include <atomic>
 #include <algorithm>
 #include <cstdint>
@@ -428,7 +432,15 @@ bool ConsumeStickyFaultRetryRequest()
     return true;
 }
 
-bool DecodeFetchedBlocks(
+enum class FetchedBlockDecodeResult {
+    OK,
+    BatchSizeMismatch,
+    MalformedBlock,
+    HashMismatch,
+    NonContiguous,
+};
+
+FetchedBlockDecodeResult DecodeFetchedBlocks(
     const std::vector<std::string>& hashes,
     const std::vector<std::string>& rawBlocks,
     const std::string& expectedPrevHash,
@@ -437,7 +449,7 @@ bool DecodeFetchedBlocks(
 {
     if (hashes.size() != rawBlocks.size()) {
         error = "Zebra returned mismatched hash/raw-block batch sizes";
-        return false;
+        return FetchedBlockDecodeResult::BatchSizeMismatch;
     }
 
     blocks.clear();
@@ -447,21 +459,21 @@ bool DecodeFetchedBlocks(
         CBlock block;
         if (!DecodeHexBlk(block, rawBlocks[i])) {
             error = strprintf("Zebra returned malformed block data for %s", hashes[i]);
-            return false;
+            return FetchedBlockDecodeResult::MalformedBlock;
         }
         const std::string decodedHash = block.GetHash().GetHex();
         if (decodedHash != hashes[i]) {
             error = strprintf("Zebra block hash mismatch: requested %s, decoded %s", hashes[i], decodedHash);
-            return false;
+            return FetchedBlockDecodeResult::HashMismatch;
         }
         if (block.hashPrevBlock != expectedPrev) {
             error = strprintf("Zebra returned non-contiguous block %s", decodedHash);
-            return false;
+            return FetchedBlockDecodeResult::NonContiguous;
         }
         expectedPrev = block.GetHash();
         blocks.push_back(block);
     }
-    return true;
+    return FetchedBlockDecodeResult::OK;
 }
 
 struct SyncOutcome {
@@ -705,6 +717,7 @@ SyncOutcome SyncZebraCompatReorgToZebraBest(
     }
 
     bool zebraTipAlreadyIndexed = false;
+    bool zebraTipAlreadyIndexedNeedsActivation = false;
     {
         LOCK(cs_main);
         auto it = mapBlockIndex.find(uint256S(zebraBestHash));
@@ -712,8 +725,15 @@ SyncOutcome SyncZebraCompatReorgToZebraBest(
             it != mapBlockIndex.end() &&
             it->second != nullptr &&
             it->second->nHeight == zebraBestHeight;
+        if (zebraTipAlreadyIndexed &&
+            (chainActive.Tip() == nullptr ||
+             chainActive.Tip()->GetBlockHash().GetHex() != zebraBestHash)) {
+            zebraTipAlreadyIndexedNeedsActivation =
+                chainActive.Tip() == nullptr ||
+                it->second->nChainWork > chainActive.Tip()->nChainWork;
+        }
     }
-    if (zebraTipAlreadyIndexed) {
+    if (zebraTipAlreadyIndexed && !zebraTipAlreadyIndexedNeedsActivation) {
         LocalTipSnapshot newTip = GetLocalTipSnapshot();
         if (newTip.hash != zebraBestHash || newTip.height != zebraBestHeight) {
             UpdateSyncStatus("ready", "syncing", "validating_indexed_zebra_reorg_branch");
@@ -769,7 +789,17 @@ SyncOutcome SyncZebraCompatReorgToZebraBest(
 
         std::vector<CBlock> chunkBlocks;
         std::string decodeError;
-        if (!DecodeFetchedBlocks(hashes, rawBlocks, expectedPrevHash, chunkBlocks, decodeError)) {
+        FetchedBlockDecodeResult decodeResult =
+            DecodeFetchedBlocks(hashes, rawBlocks, expectedPrevHash, chunkBlocks, decodeError);
+        if (decodeResult != FetchedBlockDecodeResult::OK) {
+            if (decodeResult == FetchedBlockDecodeResult::NonContiguous) {
+                UpdateSyncStatus(
+                    "ready",
+                    "degraded",
+                    "zebra_tip_changed_during_sync",
+                    decodeError + "; retrying after Zebra best chain refresh");
+                return {false, false};
+            }
             UpdateSyncStatus("failed", "failed", "zebra_block_data_error", decodeError);
             return {false, true};
         }
@@ -839,7 +869,8 @@ bool IsRetryableZebraClientConfigError(const std::string& error)
 {
     return error == "waiting_for_zebra_endpoint" ||
         error.find("Unable to open Zebra RPC cookie file") != std::string::npos ||
-        error == "Zebra RPC cookie must be in user:password format";
+        error == "Zebra RPC cookie must be in user:password format" ||
+        error.find("Zebra RPC endpoint hostname lookup failed") != std::string::npos;
 }
 
 // Loads the Zebra RPC config for one worker pass.
@@ -972,7 +1003,17 @@ SyncOutcome RunForwardSyncPipelined(
 
         std::vector<CBlock> blocks;
         std::string decodeError;
-        if (!DecodeFetchedBlocks(current.hashes, current.rawBlocks, expectedPrevHash, blocks, decodeError)) {
+        FetchedBlockDecodeResult decodeResult =
+            DecodeFetchedBlocks(current.hashes, current.rawBlocks, expectedPrevHash, blocks, decodeError);
+        if (decodeResult != FetchedBlockDecodeResult::OK) {
+            if (decodeResult == FetchedBlockDecodeResult::NonContiguous) {
+                UpdateSyncStatus(
+                    "ready",
+                    "degraded",
+                    "zebra_tip_changed_during_sync",
+                    decodeError + "; retrying after Zebra best chain refresh");
+                return {progressedAny, false};
+            }
             UpdateSyncStatus("failed", "failed", "zebra_block_data_error", decodeError);
             return {progressedAny, true};
         }
@@ -1093,6 +1134,24 @@ bool IsZebraCompatSynced()
 {
     LOCK(cs_zebra_compat_status);
     return g_status.syncState == "synced" && g_status.tipMatchedZebra;
+}
+
+void MaybeResendWalletTransactionsForZebraCompat(const CChainParams& chainparams)
+{
+#ifdef ENABLE_WALLET
+    if (pwalletMain == nullptr || !pwalletMain->GetBroadcastTransactions()) {
+        return;
+    }
+    if (fReindex || fImporting || IsInitialBlockDownload(chainparams.GetConsensus())) {
+        return;
+    }
+    if (!IsZebraCompatSynced()) {
+        return;
+    }
+    pwalletMain->ResendWalletTransactions(GetTime());
+#else
+    (void)chainparams;
+#endif
 }
 
 bool IsMempoolMirrorReady(const MempoolMirrorStatus& status, int64_t now)
@@ -1247,6 +1306,9 @@ void ZebraCompatBlockSourceThread(std::string chainName)
                     if (!mirrorResult.success) {
                         LogPrintf("zebra-compat mempool mirror polling failed: %s\n", mirrorResult.error.c_str());
                     }
+                }
+                if (!stickyFault && synced) {
+                    MaybeResendWalletTransactionsForZebraCompat(chainparams);
                 }
                 if (!outcome.progressed || stickyFault) {
                     SleepZebraCompatRetry(consecutiveRetryCount, !stickyFault && !synced && outcome.transientFailure);
@@ -1938,6 +2000,13 @@ void TEST_ResetReadinessHysteresis()
     LOCK(cs_zebra_compat_status);
     g_status.readinessWasReady = false;
     g_status.readinessDegradedSince = 0;
+}
+
+void TEST_ResetZebraCompatStatusForTesting()
+{
+    LOCK(cs_zebra_compat_status);
+    g_status = ZebraCompatStatus();
+    g_source_view = ZebraSourceView();
 }
 
 void TEST_SetZebraCompatStatusForReadiness(

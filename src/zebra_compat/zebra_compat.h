@@ -161,6 +161,10 @@ ZebraCompatSyncTestOutcome TEST_SyncZebraCompatOnce(
 
 void TEST_ResetReadinessHysteresis();
 
+// Resets global zebra-compat status used by unit tests that assert default RPC
+// reporting state after other tests mutate sync details.
+void TEST_ResetZebraCompatStatusForTesting();
+
 void TEST_SetZebraCompatStatusForReadiness(
     bool identityVerified,
     bool tipMatchedZebra,
