@@ -17,6 +17,7 @@ The lower-level knobs are available for testing and staged rollout:
 -p2p=<1|0>
 -blockvalidation=<full|trusted-zebra>
 -zebra-compat-url=http://127.0.0.1:8232
+-zebra-compat-allow-remote-http=<0|1>
 -zebra-compat-rpc-user=<user>
 -zebra-compat-rpc-password=<password>
 -zebra-compat-cookiefile=<path>
@@ -75,18 +76,22 @@ startup fails with a clear validation error instead.
 When Zebra supervises `zcashd`, it also passes `-p2p=0` and `-listen=0` on the
 command line before `zcashd_extra_args`. CLI arguments win over `zcash.conf`.
 
-If you cannot share the cookie file (for example a remote Zebra host), use
-static credentials instead:
+If you cannot share the cookie file, use static credentials against a loopback
+endpoint, for example over an SSH or VPN tunnel:
 
 ```sh
+ssh -L 8232:127.0.0.1:8232 zebra-host
 ./src/zcashd -zebra-compat \
-  -zebra-compat-url=http://10.0.0.2:8232 \
+  -zebra-compat-url=http://127.0.0.1:8232 \
   -zebra-compat-rpc-user=<user> -zebra-compat-rpc-password=<password>
 ```
 
-When Zebra and `zcashd` are on different hosts, do not expose the Zebra RPC
-port to the public internet: bind it to a private interface, restrict it with a
-host firewall, or tunnel it. See **Deployment Topology** below.
+By default, zebra-compat refuses non-loopback `http://` Zebra RPC endpoints
+because Basic authentication credentials are sent in cleartext. If an operator
+intentionally uses a remote plain-HTTP endpoint, startup requires
+`-zebra-compat-allow-remote-http=1`. Treat this as a dangerous escape hatch:
+bind Zebra RPC to a private interface, restrict it with a host firewall, or
+prefer a tunnel. See **Deployment Topology** below.
 
 ### 4. Verify the connection
 
