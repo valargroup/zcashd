@@ -71,10 +71,6 @@ bool WriteTrustedBlockBoundary(const TrustedBlockBoundary& boundary)
     }
 
     try {
-        if (GetBoolArg("-zebra-compat-fail-trusted-boundary-write", false)) {
-            g_zebra_compat_metadata_last_error = "trusted block boundary write failure injected";
-            return false;
-        }
         if (!g_zebra_compat_metadata_db->Write(TrustedBoundaryKey(), boundary, true)) {
             g_zebra_compat_metadata_last_error = "failed to write trusted block boundary";
             return false;
