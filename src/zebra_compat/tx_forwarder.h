@@ -32,23 +32,47 @@ struct TxForwardingStatus {
     size_t pending = 0;
 };
 
+// Forwards raw transaction hex through an existing Zebra client and verifies
+// Zebra returns the expected txid before recording forwarding success.
 TxForwardingResult ForwardRawTransaction(
     ZebraCompatClient& client,
     const std::string& txHex,
     const uint256& expectedTxId);
+
+// Loads Zebra RPC configuration, forwards raw transaction hex, and records
+// transport/configuration failures in forwarding status.
 TxForwardingResult ForwardRawTransaction(
     const std::string& txHex,
     const uint256& expectedTxId);
 
+// Adds or refreshes a transaction in the grace set retained until Zebra's
+// mempool mirror observes it or the grace window expires.
 void RecordForwardedTransaction(const uint256& txid);
+
+// Returns whether a local transaction absent from Zebra should be retained
+// because it was recently forwarded.
 bool ShouldKeepForwardedTransaction(const std::string& txid);
+
+// Removes a forwarded transaction from the pending grace set after Zebra
+// reports it in its mempool.
 void MarkForwardedTransactionObserved(const std::string& txid);
+
+// Expires old forwarded transactions and updates forwarding status counters.
 void ExpireForwardedTransactions();
 
+// Returns the latest transaction forwarding status snapshot.
 TxForwardingStatus GetTxForwardingStatus();
+
+// Serializes forwarding status for `getzebracompatinfo`.
 UniValue TxForwardingStatusToJSON();
+
+// Clears forwarding status and pending transaction state for unit tests.
 void ResetTxForwardingForTesting();
+
+// Returns the pending-order deque size for tests of duplicate and pruning logic.
 size_t PendingForwardedOrderSizeForTesting();
+
+// Returns the hard cap on pending forwarded transaction IDs.
 size_t MaxPendingForwardedTransactions();
 
 } // namespace zebra_compat
