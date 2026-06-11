@@ -3314,6 +3314,14 @@ size_t TEST_GetZebraCompatTrustedBlockCandidateCount()
     return setZebraCompatTrustedBlockCandidates.size();
 }
 
+// Test binaries can override this weak no-op to inject a process-death fault
+// after the trusted boundary is persisted but before the batch activates.
+// Production builds keep the empty implementation, so there is no runtime
+// switch capable of crashing the validation path.
+__attribute__((weak)) void TEST_MaybeCrashAfterZebraCompatTrustedBoundaryWrite()
+{
+}
+
 static bool CheckBlockBodyAuthCommitment(
     const CBlock& block,
     int nHeight,
@@ -6463,6 +6471,7 @@ bool ProcessNewTrustedBlockBatch(CValidationState& state, const CChainParams& ch
             if (!PersistZebraCompatTrustedBoundary(batchBoundary)) {
                 return state.Error("failed to persist zebra-compat trusted block boundary before activation");
             }
+            TEST_MaybeCrashAfterZebraCompatTrustedBoundaryWrite();
             wroteBatchBoundary = true;
         }
     }
