@@ -42,6 +42,22 @@
 
 namespace {
 
+std::atomic_bool g_crash_after_trusted_boundary_write_for_testing(false);
+
+} // namespace
+
+// Overrides main.cpp's weak no-op hook in test_bitcoin. This keeps the
+// crash-window injection out of production runtime state while still placing
+// the fault exactly between boundary persistence and chain activation.
+void TEST_MaybeCrashAfterZebraCompatTrustedBoundaryWrite()
+{
+    if (g_crash_after_trusted_boundary_write_for_testing.load()) {
+        throw std::runtime_error("zebra-compat trusted boundary crash after persist injected");
+    }
+}
+
+namespace {
+
 struct ArgsSnapshot {
     std::map<std::string, std::string> args;
     std::map<std::string, std::vector<std::string> > multiArgs;
@@ -51,6 +67,18 @@ struct ArgsSnapshot {
     {
         mapArgs = args;
         mapMultiArgs = multiArgs;
+    }
+};
+
+struct ScopedZebraCompatTrustedBoundaryCrash {
+    ScopedZebraCompatTrustedBoundaryCrash()
+    {
+        g_crash_after_trusted_boundary_write_for_testing.store(true);
+    }
+
+    ~ScopedZebraCompatTrustedBoundaryCrash()
+    {
+        g_crash_after_trusted_boundary_write_for_testing.store(false);
     }
 };
 
@@ -2073,6 +2101,112 @@ BOOST_AUTO_TEST_CASE(zebra_compat_trusted_boundary_write_failure_reports_fault_b
     zebra_compat::TrustedBlockBoundary boundary;
     BOOST_CHECK(!zebra_compat::ReadTrustedBlockBoundary(boundary));
     BOOST_CHECK_EQUAL(TEST_GetZebraCompatTrustedBlockCandidateCount(), 0);
+}
+
+BOOST_AUTO_TEST_CASE(zebra_compat_trusted_boundary_crash_after_persist_is_safe_on_restart)
+{
+    ArgsSnapshot snapshot;
+    ApplyZebraCompatArgs("-zebra-compat -zebra-compat-url=http://127.0.0.1:8232");
+    zebra_compat::ClearTrustedBlockBoundary();
+
+    int oldHeight = -1;
+    uint256 oldTip;
+    {
+        LOCK(cs_main);
+        oldHeight = chainActive.Height();
+        oldTip = chainActive.Tip()->GetBlockHash();
+    }
+
+    CBlock crashBlock = CreateSolvedBlock(Params(), RandomCoinbaseScript());
+    crashBlock.nBits = 0x207fffff;
+    BOOST_REQUIRE(!CheckProofOfWork(
+        crashBlock.GetHash(), crashBlock.nBits, Params().GetConsensus()));
+
+    {
+        ScopedZebraCompatTrustedBoundaryCrash crashAfterBoundaryWrite;
+        BOOST_CHECK_THROW(zebra_compat::IngestBlock(crashBlock, Params()), std::runtime_error);
+    }
+
+    uint256 crashHash = crashBlock.GetHash();
+    int crashHeight = -1;
+    CDiskBlockPos crashBlockPos;
+    {
+        LOCK(cs_main);
+        BOOST_REQUIRE(chainActive.Tip() != nullptr);
+        BOOST_CHECK_EQUAL(chainActive.Height(), oldHeight);
+        BOOST_CHECK_EQUAL(chainActive.Tip()->GetBlockHash().GetHex(), oldTip.GetHex());
+
+        auto it = mapBlockIndex.find(crashHash);
+        BOOST_REQUIRE(it != mapBlockIndex.end());
+        BOOST_REQUIRE(!chainActive.Contains(it->second));
+        crashHeight = it->second->nHeight;
+        crashBlockPos = it->second->GetBlockPos();
+        BOOST_REQUIRE(!crashBlockPos.IsNull());
+    }
+
+    zebra_compat::TrustedBlockBoundary boundary;
+    BOOST_REQUIRE(zebra_compat::ReadTrustedBlockBoundary(boundary));
+    BOOST_CHECK(zebra_compat::TrustedBoundaryMatchesConfiguredSource(boundary, Params()));
+    BOOST_CHECK_EQUAL(boundary.nHeight, crashHeight);
+    BOOST_CHECK_EQUAL(boundary.hash.GetHex(), crashHash.GetHex());
+    BOOST_CHECK_EQUAL(TEST_GetZebraCompatTrustedBlockCandidateCount(), 0);
+
+    // A restart reloads the indexed crash-window block even though it was not
+    // activated before process death.
+    FlushStateToDisk();
+    std::map<uint256, CBlockIndex*> scratchIndex;
+    std::function<CBlockIndex*(const uint256&)> insertScratch =
+        [&scratchIndex](const uint256& hash) -> CBlockIndex* {
+            auto inserted = scratchIndex.emplace(hash, nullptr);
+            if (inserted.second) {
+                inserted.first->second = new CBlockIndex();
+                inserted.first->second->phashBlock = &inserted.first->first;
+            }
+            return inserted.first->second;
+        };
+    {
+        LOCK(cs_main);
+        BOOST_CHECK(pblocktree->LoadBlockIndexGuts(insertScratch, Params()));
+    }
+    BOOST_REQUIRE_EQUAL(scratchIndex.count(crashHash), 1);
+    BOOST_CHECK_EQUAL(scratchIndex[crashHash]->nHeight, crashHeight);
+    for (auto& entry : scratchIndex) {
+        delete entry.second;
+    }
+
+    CBlock diskBlock;
+    {
+        LOCK(cs_main);
+        auto it = mapBlockIndex.find(crashHash);
+        BOOST_REQUIRE(it != mapBlockIndex.end());
+        BOOST_CHECK(ReadBlockFromDisk(diskBlock, it->second, Params().GetConsensus()));
+        BOOST_CHECK_EQUAL(diskBlock.GetHash().GetHex(), crashHash.GetHex());
+
+        // The persisted boundary must not turn arbitrary CBlockIndex values
+        // into trusted Zebra blocks; only the real mapBlockIndex entry is covered.
+        CBlockIndex standaloneIndex(crashBlock);
+        standaloneIndex.phashBlock = &crashHash;
+        standaloneIndex.pprev = chainActive[oldHeight];
+        standaloneIndex.nHeight = crashHeight;
+        standaloneIndex.BuildSkip();
+        standaloneIndex.nStatus = BLOCK_VALID_TREE | BLOCK_HAVE_DATA;
+        standaloneIndex.nFile = crashBlockPos.nFile;
+        standaloneIndex.nDataPos = crashBlockPos.nPos;
+        BOOST_CHECK(!ReadBlockFromDisk(diskBlock, &standaloneIndex, Params().GetConsensus()));
+    }
+
+    ApplyZebraCompatArgs("-zebra-compat -zebra-compat-url=http://127.0.0.1:8232");
+    zebra_compat::BlockIngestionResult replayResult = zebra_compat::IngestBlock(crashBlock, Params());
+    BOOST_CHECK(replayResult.success);
+    BOOST_CHECK(!replayResult.hardFailure);
+    {
+        LOCK(cs_main);
+        BOOST_REQUIRE(chainActive.Tip() != nullptr);
+        BOOST_CHECK_EQUAL(chainActive.Tip()->GetBlockHash().GetHex(), crashHash.GetHex());
+    }
+    BOOST_CHECK_EQUAL(TEST_GetZebraCompatTrustedBlockCandidateCount(), 0);
+
+    zebra_compat::ClearTrustedBlockBoundary();
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -595,6 +595,7 @@ bool ContextualCheckBlock(const CBlock& block, CValidationState& state,
 
 bool BlockCheckModeUsesExpensiveChecks(CheckAs blockChecks, bool fCheckpointAncestor);
 size_t TEST_GetZebraCompatTrustedBlockCandidateCount();
+void TEST_MaybeCrashAfterZebraCompatTrustedBoundaryWrite();
 
 /** Apply the effects of this block (with given index) on the UTXO set represented by coins.
  *  Validity checks that depend on the UTXO set are also done; ConnectBlock()
