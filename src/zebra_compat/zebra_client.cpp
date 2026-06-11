@@ -32,7 +32,8 @@ namespace {
 
 const char* const UNITY_JSONRPC_ID = "unity";
 const size_t ZEBRA_RPC_RESPONSE_BODY_MARGIN = 1024 * 1024;
-const int DEFAULT_UNITY_SYNC_BATCH_SIZE = 8;
+// Fits the default 128 MiB response budget while allowing deeper Zebra reorgs.
+const int DEFAULT_UNITY_SYNC_BATCH_SIZE = 30;
 const int MAX_UNITY_SYNC_BATCH_SIZE_BY_COUNT = 1000;
 const int DEFAULT_UNITY_SYNC_RESPONSE_BUDGET_MB = 128;
 

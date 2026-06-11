@@ -22,6 +22,7 @@ The lower-level knobs are available for testing and staged rollout:
 -zebra-compat-cookiefile=<path>
 -zebra-compat-poll-interval=<seconds>
 -zebra-compat-sync-batch-size=<blocks>
+-zebra-compat-sync-response-budget-mb=<MiB>
 ```
 
 ## Quick Start
@@ -160,6 +161,45 @@ startup fails.
 `-dns` (general hostname resolution) is separate from `-dnsseed` and is not
 forced off. Wallet RPC (`-rpcbind`, `-rpcport`) is unrelated to `-listen`.
 
+### Sync batch size, response budget, and reorg depth
+
+`-zebra-compat-sync-batch-size` defaults to `30`. The effective value is also
+bounded by `-zebra-compat-sync-response-budget-mb`, which defaults to `128` MiB:
+
+```text
+effective max = floor((budget - 1 MiB) / (2 * MAX_BLOCK_SIZE + 1024))
+```
+
+With the default budget, the memory-clamped maximum is `33`. If the configured
+batch size exceeds that maximum, startup fails with a memory-budget validation
+error and reports the largest usable value.
+
+The same batch size bounds the deepest Zebra reorg that `zcashd` can follow in
+one replacement branch. Branches longer than one batch fail sticky with
+`reorg_branch_too_large`. `zcashd` also has an absolute `MAX_REORG_LENGTH` of
+`99`, so setting the batch size above `99` does not increase followable reorg
+depth.
+
+Zebra's RPC `max_response_body_size` must be at least as large as zcashd's
+response budget because JSON-RPC batch responses are limited as one response
+body. Zebra's zcashd-compat listener floors this value at `128` MiB for the
+default zcashd budget.
+
+For an 80-block batch, raise both sides to a round `320` MiB budget:
+
+```sh
+./src/zcashd -zebra-compat \
+  -zebra-compat-sync-batch-size=80 \
+  -zebra-compat-sync-response-budget-mb=320 \
+  -zebra-compat-url=http://127.0.0.1:8232 \
+  -zebra-compat-cookiefile=/path/to/zebra/.cookie
+```
+
+```toml
+[rpc]
+max_response_body_size = 335544320
+```
+
 ### Three different endpoints (supervised deployments)
 
 | Endpoint | Typical address | Purpose |
@@ -231,8 +271,8 @@ rejections of invalid user transactions remain visible in
 `tx_forwarding.last_error`, but they do not make the node degraded; transport
 and connectivity failures are reported separately as
 `tx_forwarding.last_transport_error`. The `limits` object exposes hard bounds
-such as block batch size, Zebra RPC response size, pending forwarded
-transactions, and per-poll mempool reconciliation limits.
+such as `sync_batch_size`, `zebra_rpc_max_response_body_bytes`, pending
+forwarded transactions, and per-poll mempool reconciliation limits.
 
 Existing network RPCs remain scriptable: zebra-compat reports no local Zcash peers and
 P2P-control RPCs are unavailable while `-p2p=0`.

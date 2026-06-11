@@ -725,6 +725,30 @@ BOOST_AUTO_TEST_CASE(unity_sync_batch_size_is_clamped_by_memory_budget)
     BOOST_CHECK_LE(unity::ZebraRpcMaxResponseBodySize(), 128 * 1024 * 1024);
 }
 
+BOOST_AUTO_TEST_CASE(unity_sync_batch_size_default_is_30)
+{
+    ArgsSnapshot snapshot;
+    ResetArgs("");
+
+    BOOST_CHECK_EQUAL(unity::UnitySyncBatchSize(), 30);
+    BOOST_CHECK_EQUAL(unity::ZebraRpcMaxResponseBodySize(), 121079296);
+}
+
+BOOST_AUTO_TEST_CASE(unity_sync_batch_size_80_requires_raised_budget)
+{
+    ArgsSnapshot snapshot;
+    ResetArgs("-unitysyncbatchsize=80");
+
+    BOOST_CHECK(unity::ValidateParameterInteraction().find("memory budget") != std::string::npos);
+    BOOST_CHECK_EQUAL(unity::UnitySyncBatchSize(), 33);
+    BOOST_CHECK_EQUAL(unity::ZebraRpcMaxResponseBodySize(), 133082368);
+
+    ResetArgs("-unitysyncbatchsize=80 -unitysyncresponsebudgetmb=320");
+    BOOST_CHECK_EQUAL(unity::ValidateParameterInteraction(), "");
+    BOOST_CHECK_EQUAL(unity::UnitySyncBatchSize(), 80);
+    BOOST_CHECK_EQUAL(unity::ZebraRpcMaxResponseBodySize(), 321130496);
+}
+
 BOOST_AUTO_TEST_CASE(unity_retry_backoff_is_bounded)
 {
     ArgsSnapshot snapshot;
