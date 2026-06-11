@@ -756,15 +756,19 @@ SyncOutcome SyncZebraCompatReorgToZebraBest(
 
     UpdateSyncStatus("ready", "syncing", "fetching_zebra_reorg_branch");
     const int startHeight = ancestor.height + 1;
-    const int branchLength = zebraBestHeight - ancestor.height;
     const int batch = ZebraCompatSyncBatchSize();
+    const int reorgActivationLength = std::max(ancestor.disconnectLength + 1, batch);
+    const int fetchEndHeight = std::min(
+        zebraBestHeight,
+        ancestor.height + reorgActivationLength);
+    const int branchLength = fetchEndHeight - ancestor.height;
     std::vector<CBlock> blocks;
     blocks.reserve(branchLength);
     std::string expectedPrevHash = ancestor.hash;
-    // Keep each Zebra RPC response bounded, but preserve the no-partial-reorg
-    // contract by handing the complete replacement branch to ingestion once.
-    for (int chunkStart = startHeight; chunkStart <= zebraBestHeight; chunkStart += batch) {
-        const int chunkEnd = std::min(zebraBestHeight, chunkStart + batch - 1);
+    // Fetch only the prefix needed to make Zebra's branch strictly heavier than
+    // the disconnected suffix; forward sync will catch up any remaining tail.
+    for (int chunkStart = startHeight; chunkStart <= fetchEndHeight; chunkStart += batch) {
+        const int chunkEnd = std::min(fetchEndHeight, chunkStart + batch - 1);
         const std::vector<std::string> hashes =
             GetZebraBestChainHashes(client, chunkStart, chunkEnd);
         if (hashes.size() != static_cast<size_t>(chunkEnd - chunkStart + 1)) {
