@@ -5,6 +5,7 @@ $(package)_file_name=$(package)-$($(package)_version).tar.gz
 $(package)_download_file=release-$($(package)_version)-stable.tar.gz
 $(package)_sha256_hash=7180a979aaa7000e1264da484f712d403fcf7679b1e9212c4e3d09f5c93efc24
 $(package)_patches=0001-fix-windows-getaddrinfo.patch
+$(package)_dependencies=openssl
 
 define $(package)_preprocess_cmds
    patch -p1 < $($(package)_patch_dir)/0001-fix-windows-getaddrinfo.patch && \
@@ -15,11 +16,12 @@ endef
 # version as we do in configure. Due to quirks in libevents build system, this
 # is also required to enable support for ipv6. See #19375.
 define $(package)_set_vars
-  $(package)_config_opts=--disable-shared --disable-openssl --disable-libevent-regress --disable-samples
+  $(package)_config_opts=--disable-shared --enable-openssl --disable-libevent-regress --disable-samples
   $(package)_config_opts += --disable-dependency-tracking --enable-option-checking
   $(package)_config_opts_release=--disable-debug-mode
   $(package)_config_opts_linux=--with-pic
   $(package)_config_opts_freebsd=--with-pic
+  $(package)_config_env=OPENSSL_CFLAGS="-I$(host_prefix)/include" OPENSSL_LIBS="-L$(host_prefix)/lib -lssl -lcrypto"
   $(package)_cppflags_mingw32=-D_WIN32_WINNT=0x0601
 endef
 

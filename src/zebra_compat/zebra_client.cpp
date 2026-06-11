@@ -23,6 +23,21 @@
 #include <boost/algorithm/string/predicate.hpp>
 
 #include <event2/buffer.h>
+
+#if defined(__clang__)
+#pragma clang diagnostic push
+// OpenSSL 3.5 headers trigger -Wcast-function-type-strict under zcash's
+// -Werror, so keep the suppression scoped to external TLS headers only.
+#pragma clang diagnostic ignored "-Wcast-function-type-strict"
+#endif
+#include <event2/bufferevent_ssl.h>
+#include <openssl/err.h>
+#include <openssl/ssl.h>
+#include <openssl/x509v3.h>
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
+
 #include <event2/event.h>
 #include <event2/http.h>
 #include <event2/keyvalq_struct.h>
@@ -72,9 +87,25 @@ struct EvhttpRequestDeleter {
     }
 };
 
+struct SslContextDeleter {
+    void operator()(SSL_CTX* context) const
+    {
+        SSL_CTX_free(context);
+    }
+};
+
+struct BuffereventDeleter {
+    void operator()(bufferevent* event) const
+    {
+        bufferevent_free(event);
+    }
+};
+
 typedef std::unique_ptr<event_base, EventBaseDeleter> UniqueEventBase;
 typedef std::unique_ptr<evhttp_connection, EvhttpConnectionDeleter> UniqueEvhttpConnection;
 typedef std::unique_ptr<evhttp_request, EvhttpRequestDeleter> UniqueEvhttpRequest;
+typedef std::unique_ptr<SSL_CTX, SslContextDeleter> UniqueSslContext;
+typedef std::unique_ptr<bufferevent, BuffereventDeleter> UniqueBufferevent;
 
 bool IsValidHashHex(const std::string& value)
 {
@@ -167,6 +198,92 @@ std::string ZebraRpcTransportErrorMessage(const std::string& prefix, const std::
         message += ". " + ZebraRpcResponseBudgetHint();
     }
     return message;
+}
+
+std::string OpenSslErrorString()
+{
+    const unsigned long error = ERR_get_error();
+    if (error == 0) {
+        return "unknown OpenSSL error";
+    }
+    char buffer[256];
+    ERR_error_string_n(error, buffer, sizeof(buffer));
+    return std::string(buffer);
+}
+
+void ConfigureTlsHostnameVerification(SSL* ssl, const std::string& host)
+{
+    X509_VERIFY_PARAM* param = SSL_get0_param(ssl);
+    X509_VERIFY_PARAM_set_hostflags(param, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
+    if (X509_VERIFY_PARAM_set1_ip_asc(param, host.c_str()) == 1) {
+        return;
+    }
+    if (X509_VERIFY_PARAM_set1_host(param, host.c_str(), host.size()) != 1) {
+        throw std::runtime_error("Unable to configure Zebra HTTPS hostname verification");
+    }
+}
+
+UniqueEvhttpConnection CreateHttpConnection(event_base* base, const ZebraClientConfig& config)
+{
+    return UniqueEvhttpConnection(evhttp_connection_base_new(
+        base,
+        nullptr,
+        config.endpoint.host.c_str(),
+        config.endpoint.port));
+}
+
+UniqueEvhttpConnection CreateHttpsConnection(event_base* base, const ZebraClientConfig& config)
+{
+    UniqueSslContext sslContext(SSL_CTX_new(TLS_client_method()));
+    if (sslContext == nullptr) {
+        throw std::runtime_error("Unable to create Zebra HTTPS TLS context: " + OpenSslErrorString());
+    }
+
+    SSL_CTX_set_verify(sslContext.get(), SSL_VERIFY_PEER, nullptr);
+    if (!config.tlsCaFile.empty()) {
+        if (SSL_CTX_load_verify_locations(sslContext.get(), config.tlsCaFile.c_str(), nullptr) != 1) {
+            throw std::runtime_error(
+                "Unable to load Zebra HTTPS CA file " + config.tlsCaFile + ": " + OpenSslErrorString());
+        }
+    } else if (SSL_CTX_set_default_verify_paths(sslContext.get()) != 1) {
+        throw std::runtime_error("Unable to load default TLS trust roots: " + OpenSslErrorString());
+    }
+
+    SSL* ssl = SSL_new(sslContext.get());
+    if (ssl == nullptr) {
+        throw std::runtime_error("Unable to create Zebra HTTPS TLS session: " + OpenSslErrorString());
+    }
+    std::unique_ptr<SSL, decltype(&SSL_free)> sslGuard(ssl, SSL_free);
+
+    if (SSL_set_tlsext_host_name(ssl, config.endpoint.host.c_str()) != 1) {
+        throw std::runtime_error("Unable to configure Zebra HTTPS SNI: " + OpenSslErrorString());
+    }
+    ConfigureTlsHostnameVerification(ssl, config.endpoint.host);
+
+    UniqueBufferevent bufferevent(bufferevent_openssl_socket_new(
+        base,
+        -1,
+        ssl,
+        BUFFEREVENT_SSL_CONNECTING,
+        BEV_OPT_CLOSE_ON_FREE));
+    if (bufferevent == nullptr) {
+        throw std::runtime_error("Unable to create Zebra HTTPS bufferevent: " + OpenSslErrorString());
+    }
+    SSL* releasedSsl = sslGuard.release(); // bufferevent owns SSL when BEV_OPT_CLOSE_ON_FREE is set
+    (void)releasedSsl;
+
+    UniqueEvhttpConnection connection(evhttp_connection_base_bufferevent_new(
+        base,
+        nullptr,
+        bufferevent.get(),
+        config.endpoint.host.c_str(),
+        config.endpoint.port));
+    if (connection == nullptr) {
+        throw std::runtime_error("Unable to create Zebra HTTPS connection");
+    }
+    auto* releasedBufferevent = bufferevent.release(); // evhttp connection owns the bufferevent
+    (void)releasedBufferevent;
+    return connection;
 }
 
 ZebraIdentity::Failure ClassifyIdentityRpcError(const ZebraRpcError& error)
@@ -381,7 +498,7 @@ int ZebraCompatTimeoutSeconds()
 
 bool ZebraAuth::IsConfigured() const
 {
-    return !user.empty() && !password.empty();
+    return !disabled && !user.empty() && !password.empty();
 }
 
 std::string ZebraAuth::BasicAuthHeader() const
@@ -403,10 +520,11 @@ bool ParseZebraEndpoint(const std::string& url, ZebraEndpoint& endpoint, std::st
         rest = url.substr(httpPrefix.size());
         defaultPort = 80;
     } else if (boost::algorithm::starts_with(url, httpsPrefix)) {
-        error = "zebra-compat Zebra JSON-RPC currently supports http:// endpoints only";
-        return false;
+        endpoint.scheme = "https";
+        rest = url.substr(httpsPrefix.size());
+        defaultPort = 443;
     } else {
-        error = "-zebra-compat-url must be an http:// URL";
+        error = "-zebra-compat-url must be an http:// or https:// URL";
         return false;
     }
 
@@ -437,6 +555,8 @@ bool ParseZebraEndpoint(const std::string& url, ZebraEndpoint& endpoint, std::st
 
 bool LoadZebraClientConfig(ZebraClientConfig& config, std::string& error)
 {
+    config = ZebraClientConfig();
+
     const std::string url = GetArg("-zebra-compat-url", "");
     if (url.empty()) {
         error = "waiting_for_zebra_endpoint";
@@ -456,7 +576,8 @@ bool LoadZebraClientConfig(ZebraClientConfig& config, std::string& error)
             config.endpoint.url);
         return false;
     }
-    if (!endpointIsLoopback && !GetBoolArg("-zebra-compat-allow-remote-http", false)) {
+    const bool endpointUsesPlainHttp = config.endpoint.scheme == "http";
+    if (endpointUsesPlainHttp && !endpointIsLoopback && !GetBoolArg("-zebra-compat-allow-remote-http", false)) {
         error = strprintf(
             "Refusing insecure Zebra RPC endpoint %s: http:// uses Basic authentication in cleartext "
             "and is only allowed for loopback hosts. Use -zebra-compat-allow-remote-http=1 only if "
@@ -464,7 +585,7 @@ bool LoadZebraClientConfig(ZebraClientConfig& config, std::string& error)
             config.endpoint.url);
         return false;
     }
-    if (!endpointIsLoopback) {
+    if (endpointUsesPlainHttp && !endpointIsLoopback) {
         LogPrintf(
             "WARNING: zebra-compat connecting to non-loopback plain HTTP Zebra RPC endpoint %s; "
             "Basic authentication credentials will be sent in cleartext\n",
@@ -474,12 +595,29 @@ bool LoadZebraClientConfig(ZebraClientConfig& config, std::string& error)
     const std::string user = GetArg("-zebra-compat-rpc-user", "");
     const std::string password = GetArg("-zebra-compat-rpc-password", "");
     const std::string cookieFile = GetArg("-zebra-compat-cookiefile", "");
+    const std::string tlsCaFile = GetArg("-zebra-compat-tls-ca-file", "");
+    if (!tlsCaFile.empty() && config.endpoint.scheme != "https") {
+        error = "-zebra-compat-tls-ca-file requires an https:// Zebra RPC endpoint";
+        return false;
+    }
+    config.tlsCaFile = tlsCaFile;
+    const bool noAuth = GetBoolArg("-zebra-compat-no-auth", false);
+    if (noAuth && config.endpoint.scheme != "https") {
+        error = "-zebra-compat-no-auth requires an https:// Zebra RPC endpoint";
+        return false;
+    }
+    if (noAuth && (!cookieFile.empty() || !user.empty() || !password.empty())) {
+        error = "-zebra-compat-no-auth is incompatible with -zebra-compat-cookiefile and -zebra-compat-rpc-user/-zebra-compat-rpc-password";
+        return false;
+    }
     if (!cookieFile.empty() && (!user.empty() || !password.empty())) {
         error = "-zebra-compat-cookiefile is incompatible with -zebra-compat-rpc-user/-zebra-compat-rpc-password";
         return false;
     }
 
-    if (!cookieFile.empty()) {
+    if (noAuth) {
+        config.auth.disabled = true;
+    } else if (!cookieFile.empty()) {
         fs::path path = AbsPathForConfigVal(fs::path(cookieFile));
         std::ifstream file(path.string().c_str());
         if (!file.is_open()) {
@@ -538,11 +676,9 @@ ZebraRpcResponse LibeventZebraRpcTransport::CallJsonRpc(
         throw std::runtime_error("Unable to create event base for Zebra JSON-RPC request");
     }
 
-    UniqueEvhttpConnection connection(evhttp_connection_base_new(
-        base.get(),
-        nullptr,
-        config.endpoint.host.c_str(),
-        config.endpoint.port));
+    UniqueEvhttpConnection connection = config.endpoint.scheme == "https"
+        ? CreateHttpsConnection(base.get(), config)
+        : CreateHttpConnection(base.get(), config);
     if (connection == nullptr) {
         throw std::runtime_error("Unable to create Zebra JSON-RPC connection");
     }
@@ -562,13 +698,16 @@ ZebraRpcResponse LibeventZebraRpcTransport::CallJsonRpc(
     evhttp_add_header(headers, "Host", config.endpoint.host.c_str());
     evhttp_add_header(headers, "Connection", "close");
     evhttp_add_header(headers, "Content-Type", "application/json");
-    evhttp_add_header(headers, "Authorization", config.auth.BasicAuthHeader().c_str());
+    if (config.auth.IsConfigured()) {
+        evhttp_add_header(headers, "Authorization", config.auth.BasicAuthHeader().c_str());
+    }
 
     evbuffer* output = evhttp_request_get_output_buffer(request.get());
     evbuffer_add(output, requestBody.data(), requestBody.size());
 
     int requestResult = evhttp_make_request(connection.get(), request.get(), EVHTTP_REQ_POST, config.endpoint.path.c_str());
-    request.release(); // ownership moved to connection in the call above, including on failure
+    evhttp_request* releasedRequest = request.release(); // ownership moved to connection in the call above, including on failure
+    (void)releasedRequest;
     if (requestResult != 0) {
         throw std::runtime_error("Unable to send Zebra JSON-RPC request");
     }

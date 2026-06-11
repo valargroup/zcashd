@@ -406,8 +406,10 @@ std::string HelpMessage(HelpMessageMode mode)
     strUsage += HelpMessageOpt("-zebra-compat-url=<scheme://host:port>", _("Zebra JSON-RPC endpoint for zebra-compat mode"));
     strUsage += HelpMessageOpt("-zebra-compat-allow-remote-http", _("Allow zebra-compat to connect to a non-loopback http:// Zebra RPC endpoint, sending Basic authentication credentials in cleartext (dangerous; use only with a trusted tunnel or private network)"));
     strUsage += HelpMessageOpt("-zebra-compat-cookiefile=<path>", _("Cookie file for Zebra JSON-RPC authentication"));
+    strUsage += HelpMessageOpt("-zebra-compat-no-auth", _("Connect to Zebra JSON-RPC without an Authorization header; requires an https:// endpoint and external access control"));
     strUsage += HelpMessageOpt("-zebra-compat-rpc-password=<password>", _("Password for Zebra JSON-RPC authentication"));
     strUsage += HelpMessageOpt("-zebra-compat-rpc-user=<user>", _("Username for Zebra JSON-RPC authentication"));
+    strUsage += HelpMessageOpt("-zebra-compat-tls-ca-file=<path>", _("CA certificate file used to verify an https:// Zebra JSON-RPC endpoint"));
 
     strUsage += HelpMessageGroup(_("Connection options:"));
     strUsage += HelpMessageOpt("-addnode=<ip>", _("Add a node to connect to and attempt to keep the connection open"));

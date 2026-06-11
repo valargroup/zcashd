@@ -21,6 +21,8 @@ The lower-level knobs are available for testing and staged rollout:
 -zebra-compat-rpc-user=<user>
 -zebra-compat-rpc-password=<password>
 -zebra-compat-cookiefile=<path>
+-zebra-compat-no-auth=<0|1>
+-zebra-compat-tls-ca-file=<path>
 -zebra-compat-poll-interval=<seconds>
 -zebra-compat-sync-batch-size=<blocks>
 -zebra-compat-sync-response-budget-mb=<MiB>
@@ -94,6 +96,23 @@ intentionally uses a remote plain-HTTP endpoint, startup requires
 bind Zebra RPC to a private interface, restrict it with a host firewall, or
 prefer a tunnel. See **Deployment Topology** below.
 
+For split-host deployments, prefer an `https://` endpoint exposed by a
+TLS-terminating proxy or tunnel in front of Zebra. If that proxy uses a
+certificate from an internal or private CA, pass that CA certificate to zcashd:
+
+```sh
+./src/zcashd -zebra-compat \
+  -zebra-compat-url=https://zebra.example.internal:28232 \
+  -zebra-compat-cookiefile=/path/to/zebra/.zcashd-compat.cookie \
+  -zebra-compat-tls-ca-file=/path/to/internal-ca.pem
+```
+
+`-zebra-compat-no-auth=1` disables the Zebra RPC `Authorization` header, but it
+is accepted only with `https://` endpoints. Use it only when access control is
+provided by another layer such as Cloudflare Access, mTLS, IP allowlists, or a
+private network. Cookie or static Basic authentication remains the default and
+recommended mode.
+
 ### 4. Verify the connection
 
 ```sh
@@ -128,9 +147,11 @@ accepted through the block index, and connected through the local state
 transition machinery that maintains chainstate, wallet state, indexes, and ZMQ
 notifications.
 
-Operators should run Zebra locally or over a private authenticated network.
-Production zebra-compat mode requires Zebra RPC authentication. Public unauthenticated
-Zebra endpoints must not be used for production zebra-compat mode.
+Operators should run Zebra locally, behind an authenticated HTTPS proxy/tunnel,
+or on a private authenticated network. Cookie or static Basic authentication
+remains the default. If `-zebra-compat-no-auth=1` is used, the endpoint must be
+HTTPS and protected by external access controls. Public unauthenticated Zebra
+endpoints must not be used for production zebra-compat mode.
 
 ## Configuration
 
@@ -252,8 +273,20 @@ automatically.
 | Zebra network P2P | `0.0.0.0:8233` / `:18233` | Zebra syncs from the Zcash network |
 | zcashd network P2P | disabled | Must not bind 8233/18233 in compat mode |
 
-Do not point `-zebra-compat-url` at the compat RPC port (`28232`); use the
-main Zebra RPC listener configured in `[rpc].listen_addr`.
+For externally managed `zcashd`, point `-zebra-compat-url` at the Zebra RPC
+listener intended for that process. For supervised deployments, Zebra passes the
+dedicated compat RPC listener automatically.
+
+When Zebra supervises zcashd, it points `-zebra-compat-url` at the dedicated
+compat RPC listener and passes `-zebra-compat-cookiefile` for that listener's
+cookie authentication. Zebra's built-in RPC server currently serves HTTP, not
+TLS, and the supervisor builds an `http://` URL for the child process.
+
+zcashd's `https://` Zebra client support is for externally managed deployments
+that place a TLS-terminating proxy or tunnel in front of Zebra. In that topology,
+run zcashd outside Zebra's supervisor and point `-zebra-compat-url` at the proxy.
+`-zebra-compat-no-auth=1` is accepted only for `https://` endpoints and should be
+used only when the proxy or surrounding network provides access control.
 
 ### Validate P2P is disabled
 
@@ -283,12 +316,16 @@ Zebra P2P enabled                                      zcashd P2P disabled
 Recommended split-host topology:
 
 ```text
-Zebra host on private network  <---authenticated, firewalled HTTP---  zcashd -zebra-compat host
+Zebra host on private network  <---authenticated HTTPS or private tunnel---  zcashd -zebra-compat host
 ```
 
-Do not expose the Zebra JSON-RPC endpoint publicly. Use host firewalls,
-private addressing, or a mutually authenticated tunnel if the Zebra and zebra-compat
-processes are not on the same machine.
+Do not expose the Zebra JSON-RPC endpoint as a public unauthenticated backend
+API. Zebra's built-in RPC listener is HTTP; for authenticated HTTPS, Cloudflare
+Access, mTLS, or similar split-host deployments, terminate TLS in a proxy or
+tunnel in front of Zebra and point zcashd at that `https://` endpoint. TLS
+protects the channel and authenticates the proxy endpoint to zcashd; cookie auth
+or an external access-control layer still decides which clients may call the
+endpoint.
 
 ## Readiness And Diagnostics
 
