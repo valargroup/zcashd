@@ -59,6 +59,23 @@ class ZebraCompatTransactionForwardingTest(BitcoinTestFramework):
         txid = source.decoderawtransaction(signed['hex'])['txid']
         return signed['hex'], txid
 
+    def make_absurd_fee_tx(self, source):
+        utxo = None
+        for candidate in source.listunspent():
+            if candidate['amount'] == Decimal('10.0'):
+                utxo = candidate
+                break
+        assert utxo is not None
+
+        raw = source.createrawtransaction(
+            [{'txid': utxo['txid'], 'vout': utxo['vout']}],
+            {source.getnewaddress(): Decimal('1.0')},
+        )
+        signed = source.signrawtransaction(raw)
+        assert signed['complete']
+        txid = source.decoderawtransaction(signed['hex'])['txid']
+        return signed['hex'], txid
+
     def wait_for_mirror_poll_after(self, fake_zebra, previous_count, polls=1):
         wait_until(lambda: fake_zebra.mempool_poll_count() >= previous_count + polls, timeout=60)
 
@@ -172,6 +189,26 @@ class ZebraCompatTransactionForwardingTest(BitcoinTestFramework):
             fake_zebra.unhide_mempool_txid(auto_rebroadcast_txid)
             wait_until(lambda: auto_rebroadcast_txid in zebra_compat.getrawmempool(), timeout=60)
             zebra_compat.setmocktime(0)
+
+            high_fee_hex, high_fee_txid = self.make_absurd_fee_tx(source)
+            for allow_high_fees in [None, False]:
+                try:
+                    if allow_high_fees is None:
+                        zebra_compat.sendrawtransaction(high_fee_hex)
+                    else:
+                        zebra_compat.sendrawtransaction(high_fee_hex, allow_high_fees)
+                    raise AssertionError('high-fee sendrawtransaction unexpectedly succeeded')
+                except JSONRPCException as e:
+                    assert_equal(e.error['code'], -26)
+                    assert_equal(e.error['message'], '256: absurdly-high-fee')
+                fake_zebra.assert_tx_not_forwarded(high_fee_txid)
+                assert high_fee_txid not in zebra_compat.getrawmempool()
+                assert high_fee_txid not in source.getrawmempool()
+
+            fake_zebra.accept_sendraw_without_source_mempool(high_fee_txid)
+            assert_equal(zebra_compat.sendrawtransaction(high_fee_hex, True), high_fee_txid)
+            fake_zebra.assert_tx_forwarded(high_fee_txid)
+            assert high_fee_txid in zebra_compat.getrawmempool()
 
             stop_node(zebra_compat, 1)
             stop_node(source, 0)

@@ -41,6 +41,8 @@ class FakePollingZebraServer:
         self.fail_getblock_batch = False
         self.reject_sendraw = False
         self.hidden_mempool_txids = set()
+        self.extra_mempool_txids = set()
+        self.accept_without_source_mempool_txids = set()
         self.getrawmempool_calls = 0
         self.sendrawtransaction_txids = []
         self.reorg_tip_on_next_getblockhash_batch = False
@@ -104,13 +106,16 @@ class FakePollingZebraServer:
                     with fake.lock:
                         fake.getrawmempool_calls += 1
                         hidden = set(fake.hidden_mempool_txids)
+                        extra = set(fake.extra_mempool_txids)
+                    result = list(set(result) | extra)
                     result = [txid for txid in result if txid not in hidden]
                 elif method == 'getmempoolinfo':
                     result = source.getmempoolinfo()
                     with fake.lock:
                         hidden = set(fake.hidden_mempool_txids)
-                    if hidden:
-                        visible = [txid for txid in source.getrawmempool() if txid not in hidden]
+                        extra = set(fake.extra_mempool_txids)
+                    if hidden or extra:
+                        visible = [txid for txid in set(source.getrawmempool()) | extra if txid not in hidden]
                         result['size'] = len(visible)
                 elif method == 'getrawtransaction':
                     result = source.getrawtransaction(params[0], 0)
@@ -119,13 +124,18 @@ class FakePollingZebraServer:
                     with fake.lock:
                         reject_sendraw = fake.reject_sendraw
                         fake.sendrawtransaction_txids.append(txid)
+                        accept_without_source = txid in fake.accept_without_source_mempool_txids
                     if reject_sendraw:
                         return {
                             'result': None,
                             'error': {'code': -26, 'message': 'zebra rejected transaction'},
                             'id': request.get('id'),
                         }
-                    if txid in source.getrawmempool():
+                    if accept_without_source:
+                        with fake.lock:
+                            fake.extra_mempool_txids.add(txid)
+                        result = txid
+                    elif txid in source.getrawmempool():
                         result = txid
                     else:
                         result = source.sendrawtransaction(params[0])
@@ -200,6 +210,10 @@ class FakePollingZebraServer:
         with self.lock:
             self.hidden_mempool_txids.discard(txid)
 
+    def accept_sendraw_without_source_mempool(self, txid):
+        with self.lock:
+            self.accept_without_source_mempool_txids.add(txid)
+
     def mempool_poll_count(self):
         with self.lock:
             return self.getrawmempool_calls
@@ -207,6 +221,12 @@ class FakePollingZebraServer:
     def sendrawtransaction_count(self, txid):
         with self.lock:
             return self.sendrawtransaction_txids.count(txid)
+
+    def assert_tx_forwarded(self, txid):
+        assert_equal(self.sendrawtransaction_count(txid), 1)
+
+    def assert_tx_not_forwarded(self, txid):
+        assert_equal(self.sendrawtransaction_count(txid), 0)
 
     def set_reorg_tip_on_next_getblockhash_batch(self):
         with self.lock:
