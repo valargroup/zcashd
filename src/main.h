@@ -554,7 +554,7 @@ bool ReadBlockFromDisk(CBlock& block, const CBlockIndex* pindex, const Consensus
  * - `CheckAs::Block` applies all relevant block checks.
  * - `CheckAs::TrustedBlock` is the same as `CheckAs::Block` except that
  *   expensive authorizing proofs/signatures are not validated. It is only for
- *   real blocks that entered through a trusted Unity block source.
+ *   real blocks that entered through a trusted zebra-compat block source.
  * - `CheckAs::BlockTemplate` is the same as `CheckAs::Block` except that proofs
  *   and signatures are not validated, and the authDataRoot is not checked (as
  *   the coinbase transaction is not fully complete).
@@ -594,7 +594,7 @@ bool ContextualCheckBlock(const CBlock& block, CValidationState& state,
                           bool fCheckTransactions);
 
 bool BlockCheckModeUsesExpensiveChecks(CheckAs blockChecks, bool fCheckpointAncestor);
-size_t TEST_GetUnityTrustedBlockCandidateCount();
+size_t TEST_GetZebraCompatTrustedBlockCandidateCount();
 
 /** Apply the effects of this block (with given index) on the UTXO set represented by coins.
  *  Validity checks that depend on the UTXO set are also done; ConnectBlock()

@@ -30,24 +30,24 @@
 #include <boost/thread.hpp>
 #include <univalue.h>
 
-namespace unity {
+namespace zebra_compat {
 namespace {
 
-std::atomic<bool> g_unity_started(false);
-std::atomic<bool> g_unity_interrupt(false);
-std::unique_ptr<boost::thread> g_unity_worker;
-CCriticalSection cs_unity_status;
+std::atomic<bool> g_zebra_compat_started(false);
+std::atomic<bool> g_zebra_compat_interrupt(false);
+std::unique_ptr<boost::thread> g_zebra_compat_worker;
+CCriticalSection cs_zebra_compat_status;
 
-static const int DEFAULT_UNITY_POLL_INTERVAL_SECONDS = 5;
-static const int MAX_UNITY_RETRY_BACKOFF_SECONDS = 60;
+static const int DEFAULT_ZEBRA_COMPAT_POLL_INTERVAL_SECONDS = 5;
+static const int MAX_ZEBRA_COMPAT_RETRY_BACKOFF_SECONDS = 60;
 // How many acquisition batches one forward-sync pass drives before returning to the
 // outer loop to refresh Zebra's tip/identity. Batches inside a pass are pipelined
 // (the next batch is fetched from Zebra while the current one is applied), so this
 // only bounds how often the cheap identity round-trip is amortized, not memory use
 // (at most two batches are ever held in flight).
-static const int DEFAULT_UNITY_FORWARD_DRIVE_BATCHES = 64;
+static const int DEFAULT_ZEBRA_COMPAT_FORWARD_DRIVE_BATCHES = 64;
 
-struct UnityStatus {
+struct ZebraCompatStatus {
     std::string serviceState = "stopped";
     std::string syncState = "degraded";
     std::string syncDetail = "waiting_for_zebra_endpoint";
@@ -72,7 +72,7 @@ struct ZebraSourceView {
     std::map<int, std::string> bestChainHashes;
 };
 
-UnityStatus g_status;
+ZebraCompatStatus g_status;
 ZebraSourceView g_source_view;
 
 bool IsTrustedValidationTestFixtureEnabled()
@@ -98,7 +98,7 @@ void ForceBoolArg(const std::string& arg, bool value)
 void ForceOffP2POption(const std::string& arg)
 {
     if (SoftSetBoolArg(arg, false)) {
-        LogPrintf("Unity parameter interaction: -p2p=0 -> setting %s=0\n", arg);
+        LogPrintf("zebra-compat parameter interaction: -p2p=0 -> setting %s=0\n", arg);
     }
 }
 
@@ -151,7 +151,7 @@ std::string ValidateP2PDisabledConflicts()
     return "";
 }
 
-std::string ValidateUnityPreset()
+std::string ValidateZebraCompatPreset()
 {
     if (!GetBoolArg("-zebra-compat", false)) {
         return "";
@@ -168,14 +168,14 @@ std::string ValidateUnityPreset()
     return "";
 }
 
-int UnityPollIntervalSeconds()
+int ZebraCompatPollIntervalSeconds()
 {
-    return std::max<int64_t>(1, GetArg("-zebra-compat-poll-interval", DEFAULT_UNITY_POLL_INTERVAL_SECONDS));
+    return std::max<int64_t>(1, GetArg("-zebra-compat-poll-interval", DEFAULT_ZEBRA_COMPAT_POLL_INTERVAL_SECONDS));
 }
 
-int UnityForwardDriveBatches()
+int ZebraCompatForwardDriveBatches()
 {
-    return std::max<int64_t>(1, GetArg("-zebra-compat-sync-drive-batches", DEFAULT_UNITY_FORWARD_DRIVE_BATCHES));
+    return std::max<int64_t>(1, GetArg("-zebra-compat-sync-drive-batches", DEFAULT_ZEBRA_COMPAT_FORWARD_DRIVE_BATCHES));
 }
 
 struct LocalTipSnapshot {
@@ -215,7 +215,7 @@ std::vector<std::string> GetLocalChainHashes(int startHeight, int endHeight)
 
 void UpdateZebraStatus(const ZebraIdentity& identity)
 {
-    LOCK(cs_unity_status);
+    LOCK(cs_zebra_compat_status);
     g_status.zebra = identity;
     if (identity.blocks >= 0) {
         g_status.syncTargetHeight = identity.blocks;
@@ -235,7 +235,7 @@ bool GetCachedZebraBestChainHash(
     const std::string& zebraBestHash,
     std::string& hash)
 {
-    LOCK(cs_unity_status);
+    LOCK(cs_zebra_compat_status);
     if (g_source_view.bestHeight != zebraBestHeight ||
         g_source_view.bestHash != zebraBestHash) {
         return false;
@@ -252,12 +252,12 @@ bool GetCachedZebraBestChainHash(
 
 void RecordZebraBestChainHash(int height, const std::string& hash)
 {
-    LOCK(cs_unity_status);
+    LOCK(cs_zebra_compat_status);
     g_source_view.bestChainHashes[height] = hash;
     if (g_source_view.bestHeight >= 0) {
         const int retainFrom = std::max(
             0,
-            g_source_view.bestHeight - static_cast<int>(MAX_REORG_LENGTH) - UnitySyncBatchSize());
+            g_source_view.bestHeight - static_cast<int>(MAX_REORG_LENGTH) - ZebraCompatSyncBatchSize());
         for (auto it = g_source_view.bestChainHashes.begin(); it != g_source_view.bestChainHashes.end();) {
             if (it->first < retainFrom) {
                 it = g_source_view.bestChainHashes.erase(it);
@@ -277,7 +277,7 @@ void RecordZebraBestChainHashes(int startHeight, const std::vector<std::string>&
 
 void UpdateCommonAncestorStatus(const CommonAncestorSearchResult& ancestor)
 {
-    LOCK(cs_unity_status);
+    LOCK(cs_zebra_compat_status);
     if (ancestor.found && ancestor.disconnectLength > 0) {
         g_status.lastCommonAncestorHeight = ancestor.height;
         g_status.lastCommonAncestorHash = ancestor.hash;
@@ -285,7 +285,7 @@ void UpdateCommonAncestorStatus(const CommonAncestorSearchResult& ancestor)
 }
 
 std::vector<std::string> GetZebraBestChainHashes(
-    UnityZebraClient& client,
+    ZebraCompatClient& client,
     int startHeight,
     int endHeight)
 {
@@ -301,7 +301,7 @@ void UpdateSyncStatus(
     const std::string& error = "",
     bool tipMatchedZebra = false)
 {
-    LOCK(cs_unity_status);
+    LOCK(cs_zebra_compat_status);
     g_status.serviceState = serviceState;
     g_status.syncState = syncState;
     g_status.syncDetail = detail;
@@ -309,15 +309,15 @@ void UpdateSyncStatus(
     g_status.lastError = error;
     if (syncState == "failed") {
         LogPrintf(
-            "Unity sync status: service_state=%s sync_state=%s detail=%s error=\"%s\"\n",
+            "zebra-compat sync status: service_state=%s sync_state=%s detail=%s error=\"%s\"\n",
             serviceState.c_str(),
             syncState.c_str(),
             detail.c_str(),
             error.c_str());
     } else if (!error.empty()) {
         LogPrint(
-            "unity",
-            "Unity sync status: service_state=%s sync_state=%s detail=%s error=\"%s\"\n",
+            "zebra-compat",
+            "zebra-compat sync status: service_state=%s sync_state=%s detail=%s error=\"%s\"\n",
             serviceState.c_str(),
             syncState.c_str(),
             detail.c_str(),
@@ -327,14 +327,14 @@ void UpdateSyncStatus(
 
 void UpdateSyncedTip(const LocalTipSnapshot& snapshot)
 {
-    LOCK(cs_unity_status);
+    LOCK(cs_zebra_compat_status);
     g_status.lastSyncedHeight = snapshot.height;
     g_status.lastSyncedHash = snapshot.hash;
 }
 
 void UpdateRetryStatus(int consecutiveRetryCount, int backoffSeconds)
 {
-    LOCK(cs_unity_status);
+    LOCK(cs_zebra_compat_status);
     g_status.consecutiveRetryCount = consecutiveRetryCount;
     g_status.currentBackoffSeconds = backoffSeconds;
     g_status.nextRetryTime = backoffSeconds > 0 ? GetTime() + backoffSeconds : 0;
@@ -385,7 +385,7 @@ struct SyncOutcome {
 bool IsTransientIdentityFailure(const ZebraIdentity& identity);
 
 CommonAncestorSearchResult FindCommonAncestorWithZebra(
-    UnityZebraClient& client,
+    ZebraCompatClient& client,
     const LocalTipSnapshot& localTip,
     int zebraBestHeight,
     const std::string& zebraBestHash)
@@ -404,7 +404,7 @@ CommonAncestorSearchResult FindCommonAncestorWithZebra(
         result.overLimit = true;
         result.disconnectLength = localTip.height - maxCompareHeight;
         result.error = strprintf(
-            "Zebra best chain is below Unity reorg policy: local height %d, Zebra height %d, max reorg %u",
+            "Zebra best chain is below zebra-compat reorg policy: local height %d, Zebra height %d, max reorg %u",
             localTip.height,
             zebraBestHeight,
             MAX_REORG_LENGTH);
@@ -453,7 +453,7 @@ CommonAncestorSearchResult FindCommonAncestorWithZebra(
 }
 
 SyncOutcome ValidatePostIngestionTipOnZebraBestChain(
-    UnityZebraClient& client,
+    ZebraCompatClient& client,
     const CChainParams& chainparams,
     const LocalTipSnapshot& localTip,
     int expectedHeight,
@@ -530,7 +530,7 @@ SyncOutcome ValidatePostIngestionTipOnZebraBestChain(
             "ready",
             "degraded",
             "zebra_tip_changed_during_sync",
-            strprintf("Zebra tip changed from %s at height %d to %s at height %d during Unity sync",
+            strprintf("Zebra tip changed from %s at height %d to %s at height %d during zebra-compat sync",
                       expectedHash, expectedHeight, current.bestBlockHash, current.blocks));
         return {false, false};
     }
@@ -575,8 +575,8 @@ SyncOutcome ValidatePostIngestionTipOnZebraBestChain(
     return {false, true};
 }
 
-SyncOutcome SyncUnityReorgToZebraBest(
-    UnityZebraClient& client,
+SyncOutcome SyncZebraCompatReorgToZebraBest(
+    ZebraCompatClient& client,
     const CChainParams& chainparams,
     const LocalTipSnapshot& localTip,
     int zebraBestHeight,
@@ -615,7 +615,7 @@ SyncOutcome SyncUnityReorgToZebraBest(
     }
 
     const int branchLength = zebraBestHeight - ancestor.height;
-    if (branchLength > UnitySyncBatchSize()) {
+    if (branchLength > ZebraCompatSyncBatchSize()) {
         // CP7 keeps the no-partial-branch contract by bounding the whole
         // replacement branch to one configured acquisition batch. CP10 can
         // replace this with chunked accept plus a single activation.
@@ -623,8 +623,8 @@ SyncOutcome SyncUnityReorgToZebraBest(
             "failed",
             "failed",
             "reorg_branch_too_large",
-            strprintf("Zebra replacement branch has %d blocks, exceeding Unity batch limit %d",
-                      branchLength, UnitySyncBatchSize()));
+            strprintf("Zebra replacement branch has %d blocks, exceeding zebra-compat batch limit %d",
+                      branchLength, ZebraCompatSyncBatchSize()));
         return {false, true};
     }
 
@@ -677,7 +677,7 @@ SyncOutcome SyncUnityReorgToZebraBest(
     UpdateSyncedTip(newTip);
     UpdateSyncStatus("ready", "synced", "zebra_tip_matched", "", true);
     LogPrintf(
-        "Unity followed Zebra best-chain reorg: ancestor=%s height=%d disconnected=%d new_tip=%s height=%d\n",
+        "zebra-compat followed Zebra best-chain reorg: ancestor=%s height=%d disconnected=%d new_tip=%s height=%d\n",
         ancestor.hash.c_str(),
         ancestor.height,
         ancestor.disconnectLength,
@@ -701,7 +701,7 @@ struct ForwardFetch {
 // Fetch the best-chain hashes and raw block data for [startHeight, endHeight] from
 // Zebra. Used for the priming batch and, on a worker via std::async, to prefetch the
 // next batch while the current one is applied.
-ForwardFetch FetchForwardRange(UnityZebraClient& client, int startHeight, int endHeight)
+ForwardFetch FetchForwardRange(ZebraCompatClient& client, int startHeight, int endHeight)
 {
     ForwardFetch fetch;
     fetch.startHeight = startHeight;
@@ -721,18 +721,18 @@ ForwardFetch FetchForwardRange(UnityZebraClient& client, int startHeight, int en
 // batches are ever held in flight. Preconditions, checked by the caller: the local tip
 // is on Zebra's best chain and strictly below Zebra's tip.
 SyncOutcome RunForwardSyncPipelined(
-    UnityZebraClient& client,
-    UnityZebraClient& prefetchClient,
+    ZebraCompatClient& client,
+    ZebraCompatClient& prefetchClient,
     const CChainParams& chainparams,
     const LocalTipSnapshot& startTip,
     int zebraBestHeight,
     const std::string& zebraBestHash)
 {
-    const int batch = UnitySyncBatchSize();
+    const int batch = ZebraCompatSyncBatchSize();
     const int64_t windowEnd = std::min<int64_t>(
         zebraBestHeight,
         static_cast<int64_t>(startTip.height) +
-            static_cast<int64_t>(batch) * UnityForwardDriveBatches());
+            static_cast<int64_t>(batch) * ZebraCompatForwardDriveBatches());
 
     std::string expectedPrevHash = startTip.hash;
     bool progressedAny = false;
@@ -751,7 +751,7 @@ SyncOutcome RunForwardSyncPipelined(
 
     while (true) {
         boost::this_thread::interruption_point();
-        if (g_unity_interrupt.load()) {
+        if (g_zebra_compat_interrupt.load()) {
             return {progressedAny, false};
         }
 
@@ -808,7 +808,7 @@ SyncOutcome RunForwardSyncPipelined(
                 newTip,
                 zebraBestHeight,
                 zebraBestHash,
-                strprintf("local tip after Unity chunk is %s at height %d, expected %s at height %d",
+                strprintf("local tip after zebra-compat chunk is %s at height %d, expected %s at height %d",
                           newTip.hash, newTip.height, current.hashes.back(), current.endHeight),
                 "local_tip_not_on_zebra_best_chain_after_chunk",
                 /*reorgContext=*/false);
@@ -839,9 +839,9 @@ SyncOutcome RunForwardSyncPipelined(
     }
 }
 
-SyncOutcome SyncUnityOnce(
-    UnityZebraClient& client,
-    UnityZebraClient& prefetchClient,
+SyncOutcome SyncZebraCompatOnce(
+    ZebraCompatClient& client,
+    ZebraCompatClient& prefetchClient,
     const CChainParams& chainparams)
 {
     ZebraIdentity identity = client.CheckIdentity(chainparams);
@@ -863,7 +863,7 @@ SyncOutcome SyncUnityOnce(
     CommonAncestorSearchResult ancestor =
         FindCommonAncestorWithZebra(client, localTip, zebraBestHeight, zebraBestHash);
     if (!ancestor.found || ancestor.height != localTip.height) {
-        return SyncUnityReorgToZebraBest(
+        return SyncZebraCompatReorgToZebraBest(
             client,
             chainparams,
             localTip,
@@ -891,14 +891,14 @@ SyncOutcome SyncUnityOnce(
 
 bool IsSyncedForMempoolMirror()
 {
-    LOCK(cs_unity_status);
+    LOCK(cs_zebra_compat_status);
     return g_status.tipMatchedZebra &&
         g_status.zebra.identityVerified;
 }
 
-bool IsUnitySynced()
+bool IsZebraCompatSynced()
 {
-    LOCK(cs_unity_status);
+    LOCK(cs_zebra_compat_status);
     return g_status.syncState == "synced" && g_status.tipMatchedZebra;
 }
 
@@ -909,11 +909,11 @@ bool IsMempoolMirrorReady(const MempoolMirrorStatus& status, int64_t now)
         return false;
     }
 
-    const int64_t maxAge = std::max<int64_t>(UnityPollIntervalSeconds() * 2, 1);
+    const int64_t maxAge = std::max<int64_t>(ZebraCompatPollIntervalSeconds() * 2, 1);
     return now - status.lastUpdate <= maxAge;
 }
 
-void SleepUnityRetry(int& consecutiveRetryCount, bool countTransientFailure)
+void SleepZebraCompatRetry(int& consecutiveRetryCount, bool countTransientFailure)
 {
     if (countTransientFailure) {
         consecutiveRetryCount++;
@@ -921,76 +921,76 @@ void SleepUnityRetry(int& consecutiveRetryCount, bool countTransientFailure)
         consecutiveRetryCount = 0;
     }
     const int backoffSeconds = countTransientFailure ?
-        UnityRetryBackoffSeconds(consecutiveRetryCount) : 0;
+        ZebraCompatRetryBackoffSeconds(consecutiveRetryCount) : 0;
     UpdateRetryStatus(consecutiveRetryCount, backoffSeconds);
-    MilliSleep((backoffSeconds > 0 ? backoffSeconds : UnityPollIntervalSeconds()) * 1000);
+    MilliSleep((backoffSeconds > 0 ? backoffSeconds : ZebraCompatPollIntervalSeconds()) * 1000);
 }
 
-void UnityBlockSourceThread(ZebraClientConfig config, std::string chainName)
+void ZebraCompatBlockSourceThread(ZebraClientConfig config, std::string chainName)
 {
-    RenameThread("zcash-unity");
+    RenameThread("zcash-zebra-compat");
     try {
         const CChainParams& chainparams = Params(chainName);
-        UnityZebraClient client(config, std::unique_ptr<ZebraRpcTransport>(new LibeventZebraRpcTransport()));
+        ZebraCompatClient client(config, std::unique_ptr<ZebraRpcTransport>(new LibeventZebraRpcTransport()));
         // Dedicated client for prefetching the next batch concurrently with applying the
         // current one. A second client keeps acquisition and application from sharing any
         // per-call transport state.
-        UnityZebraClient prefetchClient(config, std::unique_ptr<ZebraRpcTransport>(new LibeventZebraRpcTransport()));
+        ZebraCompatClient prefetchClient(config, std::unique_ptr<ZebraRpcTransport>(new LibeventZebraRpcTransport()));
         bool stickyFault = false;
         int consecutiveRetryCount = 0;
-        while (!g_unity_interrupt.load()) {
+        while (!g_zebra_compat_interrupt.load()) {
             boost::this_thread::interruption_point();
             try {
                 if (stickyFault) {
                     UpdateRetryStatus(consecutiveRetryCount, 0);
-                    MilliSleep(UnityPollIntervalSeconds() * 1000);
+                    MilliSleep(ZebraCompatPollIntervalSeconds() * 1000);
                     continue;
                 }
-                SyncOutcome outcome = SyncUnityOnce(client, prefetchClient, chainparams);
+                SyncOutcome outcome = SyncZebraCompatOnce(client, prefetchClient, chainparams);
                 stickyFault = outcome.stickyFault;
-                const bool synced = IsUnitySynced();
+                const bool synced = IsZebraCompatSynced();
                 if (outcome.progressed || stickyFault || synced || !outcome.transientFailure) {
                     consecutiveRetryCount = 0;
                 }
                 if (!stickyFault && IsSyncedForMempoolMirror()) {
                     MempoolMirrorResult mirrorResult = SyncMempoolMirrorOnce(client, chainparams);
                     if (!mirrorResult.success) {
-                        LogPrintf("Unity mempool mirror polling failed: %s\n", mirrorResult.error.c_str());
+                        LogPrintf("zebra-compat mempool mirror polling failed: %s\n", mirrorResult.error.c_str());
                     }
                 }
                 if (!outcome.progressed || stickyFault) {
-                    SleepUnityRetry(consecutiveRetryCount, !stickyFault && !synced && outcome.transientFailure);
+                    SleepZebraCompatRetry(consecutiveRetryCount, !stickyFault && !synced && outcome.transientFailure);
                 } else {
                     UpdateRetryStatus(0, 0);
                 }
             } catch (const boost::thread_interrupted&) {
                 throw;
             } catch (const std::exception& e) {
-                if (!g_unity_interrupt.load()) {
+                if (!g_zebra_compat_interrupt.load()) {
                     UpdateSyncStatus("waiting", "degraded", "zebra_rpc_error", e.what());
-                    SleepUnityRetry(consecutiveRetryCount, true);
+                    SleepZebraCompatRetry(consecutiveRetryCount, true);
                 }
             }
         }
     } catch (const boost::thread_interrupted&) {
-        LogPrintf("Unity block source thread interrupted\n");
+        LogPrintf("zebra-compat block source thread interrupted\n");
     }
-    LogPrintf("Unity block source thread stopped\n");
+    LogPrintf("zebra-compat block source thread stopped\n");
 }
 
-void InterruptUnityWorker()
+void InterruptZebraCompatWorker()
 {
-    g_unity_interrupt = true;
-    if (g_unity_worker) {
-        g_unity_worker->interrupt();
+    g_zebra_compat_interrupt = true;
+    if (g_zebra_compat_worker) {
+        g_zebra_compat_worker->interrupt();
     }
 }
 
-void JoinUnityWorker()
+void JoinZebraCompatWorker()
 {
-    if (g_unity_worker) {
-        g_unity_worker->join();
-        g_unity_worker.reset();
+    if (g_zebra_compat_worker) {
+        g_zebra_compat_worker->join();
+        g_zebra_compat_worker.reset();
     }
 }
 
@@ -1048,22 +1048,22 @@ CommonAncestorSearchResult FindCommonAncestorInHashRange(
 
 bool IsEnabled()
 {
-    // After validation, every Unity configuration has local Zcash P2P disabled.
+    // After validation, every zebra-compat configuration has local Zcash P2P disabled.
     // The explicit checks keep pre-validation status reporting robust.
     return GetBoolArg("-zebra-compat", false) ||
         GetArg("-blocksource", BLOCK_SOURCE_P2P) == BLOCK_SOURCE_ZEBRA ||
         !IsP2PEnabled();
 }
 
-int UnityRetryBackoffSeconds(int consecutiveFailures)
+int ZebraCompatRetryBackoffSeconds(int consecutiveFailures)
 {
     if (consecutiveFailures <= 0) {
         return 0;
     }
 
-    int backoff = std::min(UnityPollIntervalSeconds(), MAX_UNITY_RETRY_BACKOFF_SECONDS);
-    for (int i = 1; i < consecutiveFailures && backoff < MAX_UNITY_RETRY_BACKOFF_SECONDS; i++) {
-        backoff = std::min(MAX_UNITY_RETRY_BACKOFF_SECONDS, backoff * 2);
+    int backoff = std::min(ZebraCompatPollIntervalSeconds(), MAX_ZEBRA_COMPAT_RETRY_BACKOFF_SECONDS);
+    for (int i = 1; i < consecutiveFailures && backoff < MAX_ZEBRA_COMPAT_RETRY_BACKOFF_SECONDS; i++) {
+        backoff = std::min(MAX_ZEBRA_COMPAT_RETRY_BACKOFF_SECONDS, backoff * 2);
     }
     return backoff;
 }
@@ -1137,51 +1137,51 @@ std::string ValidateParameterInteraction()
         return optionError;
     }
 
-    optionError = ValidateUnityPreset();
+    optionError = ValidateZebraCompatPreset();
     if (!optionError.empty()) {
         return optionError;
     }
 
-    const int64_t configuredSyncBatchSize = GetArg("-zebra-compat-sync-batch-size", UnitySyncBatchSize());
+    const int64_t configuredSyncBatchSize = GetArg("-zebra-compat-sync-batch-size", ZebraCompatSyncBatchSize());
     if (configuredSyncBatchSize < 1) {
         return "-zebra-compat-sync-batch-size must be at least 1";
     }
-    const int effectiveSyncBatchSize = UnitySyncBatchSize();
+    const int effectiveSyncBatchSize = ZebraCompatSyncBatchSize();
     if (configuredSyncBatchSize > effectiveSyncBatchSize) {
         return "-zebra-compat-sync-batch-size=" + std::to_string(configuredSyncBatchSize) +
-            " exceeds Unity's raw block response memory budget; use " +
+            " exceeds zebra-compat's raw block response memory budget; use " +
             std::to_string(effectiveSyncBatchSize) + " or lower";
     }
 
     return "";
 }
 
-bool StartUnityNode(boost::thread_group& threadGroup, CScheduler& scheduler, const CChainParams& chainparams)
+bool StartZebraCompatNode(boost::thread_group& threadGroup, CScheduler& scheduler, const CChainParams& chainparams)
 {
     (void)threadGroup;
     (void)scheduler;
-    InterruptUnityWorker();
-    JoinUnityWorker();
-    g_unity_started = true;
-    g_unity_interrupt = false;
-    LogPrintf("Unity node mode enabled on %s\n",
+    InterruptZebraCompatWorker();
+    JoinZebraCompatWorker();
+    g_zebra_compat_started = true;
+    g_zebra_compat_interrupt = false;
+    LogPrintf("zebra-compat node mode enabled on %s\n",
               chainparams.NetworkIDString().c_str());
 
-    UnityStatus status;
+    ZebraCompatStatus status;
     status.serviceState = "waiting";
     status.syncState = "degraded";
     status.syncDetail = "waiting_for_zebra_endpoint";
 
-    if (IsTrustedValidationEnabled() && !InitUnityMetadata()) {
+    if (IsTrustedValidationEnabled() && !InitZebraCompatMetadata()) {
         status.serviceState = "failed";
         status.syncState = "failed";
-        status.syncDetail = "unity_metadata_error";
-        status.lastError = GetUnityMetadataLastError();
+        status.syncDetail = "zebra_compat_metadata_error";
+        status.lastError = GetZebraCompatMetadataLastError();
         if (status.lastError.empty()) {
-            status.lastError = "failed to initialize Unity metadata database";
+            status.lastError = "failed to initialize zebra-compat metadata database";
         }
-        LogPrintf("Unity metadata initialization failed: %s\n", status.lastError.c_str());
-        LOCK(cs_unity_status);
+        LogPrintf("zebra-compat metadata initialization failed: %s\n", status.lastError.c_str());
+        LOCK(cs_zebra_compat_status);
         g_status = status;
         return true;
     }
@@ -1194,7 +1194,7 @@ bool StartUnityNode(boost::thread_group& threadGroup, CScheduler& scheduler, con
             status.serviceState = "failed";
             status.syncState = "failed";
             status.syncDetail = "zebra_configuration_error";
-            LogPrintf("Unity Zebra configuration failed: %s\n", error);
+            LogPrintf("zebra-compat Zebra configuration failed: %s\n", error);
         } else {
             LogPrintf("zebra-compat node waiting for Zebra endpoint configuration (-zebra-compat-url)\n");
         }
@@ -1202,47 +1202,47 @@ bool StartUnityNode(boost::thread_group& threadGroup, CScheduler& scheduler, con
         status.serviceState = "waiting";
         status.syncState = "degraded";
         status.syncDetail = "waiting_for_zebra_health";
-        LogPrintf("Unity node starting Zebra polling worker for %s\n", config.endpoint.url.c_str());
+        LogPrintf("zebra-compat node starting Zebra polling worker for %s\n", config.endpoint.url.c_str());
         {
-            LOCK(cs_unity_status);
+            LOCK(cs_zebra_compat_status);
             g_status = status;
         }
-        g_unity_worker.reset(new boost::thread(boost::bind(
-            &UnityBlockSourceThread,
+        g_zebra_compat_worker.reset(new boost::thread(boost::bind(
+            &ZebraCompatBlockSourceThread,
             config,
             chainparams.NetworkIDString())));
         return true;
     }
 
     {
-        LOCK(cs_unity_status);
+        LOCK(cs_zebra_compat_status);
         g_status = status;
     }
     return true;
 }
 
-void InterruptUnityNode()
+void InterruptZebraCompatNode()
 {
-    InterruptUnityWorker();
+    InterruptZebraCompatWorker();
 }
 
-void StopUnityNode()
+void StopZebraCompatNode()
 {
-    InterruptUnityNode();
-    JoinUnityWorker();
-    if (g_unity_started.exchange(false)) {
-        LogPrintf("Unity node stopped\n");
+    InterruptZebraCompatNode();
+    JoinZebraCompatWorker();
+    if (g_zebra_compat_started.exchange(false)) {
+        LogPrintf("zebra-compat node stopped\n");
     }
-    StopUnityMetadata();
+    StopZebraCompatMetadata();
     {
-        LOCK(cs_unity_status);
+        LOCK(cs_zebra_compat_status);
         g_status.serviceState = "stopped";
     }
 }
 
 void RecordBlockIngestionResult(const BlockIngestionResult& result)
 {
-    LOCK(cs_unity_status);
+    LOCK(cs_zebra_compat_status);
     g_status.lastIngestion = result;
     g_status.tipMatchedZebra = false;
     if (result.success) {
@@ -1256,21 +1256,21 @@ void RecordBlockIngestionResult(const BlockIngestionResult& result)
     }
 }
 
-UniValue GetUnityInfo()
+UniValue GetZebraCompatInfo()
 {
     UniValue obj(UniValue::VOBJ);
     const bool enabled = IsEnabled();
     const std::string zebraUrl = GetArg("-zebra-compat-url", "");
-    UnityStatus status;
+    ZebraCompatStatus status;
     {
-        LOCK(cs_unity_status);
+        LOCK(cs_zebra_compat_status);
         status = g_status;
     }
     const MempoolMirrorStatus mirrorStatus = GetMempoolMirrorStatus();
     const TxForwardingStatus txStatus = GetTxForwardingStatus();
 
     obj.pushKV("enabled", enabled);
-    obj.pushKV("service_state", enabled ? (g_unity_started ? status.serviceState : "stopped") : "disabled");
+    obj.pushKV("service_state", enabled ? (g_zebra_compat_started ? status.serviceState : "stopped") : "disabled");
     obj.pushKV("blocksource", GetArg("-blocksource", BLOCK_SOURCE_P2P));
     obj.pushKV("p2p", IsP2PEnabled());
     obj.pushKV("blockvalidation", GetArg("-blockvalidation", BLOCK_VALIDATION_FULL));
@@ -1454,10 +1454,10 @@ UniValue GetUnityInfo()
     obj.pushKV("metrics", metrics);
 
     UniValue limits(UniValue::VOBJ);
-    limits.pushKV("poll_interval_seconds", UnityPollIntervalSeconds());
-    limits.pushKV("max_retry_backoff_seconds", MAX_UNITY_RETRY_BACKOFF_SECONDS);
-    limits.pushKV("sync_batch_size", UnitySyncBatchSize());
-    limits.pushKV("forward_drive_batches", UnityForwardDriveBatches());
+    limits.pushKV("poll_interval_seconds", ZebraCompatPollIntervalSeconds());
+    limits.pushKV("max_retry_backoff_seconds", MAX_ZEBRA_COMPAT_RETRY_BACKOFF_SECONDS);
+    limits.pushKV("sync_batch_size", ZebraCompatSyncBatchSize());
+    limits.pushKV("forward_drive_batches", ZebraCompatForwardDriveBatches());
     limits.pushKV("zebra_rpc_max_response_body_bytes", static_cast<int64_t>(ZebraRpcMaxResponseBodySize()));
     limits.pushKV("mempool_txids_per_poll", static_cast<int64_t>(MaxMempoolMirrorTxIdsPerPoll()));
     limits.pushKV("mempool_divergence_details", static_cast<int64_t>(MaxMempoolMirrorDivergenceDetails()));
@@ -1470,19 +1470,19 @@ UniValue GetUnityInfo()
 void ThrowIfP2PDisabled(const std::string& method)
 {
     if (!IsP2PEnabled()) {
-        throw JSONRPCError(RPC_MISC_ERROR, strprintf("%s is unavailable when Zcash P2P is disabled by unity mode", method));
+        throw JSONRPCError(RPC_MISC_ERROR, strprintf("%s is unavailable when Zcash P2P is disabled by zebra-compat mode", method));
     }
 }
 
 void ThrowIfMiningDisabled(const std::string& method)
 {
     if (IsEnabled()) {
-        throw JSONRPCError(RPC_MISC_ERROR, strprintf("%s is unavailable in unity mode", method));
+        throw JSONRPCError(RPC_MISC_ERROR, strprintf("%s is unavailable in zebra-compat mode", method));
     }
 }
 
-UnitySyncTestOutcome TEST_ValidatePostIngestionTipOnZebraBestChain(
-    UnityZebraClient& client,
+ZebraCompatSyncTestOutcome TEST_ValidatePostIngestionTipOnZebraBestChain(
+    ZebraCompatClient& client,
     const CChainParams& chainparams,
     int localTipHeight,
     const std::string& localTipHash,
@@ -1506,11 +1506,11 @@ UnitySyncTestOutcome TEST_ValidatePostIngestionTipOnZebraBestChain(
         offChainDetail,
         reorgContext);
 
-    UnitySyncTestOutcome testOutcome;
+    ZebraCompatSyncTestOutcome testOutcome;
     testOutcome.progressed = outcome.progressed;
     testOutcome.stickyFault = outcome.stickyFault;
     testOutcome.transientFailure = outcome.transientFailure;
     return testOutcome;
 }
 
-} // namespace unity
+} // namespace zebra_compat

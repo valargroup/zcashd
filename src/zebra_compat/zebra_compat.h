@@ -21,9 +21,9 @@ namespace boost {
 class thread_group;
 }
 
-namespace unity {
+namespace zebra_compat {
 
-class UnityZebraClient;
+class ZebraCompatClient;
 
 static const char* const BLOCK_SOURCE_P2P = "p2p";
 static const char* const BLOCK_SOURCE_ZEBRA = "zebra";
@@ -37,9 +37,9 @@ bool IsTrustedValidationEnabled();
 void InitParameterInteraction();
 std::string ValidateParameterInteraction();
 
-bool StartUnityNode(boost::thread_group& threadGroup, CScheduler& scheduler, const CChainParams& chainparams);
-void InterruptUnityNode();
-void StopUnityNode();
+bool StartZebraCompatNode(boost::thread_group& threadGroup, CScheduler& scheduler, const CChainParams& chainparams);
+void InterruptZebraCompatNode();
+void StopZebraCompatNode();
 
 struct CommonAncestorSearchResult {
     bool found = false;
@@ -57,22 +57,22 @@ CommonAncestorSearchResult FindCommonAncestorInHashRange(
     const std::vector<std::string>& zebraHashes,
     int maxReorgLength);
 
-UniValue GetUnityInfo();
+UniValue GetZebraCompatInfo();
 void ThrowIfP2PDisabled(const std::string& method);
 void ThrowIfMiningDisabled(const std::string& method);
 
-void RegisterUnityRPCCommands(CRPCTable& tableRPC);
+void RegisterZebraCompatRPCCommands(CRPCTable& tableRPC);
 
-int UnityRetryBackoffSeconds(int consecutiveFailures);
+int ZebraCompatRetryBackoffSeconds(int consecutiveFailures);
 
-struct UnitySyncTestOutcome {
+struct ZebraCompatSyncTestOutcome {
     bool progressed = false;
     bool stickyFault = false;
     bool transientFailure = false;
 };
 
-UnitySyncTestOutcome TEST_ValidatePostIngestionTipOnZebraBestChain(
-    UnityZebraClient& client,
+ZebraCompatSyncTestOutcome TEST_ValidatePostIngestionTipOnZebraBestChain(
+    ZebraCompatClient& client,
     const CChainParams& chainparams,
     int localTipHeight,
     const std::string& localTipHash,
@@ -82,6 +82,6 @@ UnitySyncTestOutcome TEST_ValidatePostIngestionTipOnZebraBestChain(
     const std::string& offChainDetail,
     bool reorgContext = false);
 
-} // namespace unity
+} // namespace zebra_compat
 
 #endif // BITCOIN_ZEBRA_COMPAT_ZEBRA_COMPAT_H

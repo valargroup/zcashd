@@ -185,7 +185,7 @@ UniValue generate(const UniValue& params, bool fHelp)
             + HelpExampleCli("generate", "11")
         );
 
-    unity::ThrowIfMiningDisabled("generate");
+    zebra_compat::ThrowIfMiningDisabled("generate");
 
     if (!Params().MineBlocksOnDemand())
         throw JSONRPCError(RPC_METHOD_NOT_FOUND, "This method can only be used on regtest");
@@ -304,7 +304,7 @@ UniValue setgenerate(const UniValue& params, bool fHelp)
             + HelpExampleRpc("setgenerate", "true, 1")
         );
 
-    unity::ThrowIfMiningDisabled("setgenerate");
+    zebra_compat::ThrowIfMiningDisabled("setgenerate");
 
     if (Params().MineBlocksOnDemand())
         throw JSONRPCError(RPC_METHOD_NOT_FOUND, "Use the generate method instead of setgenerate on this network");
@@ -515,7 +515,7 @@ UniValue getblocktemplate(const UniValue& params, bool fHelp)
             + HelpExampleRpc("getblocktemplate", "")
          );
 
-    unity::ThrowIfMiningDisabled("getblocktemplate");
+    zebra_compat::ThrowIfMiningDisabled("getblocktemplate");
 
     LOCK(cs_main);
 
@@ -879,7 +879,7 @@ UniValue submitblock(const UniValue& params, bool fHelp)
             + HelpExampleRpc("submitblock", "\"mydata\"")
         );
 
-    unity::ThrowIfMiningDisabled("submitblock");
+    zebra_compat::ThrowIfMiningDisabled("submitblock");
 
     CBlock block;
     if (!DecodeHexBlk(block, params[0].get_str()))

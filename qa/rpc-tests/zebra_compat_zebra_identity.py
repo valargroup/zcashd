@@ -97,7 +97,7 @@ class FakeZebraServer:
             self.server.server_close()
 
 
-class UnityZebraIdentityTest(BitcoinTestFramework):
+class ZebraCompatZebraIdentityTest(BitcoinTestFramework):
 
     def __init__(self):
         super().__init__()
@@ -108,7 +108,7 @@ class UnityZebraIdentityTest(BitcoinTestFramework):
         self.nodes = []
         self.is_network_split = False
 
-    def unity_args(self, endpoint):
+    def zebra_compat_args(self, endpoint):
         return [
             '-zebra-compat',
             '-zebra-compat-url=%s' % endpoint,
@@ -121,7 +121,7 @@ class UnityZebraIdentityTest(BitcoinTestFramework):
         wrong_network_zebra = FakeZebraServer(network='main')
         wrong_genesis_zebra = FakeZebraServer(genesis=WRONG_GENESIS)
         try:
-            node = start_node(0, self.options.tmpdir, self.unity_args(good_zebra.start()))
+            node = start_node(0, self.options.tmpdir, self.zebra_compat_args(good_zebra.start()))
             wait_until(lambda: node.getzebracompatinfo()['sync']['state'] == 'synced')
             info = node.getzebracompatinfo()
             assert_equal(info['service_state'], 'ready')
@@ -136,7 +136,7 @@ class UnityZebraIdentityTest(BitcoinTestFramework):
             assert_equal(info['sync']['detail'], 'zebra_tip_matched')
             stop_node(node, 0)
 
-            node = start_node(1, self.options.tmpdir, self.unity_args(wrong_network_zebra.start()))
+            node = start_node(1, self.options.tmpdir, self.zebra_compat_args(wrong_network_zebra.start()))
             wait_until(lambda: node.getzebracompatinfo()['sync']['state'] == 'failed')
             info = node.getzebracompatinfo()
             assert_equal(info['service_state'], 'failed')
@@ -146,7 +146,7 @@ class UnityZebraIdentityTest(BitcoinTestFramework):
             assert 'network mismatch' in info['sync']['last_error']
             stop_node(node, 1)
 
-            node = start_node(2, self.options.tmpdir, self.unity_args(wrong_genesis_zebra.start()))
+            node = start_node(2, self.options.tmpdir, self.zebra_compat_args(wrong_genesis_zebra.start()))
             wait_until(lambda: node.getzebracompatinfo()['sync']['state'] == 'failed')
             info = node.getzebracompatinfo()
             assert_equal(info['service_state'], 'failed')
@@ -162,4 +162,4 @@ class UnityZebraIdentityTest(BitcoinTestFramework):
 
 
 if __name__ == '__main__':
-    UnityZebraIdentityTest().main()
+    ZebraCompatZebraIdentityTest().main()

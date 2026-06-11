@@ -13,9 +13,9 @@
 class CChainParams;
 class UniValue;
 
-namespace unity {
+namespace zebra_compat {
 
-class UnityZebraClient;
+class ZebraCompatClient;
 
 struct MempoolMirrorStatus {
     std::string source = "zebra-poll";
@@ -38,13 +38,13 @@ struct MempoolMirrorResult {
     std::string error;
 };
 
-MempoolMirrorResult SyncMempoolMirrorOnce(UnityZebraClient& client, const CChainParams& chainparams);
+MempoolMirrorResult SyncMempoolMirrorOnce(ZebraCompatClient& client, const CChainParams& chainparams);
 MempoolMirrorStatus GetMempoolMirrorStatus();
 UniValue MempoolMirrorStatusToJSON();
 void ResetMempoolMirrorForTesting();
 size_t MaxMempoolMirrorTxIdsPerPoll();
 size_t MaxMempoolMirrorDivergenceDetails();
 
-} // namespace unity
+} // namespace zebra_compat
 
 #endif // ZCASH_ZEBRA_COMPAT_MEMPOOL_MIRROR_H

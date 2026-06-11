@@ -12,7 +12,7 @@
 
 class CChainParams;
 
-namespace unity {
+namespace zebra_compat {
 
 struct TrustedBlockBoundary {
     int nHeight = -1;
@@ -38,13 +38,13 @@ struct TrustedBlockBoundary {
 bool WriteTrustedBlockBoundary(const TrustedBlockBoundary& boundary);
 bool ReadTrustedBlockBoundary(TrustedBlockBoundary& boundary);
 bool ClearTrustedBlockBoundary();
-bool InitUnityMetadata();
-void StopUnityMetadata();
+bool InitZebraCompatMetadata();
+void StopZebraCompatMetadata();
 bool GetCachedTrustedBlockBoundary(TrustedBlockBoundary& boundary);
-std::string GetUnityMetadataLastError();
+std::string GetZebraCompatMetadataLastError();
 TrustedBlockBoundary MakeTrustedBlockBoundary(int nHeight, const uint256& hash, const CChainParams& chainparams);
 bool TrustedBoundaryMatchesConfiguredSource(const TrustedBlockBoundary& boundary, const CChainParams& chainparams);
 
-} // namespace unity
+} // namespace zebra_compat
 
 #endif // ZCASH_ZEBRA_COMPAT_METADATA_H

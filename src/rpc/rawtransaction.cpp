@@ -1247,7 +1247,7 @@ UniValue sendrawtransaction(const UniValue& params, bool fHelp)
         throw runtime_error(
             "sendrawtransaction \"hexstring\" ( allowhighfees )\n"
             "\nSubmits raw transaction (serialized, hex-encoded) to local node and network.\n"
-            "\nIn Unity mode, forwards to Zebra after local preflight and returns success only after Zebra accepts.\n"
+            "\nIn zebra-compat mode, forwards to Zebra after local preflight and returns success only after Zebra accepts.\n"
             "\nAlso see createrawtransaction and signrawtransaction calls.\n"
             "\nArguments:\n"
             "1. \"hexstring\"    (string, required) The hex string of the raw transaction)\n"
@@ -1265,7 +1265,7 @@ UniValue sendrawtransaction(const UniValue& params, bool fHelp)
             + HelpExampleRpc("sendrawtransaction", "\"signedhex\"")
         );
 
-    if (unity::IsEnabled()) {
+    if (zebra_compat::IsEnabled()) {
         RPCTypeCheck(params, boost::assign::list_of(UniValue::VSTR)(UniValue::VBOOL));
 
         // parse hex string from parameter
@@ -1311,7 +1311,7 @@ UniValue sendrawtransaction(const UniValue& params, bool fHelp)
             }
         }
 
-        unity::TxForwardingResult forwardResult = unity::ForwardRawTransaction(txHex, hashTx);
+        zebra_compat::TxForwardingResult forwardResult = zebra_compat::ForwardRawTransaction(txHex, hashTx);
         if (!forwardResult.success) {
             throw JSONRPCError(forwardResult.rpcErrorCode, forwardResult.error);
         }
@@ -1322,7 +1322,7 @@ UniValue sendrawtransaction(const UniValue& params, bool fHelp)
                 CValidationState state;
                 bool fMissingInputs = false;
                 if (!AcceptToMemoryPool(chainparams, mempool, state, tx, true, &fMissingInputs, !fOverrideFees)) {
-                    LogPrintf("Unity sendrawtransaction: Zebra accepted tx %s but local mempool did not accept it: %s\n",
+                    LogPrintf("zebra-compat sendrawtransaction: Zebra accepted tx %s but local mempool did not accept it: %s\n",
                               hashTx.GetHex(), fMissingInputs ? "missing inputs" : FormatStateMessage(state));
                 }
             }

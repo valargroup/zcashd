@@ -17,7 +17,7 @@ from test_framework.util import (
 from zebra_compat_polling_sync import FakePollingZebraServer, wait_until
 
 
-class UnityZMQTest(BitcoinTestFramework):
+class ZebraCompatZMQTest(BitcoinTestFramework):
 
     port = 28342
 
@@ -30,7 +30,7 @@ class UnityZMQTest(BitcoinTestFramework):
         self.nodes = []
         self.is_network_split = False
 
-    def unity_args(self, endpoint):
+    def zebra_compat_args(self, endpoint):
         return [
             '-zebra-compat',
             '-zebra-compat-url=%s' % endpoint,
@@ -43,7 +43,7 @@ class UnityZMQTest(BitcoinTestFramework):
 
     def recv_zmq(self):
         if not self.poller.poll(30000):
-            raise AssertionError('timed out waiting for Unity ZMQ notification')
+            raise AssertionError('timed out waiting for zebra-compat ZMQ notification')
         msg = self.zmq_sub.recv_multipart()
         return msg[0], bytes_to_hex_str(msg[1]), struct.unpack('<I', msg[-1])[-1]
 
@@ -62,12 +62,12 @@ class UnityZMQTest(BitcoinTestFramework):
         self.poller.register(self.zmq_sub, zmq.POLLIN)
 
         try:
-            unity = start_node(1, self.options.tmpdir, self.unity_args(endpoint))
-            wait_until(lambda: unity.getzebracompatinfo()['sync']['state'] == 'synced')
+            zebra_compat = start_node(1, self.options.tmpdir, self.zebra_compat_args(endpoint))
+            wait_until(lambda: zebra_compat.getzebracompatinfo()['sync']['state'] == 'synced')
 
             block_hash = source.generate(1)[0]
             coinbase_txid = source.getblock(block_hash)['tx'][0]
-            wait_until(lambda: unity.getbestblockhash() == block_hash)
+            wait_until(lambda: zebra_compat.getbestblockhash() == block_hash)
 
             seen_block = False
             seen_tx = False
@@ -84,7 +84,7 @@ class UnityZMQTest(BitcoinTestFramework):
             assert seen_block
             assert seen_tx
 
-            stop_node(unity, 1)
+            stop_node(zebra_compat, 1)
             stop_node(source, 0)
         finally:
             self.zmq_sub.close()
@@ -93,4 +93,4 @@ class UnityZMQTest(BitcoinTestFramework):
 
 
 if __name__ == '__main__':
-    UnityZMQTest().main()
+    ZebraCompatZMQTest().main()

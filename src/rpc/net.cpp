@@ -188,7 +188,7 @@ UniValue addnode(const UniValue& params, bool fHelp)
             + HelpExampleRpc("addnode", "\"192.168.0.6:8233\", \"onetry\"")
         );
 
-    unity::ThrowIfP2PDisabled("addnode");
+    zebra_compat::ThrowIfP2PDisabled("addnode");
 
     string strNode = params[0].get_str();
 
@@ -234,7 +234,7 @@ UniValue disconnectnode(const UniValue& params, bool fHelp)
             + HelpExampleRpc("disconnectnode", "\"192.168.0.6:8233\"")
         );
 
-    unity::ThrowIfP2PDisabled("disconnectnode");
+    zebra_compat::ThrowIfP2PDisabled("disconnectnode");
 
     CNode* pNode = FindNode(params[0].get_str());
     if (pNode == NULL)
@@ -278,7 +278,7 @@ UniValue getaddednodeinfo(const UniValue& params, bool fHelp)
             + HelpExampleRpc("getaddednodeinfo", "true, \"192.168.0.201\"")
         );
 
-    unity::ThrowIfP2PDisabled("getaddednodeinfo");
+    zebra_compat::ThrowIfP2PDisabled("getaddednodeinfo");
 
     bool fDns = params[0].get_bool();
 
@@ -590,7 +590,7 @@ UniValue setban(const UniValue& params, bool fHelp)
                             + HelpExampleRpc("setban", "\"192.168.0.6\", \"add\" 86400")
                             );
 
-    unity::ThrowIfP2PDisabled("setban");
+    zebra_compat::ThrowIfP2PDisabled("setban");
 
     CSubNet subNet;
     CNetAddr netAddr;
@@ -641,7 +641,7 @@ UniValue listbanned(const UniValue& params, bool fHelp)
                             + HelpExampleRpc("listbanned", "")
                             );
 
-    unity::ThrowIfP2PDisabled("listbanned");
+    zebra_compat::ThrowIfP2PDisabled("listbanned");
 
     banmap_t banMap;
     CNode::GetBanned(banMap);
@@ -673,7 +673,7 @@ UniValue clearbanned(const UniValue& params, bool fHelp)
                             + HelpExampleRpc("clearbanned", "")
                             );
 
-    unity::ThrowIfP2PDisabled("clearbanned");
+    zebra_compat::ThrowIfP2PDisabled("clearbanned");
 
     CNode::ClearBanned();
 

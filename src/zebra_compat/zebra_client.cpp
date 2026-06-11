@@ -27,24 +27,24 @@
 #include <event2/http.h>
 #include <event2/keyvalq_struct.h>
 
-namespace unity {
+namespace zebra_compat {
 namespace {
 
-const char* const UNITY_JSONRPC_ID = "unity";
+const char* const ZEBRA_COMPAT_JSONRPC_ID = "zebra-compat";
 const size_t ZEBRA_RPC_RESPONSE_BODY_MARGIN = 1024 * 1024;
 // Fits the default 128 MiB response budget while allowing deeper Zebra reorgs.
-const int DEFAULT_UNITY_SYNC_BATCH_SIZE = 30;
-const int MAX_UNITY_SYNC_BATCH_SIZE_BY_COUNT = 1000;
-const int DEFAULT_UNITY_SYNC_RESPONSE_BUDGET_MB = 128;
+const int DEFAULT_ZEBRA_COMPAT_SYNC_BATCH_SIZE = 30;
+const int MAX_ZEBRA_COMPAT_SYNC_BATCH_SIZE_BY_COUNT = 1000;
+const int DEFAULT_ZEBRA_COMPAT_SYNC_RESPONSE_BUDGET_MB = 128;
 
 // Upper bound on the cumulative size of one getblock batch response. This caps how
-// many blocks may be requested per Zebra round-trip (see UnitySyncBatchSize). It is
+// many blocks may be requested per Zebra round-trip (see ZebraCompatSyncBatchSize). It is
 // runtime-tunable via -zebra-compat-sync-response-budget-mb so the acquisition batch can be
 // scaled for throughput experiments without a rebuild; the Zebra server's own
 // max_response_body_size must be configured at least as large.
-size_t UnitySyncRawBlockResponseBudget()
+size_t ZebraCompatSyncRawBlockResponseBudget()
 {
-    int64_t megabytes = GetArg("-zebra-compat-sync-response-budget-mb", DEFAULT_UNITY_SYNC_RESPONSE_BUDGET_MB);
+    int64_t megabytes = GetArg("-zebra-compat-sync-response-budget-mb", DEFAULT_ZEBRA_COMPAT_SYNC_RESPONSE_BUDGET_MB);
     if (megabytes < 1) {
         megabytes = 1;
     }
@@ -161,7 +161,7 @@ std::string MakeJsonRpcRequest(
     const std::string& method,
     const UniValue& params)
 {
-    return JSONRPCRequest(method, params, UniValue(UNITY_JSONRPC_ID));
+    return JSONRPCRequest(method, params, UniValue(ZEBRA_COMPAT_JSONRPC_ID));
 }
 
 std::string MakeJsonRpcBatchRequest(const std::vector<ZebraRpcCall>& calls)
@@ -172,15 +172,15 @@ std::string MakeJsonRpcBatchRequest(const std::vector<ZebraRpcCall>& calls)
         request.pushKV("jsonrpc", "2.0");
         request.pushKV("method", calls[i].method);
         request.pushKV("params", calls[i].params);
-        request.pushKV("id", strprintf("%s-%d", UNITY_JSONRPC_ID, i));
+        request.pushKV("id", strprintf("%s-%d", ZEBRA_COMPAT_JSONRPC_ID, i));
         batch.push_back(request);
     }
     return batch.write();
 }
 
-int UnitySyncBatchSizeFromMemoryBudget()
+int ZebraCompatSyncBatchSizeFromMemoryBudget()
 {
-    const size_t budget = UnitySyncRawBlockResponseBudget();
+    const size_t budget = ZebraCompatSyncRawBlockResponseBudget();
     if (budget <= ZEBRA_RPC_RESPONSE_BODY_MARGIN) {
         return 1;
     }
@@ -188,7 +188,7 @@ int UnitySyncBatchSizeFromMemoryBudget()
     const size_t maxRawBlocks =
         (budget - ZEBRA_RPC_RESPONSE_BODY_MARGIN) /
         (2 * MAX_BLOCK_SIZE + 1024);
-    return std::max<int>(1, std::min<int>(MAX_UNITY_SYNC_BATCH_SIZE_BY_COUNT, maxRawBlocks));
+    return std::max<int>(1, std::min<int>(MAX_ZEBRA_COMPAT_SYNC_BATCH_SIZE_BY_COUNT, maxRawBlocks));
 }
 
 struct HttpCallContext {
@@ -285,17 +285,17 @@ int ZebraRpcError::RpcCode() const
 
 size_t ZebraRpcMaxResponseBodySize()
 {
-    return (static_cast<size_t>(UnitySyncBatchSize()) * (2 * MAX_BLOCK_SIZE + 1024)) +
+    return (static_cast<size_t>(ZebraCompatSyncBatchSize()) * (2 * MAX_BLOCK_SIZE + 1024)) +
         ZEBRA_RPC_RESPONSE_BODY_MARGIN;
 }
 
-int UnitySyncBatchSize()
+int ZebraCompatSyncBatchSize()
 {
-    int64_t configured = GetArg("-zebra-compat-sync-batch-size", DEFAULT_UNITY_SYNC_BATCH_SIZE);
+    int64_t configured = GetArg("-zebra-compat-sync-batch-size", DEFAULT_ZEBRA_COMPAT_SYNC_BATCH_SIZE);
     if (configured < 1) {
         configured = 1;
     }
-    const int maxByMemory = UnitySyncBatchSizeFromMemoryBudget();
+    const int maxByMemory = ZebraCompatSyncBatchSizeFromMemoryBudget();
     if (configured > maxByMemory) {
         configured = maxByMemory;
     }
@@ -326,7 +326,7 @@ bool ParseZebraEndpoint(const std::string& url, ZebraEndpoint& endpoint, std::st
         rest = url.substr(httpPrefix.size());
         defaultPort = 80;
     } else if (boost::algorithm::starts_with(url, httpsPrefix)) {
-        error = "Unity Zebra JSON-RPC currently supports http:// endpoints only";
+        error = "zebra-compat Zebra JSON-RPC currently supports http:// endpoints only";
         return false;
     } else {
         error = "-zebra-compat-url must be an http:// URL";
@@ -488,16 +488,16 @@ ZebraRpcResponse LibeventZebraRpcTransport::CallJsonRpc(
     return response;
 }
 
-UnityZebraClient::UnityZebraClient(ZebraClientConfig config, std::unique_ptr<ZebraRpcTransport> transport) :
+ZebraCompatClient::ZebraCompatClient(ZebraClientConfig config, std::unique_ptr<ZebraRpcTransport> transport) :
     config(std::move(config)),
     transport(std::move(transport))
 {
     if (!this->transport) {
-        throw std::runtime_error("UnityZebraClient requires a transport");
+        throw std::runtime_error("ZebraCompatClient requires a transport");
     }
 }
 
-UniValue UnityZebraClient::CallRpc(const std::string& method, const UniValue& params)
+UniValue ZebraCompatClient::CallRpc(const std::string& method, const UniValue& params)
 {
     ZebraRpcResponse response = transport->Call(config, method, params);
     if (response.body.size() > ZebraRpcMaxResponseBodySize()) {
@@ -541,7 +541,7 @@ UniValue UnityZebraClient::CallRpc(const std::string& method, const UniValue& pa
     return result;
 }
 
-std::vector<UniValue> UnityZebraClient::CallRpcBatch(const std::vector<ZebraRpcCall>& calls)
+std::vector<UniValue> ZebraCompatClient::CallRpcBatch(const std::vector<ZebraRpcCall>& calls)
 {
     if (calls.empty()) {
         return std::vector<UniValue>();
@@ -582,7 +582,7 @@ std::vector<UniValue> UnityZebraClient::CallRpcBatch(const std::vector<ZebraRpcC
     std::vector<UniValue> results;
     results.reserve(calls.size());
     for (size_t i = 0; i < calls.size(); i++) {
-        const std::string id = strprintf("%s-%d", UNITY_JSONRPC_ID, i);
+        const std::string id = strprintf("%s-%d", ZEBRA_COMPAT_JSONRPC_ID, i);
         auto it = repliesById.find(id);
         if (it == repliesById.end()) {
             throw std::runtime_error(strprintf("Zebra JSON-RPC batch response is missing id %s", id));
@@ -610,7 +610,7 @@ std::vector<UniValue> UnityZebraClient::CallRpcBatch(const std::vector<ZebraRpcC
     return results;
 }
 
-ZebraBlockchainInfo UnityZebraClient::GetBlockchainInfo()
+ZebraBlockchainInfo ZebraCompatClient::GetBlockchainInfo()
 {
     UniValue result = CallRpc("getblockchaininfo", NoParams());
     if (!result.isObject()) {
@@ -634,22 +634,22 @@ ZebraBlockchainInfo UnityZebraClient::GetBlockchainInfo()
     return info;
 }
 
-std::string UnityZebraClient::GetBestBlockHash()
+std::string ZebraCompatClient::GetBestBlockHash()
 {
     return RequireHashResult(CallRpc("getbestblockhash", NoParams()), "getbestblockhash");
 }
 
-int UnityZebraClient::GetBlockCount()
+int ZebraCompatClient::GetBlockCount()
 {
     return RequireIntResult(CallRpc("getblockcount", NoParams()), "getblockcount");
 }
 
-std::string UnityZebraClient::GetBlockHash(int height)
+std::string ZebraCompatClient::GetBlockHash(int height)
 {
     return RequireHashResult(CallRpc("getblockhash", OneParam(UniValue(height))), "getblockhash");
 }
 
-std::vector<std::string> UnityZebraClient::GetBlockHashes(int startHeight, int endHeight)
+std::vector<std::string> ZebraCompatClient::GetBlockHashes(int startHeight, int endHeight)
 {
     if (startHeight > endHeight) {
         return std::vector<std::string>();
@@ -673,7 +673,7 @@ std::vector<std::string> UnityZebraClient::GetBlockHashes(int startHeight, int e
     return hashes;
 }
 
-std::string UnityZebraClient::GetRawBlock(const std::string& hash)
+std::string ZebraCompatClient::GetRawBlock(const std::string& hash)
 {
     if (!IsValidHashHex(hash)) {
         throw std::runtime_error("GetRawBlock requires a 64-character block hash");
@@ -685,7 +685,7 @@ std::string UnityZebraClient::GetRawBlock(const std::string& hash)
     return rawBlock;
 }
 
-std::vector<std::string> UnityZebraClient::GetRawBlocks(const std::vector<std::string>& hashes)
+std::vector<std::string> ZebraCompatClient::GetRawBlocks(const std::vector<std::string>& hashes)
 {
     if (hashes.empty()) {
         return std::vector<std::string>();
@@ -693,7 +693,7 @@ std::vector<std::string> UnityZebraClient::GetRawBlocks(const std::vector<std::s
 
     std::vector<std::string> rawBlocks;
     rawBlocks.reserve(hashes.size());
-    const size_t maxBatchSize = static_cast<size_t>(UnitySyncBatchSize());
+    const size_t maxBatchSize = static_cast<size_t>(ZebraCompatSyncBatchSize());
     for (size_t start = 0; start < hashes.size(); start += maxBatchSize) {
         const size_t end = std::min(hashes.size(), start + maxBatchSize);
         std::vector<ZebraRpcCall> calls;
@@ -717,7 +717,7 @@ std::vector<std::string> UnityZebraClient::GetRawBlocks(const std::vector<std::s
     return rawBlocks;
 }
 
-std::vector<std::string> UnityZebraClient::GetRawMempool()
+std::vector<std::string> ZebraCompatClient::GetRawMempool()
 {
     UniValue result = CallRpc("getrawmempool", NoParams());
     if (!result.isArray()) {
@@ -732,7 +732,7 @@ std::vector<std::string> UnityZebraClient::GetRawMempool()
     return txids;
 }
 
-ZebraMempoolInfo UnityZebraClient::GetMempoolInfo()
+ZebraMempoolInfo ZebraCompatClient::GetMempoolInfo()
 {
     UniValue result = CallRpc("getmempoolinfo", NoParams());
     if (!result.isObject()) {
@@ -758,7 +758,7 @@ ZebraMempoolInfo UnityZebraClient::GetMempoolInfo()
     return info;
 }
 
-std::string UnityZebraClient::GetRawTransaction(const std::string& txid)
+std::string ZebraCompatClient::GetRawTransaction(const std::string& txid)
 {
     if (!IsValidHashHex(txid)) {
         throw std::runtime_error("GetRawTransaction requires a 64-character transaction id");
@@ -772,15 +772,15 @@ std::string UnityZebraClient::GetRawTransaction(const std::string& txid)
     return rawTx;
 }
 
-std::vector<std::string> UnityZebraClient::GetRawTransactions(const std::vector<std::string>& txids)
+std::vector<std::string> ZebraCompatClient::GetRawTransactions(const std::vector<std::string>& txids)
 {
     if (txids.empty()) {
         return std::vector<std::string>();
     }
 
-    const size_t maxBatchSize = static_cast<size_t>(UnitySyncBatchSize());
+    const size_t maxBatchSize = static_cast<size_t>(ZebraCompatSyncBatchSize());
     if (txids.size() > maxBatchSize) {
-        throw std::runtime_error("GetRawTransactions batch exceeds Unity batch size");
+        throw std::runtime_error("GetRawTransactions batch exceeds zebra-compat batch size");
     }
 
     std::vector<std::string> rawTxs;
@@ -805,7 +805,7 @@ std::vector<std::string> UnityZebraClient::GetRawTransactions(const std::vector<
     return rawTxs;
 }
 
-std::string UnityZebraClient::SendRawTransaction(const std::string& txHex)
+std::string ZebraCompatClient::SendRawTransaction(const std::string& txHex)
 {
     if (!IsHex(txHex)) {
         throw std::runtime_error("SendRawTransaction requires transaction hex");
@@ -813,7 +813,7 @@ std::string UnityZebraClient::SendRawTransaction(const std::string& txHex)
     return RequireStringResult(CallRpc("sendrawtransaction", OneParam(UniValue(txHex))), "sendrawtransaction");
 }
 
-ZebraIdentity UnityZebraClient::CheckIdentity(const CChainParams& chainparams)
+ZebraIdentity ZebraCompatClient::CheckIdentity(const CChainParams& chainparams)
 {
     ZebraIdentity identity;
     try {
@@ -858,4 +858,4 @@ ZebraIdentity UnityZebraClient::CheckIdentity(const CChainParams& chainparams)
     }
 }
 
-} // namespace unity
+} // namespace zebra_compat

@@ -121,7 +121,7 @@ UniValue getzebracompatinfo(const UniValue& params, bool fHelp)
         );
     }
 
-    return unity::GetUnityInfo();
+    return zebra_compat::GetZebraCompatInfo();
 }
 
 static const CRPCCommand commands[] =
@@ -132,13 +132,13 @@ static const CRPCCommand commands[] =
 
 } // namespace
 
-namespace unity {
+namespace zebra_compat {
 
-void RegisterUnityRPCCommands(CRPCTable& tableRPC)
+void RegisterZebraCompatRPCCommands(CRPCTable& tableRPC)
 {
     for (unsigned int vcidx = 0; vcidx < ARRAYLEN(commands); vcidx++) {
         tableRPC.appendCommand(commands[vcidx].name, &commands[vcidx]);
     }
 }
 
-} // namespace unity
+} // namespace zebra_compat

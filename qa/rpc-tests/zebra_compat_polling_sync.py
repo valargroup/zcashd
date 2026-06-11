@@ -182,7 +182,7 @@ class FakePollingZebraServer:
             self.reorg_tip_on_next_getblockhash_batch = True
 
 
-class UnityPollingSyncTest(BitcoinTestFramework):
+class ZebraCompatPollingSyncTest(BitcoinTestFramework):
 
     def __init__(self):
         super().__init__()
@@ -193,7 +193,7 @@ class UnityPollingSyncTest(BitcoinTestFramework):
         self.nodes = []
         self.is_network_split = False
 
-    def unity_args(self, endpoint, password='pass'):
+    def zebra_compat_args(self, endpoint, password='pass'):
         return [
             '-zebra-compat',
             '-zebra-compat-url=%s' % endpoint,
@@ -203,7 +203,7 @@ class UnityPollingSyncTest(BitcoinTestFramework):
             '-zebra-compat-sync-batch-size=2',
         ]
 
-    def wait_for_unity_tip(self, node, source):
+    def wait_for_zebra_compat_tip(self, node, source):
         wait_until(lambda: node.getblockcount() == source.getblockcount() and
                    node.getbestblockhash() == source.getbestblockhash())
         wait_until(lambda: node.getzebracompatinfo()['readiness'] == 'ready')
@@ -234,94 +234,94 @@ class UnityPollingSyncTest(BitcoinTestFramework):
         fake_zebra = FakePollingZebraServer(source)
         port = self.reserve_port()
         endpoint = 'http://127.0.0.1:%d' % port
-        unity = start_node(1, self.options.tmpdir, self.unity_args(endpoint))
-        wait_until(lambda: unity.getzebracompatinfo()['sync']['detail'] in [
+        zebra_compat = start_node(1, self.options.tmpdir, self.zebra_compat_args(endpoint))
+        wait_until(lambda: zebra_compat.getzebracompatinfo()['sync']['detail'] in [
             'zebra_unreachable',
             'zebra_rpc_error',
-        ] and unity.getzebracompatinfo()['sync']['retry_count'] >= 1)
-        unreachable_info = unity.getzebracompatinfo()
+        ] and zebra_compat.getzebracompatinfo()['sync']['retry_count'] >= 1)
+        unreachable_info = zebra_compat.getzebracompatinfo()
         assert_equal(unreachable_info['readiness'], 'degraded')
         assert unreachable_info['sync']['current_backoff_seconds'] >= 1
         assert unreachable_info['sync']['next_retry'] is not None
-        assert_equal(unity.getblockcount(), 0)
+        assert_equal(zebra_compat.getblockcount(), 0)
 
         fake_zebra.start(port)
         try:
-            self.wait_for_unity_tip(unity, source)
-            stop_node(unity, 1)
+            self.wait_for_zebra_compat_tip(zebra_compat, source)
+            stop_node(zebra_compat, 1)
 
-            unity = start_node(1, self.options.tmpdir, self.unity_args(endpoint, password='wrong'))
-            wait_until(lambda: unity.getzebracompatinfo()['sync']['detail'] == 'zebra_identity_error')
-            info = unity.getzebracompatinfo()
+            zebra_compat = start_node(1, self.options.tmpdir, self.zebra_compat_args(endpoint, password='wrong'))
+            wait_until(lambda: zebra_compat.getzebracompatinfo()['sync']['detail'] == 'zebra_identity_error')
+            info = zebra_compat.getzebracompatinfo()
             assert_equal(info['readiness'], 'failed')
             assert_equal(info['sync']['state'], 'failed')
             assert 'authentication failed' in info['sync']['last_error']
-            assert_equal(unity.getblockcount(), source.getblockcount())
-            stop_node(unity, 1)
+            assert_equal(zebra_compat.getblockcount(), source.getblockcount())
+            stop_node(zebra_compat, 1)
 
             fake_zebra.set_fail_getblock_batch(True)
-            unity = start_node(1, self.options.tmpdir, self.unity_args(endpoint))
+            zebra_compat = start_node(1, self.options.tmpdir, self.zebra_compat_args(endpoint))
             source.generate(2)
-            wait_until(lambda: unity.getzebracompatinfo()['sync']['detail'] == 'zebra_rpc_error')
-            rpc_error_info = unity.getzebracompatinfo()
+            wait_until(lambda: zebra_compat.getzebracompatinfo()['sync']['detail'] == 'zebra_rpc_error')
+            rpc_error_info = zebra_compat.getzebracompatinfo()
             assert_equal(rpc_error_info['readiness'], 'degraded')
             assert rpc_error_info['sync']['retry_count'] >= 1
             assert rpc_error_info['sync']['current_backoff_seconds'] >= 1
-            assert_equal(unity.getblockcount(), 5)
-            stop_node(unity, 1)
+            assert_equal(zebra_compat.getblockcount(), 5)
+            stop_node(zebra_compat, 1)
 
             fake_zebra.set_fail_getblock_batch(False)
-            unity = start_node(1, self.options.tmpdir, self.unity_args(endpoint))
-            self.wait_for_unity_tip(unity, source)
+            zebra_compat = start_node(1, self.options.tmpdir, self.zebra_compat_args(endpoint))
+            self.wait_for_zebra_compat_tip(zebra_compat, source)
             assert fake_zebra.saw_batched_block_fetch()
 
             block_hash = source.getblockhash(3)
-            assert_equal(unity.getblock(block_hash)['hash'], block_hash)
+            assert_equal(zebra_compat.getblock(block_hash)['hash'], block_hash)
 
             source.generate(2)
-            self.wait_for_unity_tip(unity, source)
+            self.wait_for_zebra_compat_tip(zebra_compat, source)
 
             source.generate(1)
             fake_zebra.set_reorg_tip_on_next_getblockhash_batch()
-            wait_until(lambda: unity.getzebracompatinfo()['sync']['detail'] == 'zebra_tip_changed_during_sync')
-            self.wait_for_unity_tip(unity, source)
+            wait_until(lambda: zebra_compat.getzebracompatinfo()['sync']['detail'] == 'zebra_tip_changed_during_sync')
+            self.wait_for_zebra_compat_tip(zebra_compat, source)
 
             fork_height = source.getblockcount() - 2
             fork_hash = source.getblockhash(fork_height)
             old_branch_child = source.getblockhash(fork_height + 1)
             source.invalidateblock(old_branch_child)
             source.generate(2)
-            self.wait_for_unity_tip(unity, source)
-            assert_equal(unity.getblockhash(fork_height), fork_hash)
-            assert_equal(unity.getblockhash(fork_height + 1), source.getblockhash(fork_height + 1))
-            reorg_info = unity.getzebracompatinfo()
+            self.wait_for_zebra_compat_tip(zebra_compat, source)
+            assert_equal(zebra_compat.getblockhash(fork_height), fork_hash)
+            assert_equal(zebra_compat.getblockhash(fork_height + 1), source.getblockhash(fork_height + 1))
+            reorg_info = zebra_compat.getzebracompatinfo()
             assert_equal(reorg_info['sync']['last_common_ancestor_height'], fork_height)
             assert_equal(reorg_info['sync']['last_common_ancestor_hash'], fork_hash)
 
-            stop_node(unity, 1)
-            unity = start_node(1, self.options.tmpdir, self.unity_args(endpoint))
-            self.wait_for_unity_tip(unity, source)
+            stop_node(zebra_compat, 1)
+            zebra_compat = start_node(1, self.options.tmpdir, self.zebra_compat_args(endpoint))
+            self.wait_for_zebra_compat_tip(zebra_compat, source)
 
-            stop_node(unity, 1)
+            stop_node(zebra_compat, 1)
             source.generate(2)
-            unity = start_node(1, self.options.tmpdir, self.unity_args(endpoint))
-            self.wait_for_unity_tip(unity, source)
+            zebra_compat = start_node(1, self.options.tmpdir, self.zebra_compat_args(endpoint))
+            self.wait_for_zebra_compat_tip(zebra_compat, source)
 
-            local_tip_before_large_branch = unity.getbestblockhash()
+            local_tip_before_large_branch = zebra_compat.getbestblockhash()
             large_branch_fork_height = source.getblockcount() - 1
             large_branch_child = source.getblockhash(large_branch_fork_height + 1)
             source.invalidateblock(large_branch_child)
             source.generate(3)
-            wait_until(lambda: unity.getzebracompatinfo()['sync']['detail'] == 'reorg_branch_too_large')
-            large_branch_info = unity.getzebracompatinfo()
+            wait_until(lambda: zebra_compat.getzebracompatinfo()['sync']['detail'] == 'reorg_branch_too_large')
+            large_branch_info = zebra_compat.getzebracompatinfo()
             assert_equal(large_branch_info['readiness'], 'failed')
             assert_equal(large_branch_info['sync']['state'], 'failed')
-            assert_equal(unity.getbestblockhash(), local_tip_before_large_branch)
-            stop_node(unity, 1)
+            assert_equal(zebra_compat.getbestblockhash(), local_tip_before_large_branch)
+            stop_node(zebra_compat, 1)
             stop_node(source, 0)
         finally:
             fake_zebra.stop()
 
 
 if __name__ == '__main__':
-    UnityPollingSyncTest().main()
+    ZebraCompatPollingSyncTest().main()
