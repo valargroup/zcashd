@@ -104,7 +104,12 @@ UniValue TwoParams(const UniValue& first, const UniValue& second)
 std::string RequireStringResult(const UniValue& result, const std::string& method)
 {
     if (!result.isStr()) {
-        throw std::runtime_error(strprintf("Zebra RPC %s returned a non-string result", method));
+        throw ZebraRpcError(
+            strprintf("Zebra RPC %s returned a non-string result", method),
+            ZebraRpcError::MALFORMED_RESPONSE,
+            HTTP_OK,
+            false,
+            0);
     }
     return result.get_str();
 }
@@ -112,7 +117,12 @@ std::string RequireStringResult(const UniValue& result, const std::string& metho
 int RequireIntResult(const UniValue& result, const std::string& method)
 {
     if (!result.isNum()) {
-        throw std::runtime_error(strprintf("Zebra RPC %s returned a non-numeric result", method));
+        throw ZebraRpcError(
+            strprintf("Zebra RPC %s returned a non-numeric result", method),
+            ZebraRpcError::MALFORMED_RESPONSE,
+            HTTP_OK,
+            false,
+            0);
     }
     return result.get_int();
 }
@@ -121,7 +131,12 @@ std::string RequireHashResult(const UniValue& result, const std::string& method)
 {
     std::string hash = RequireStringResult(result, method);
     if (!IsValidHashHex(hash)) {
-        throw std::runtime_error(strprintf("Zebra RPC %s returned an invalid block hash", method));
+        throw ZebraRpcError(
+            strprintf("Zebra RPC %s returned an invalid block hash", method),
+            ZebraRpcError::MALFORMED_RESPONSE,
+            HTTP_OK,
+            false,
+            0);
     }
     return hash;
 }
@@ -130,27 +145,43 @@ std::string RequireTxIdResult(const UniValue& result, const std::string& method)
 {
     std::string txid = RequireStringResult(result, method);
     if (!IsValidHashHex(txid)) {
-        throw std::runtime_error(strprintf("Zebra RPC %s returned an invalid transaction id", method));
+        throw ZebraRpcError(
+            strprintf("Zebra RPC %s returned an invalid transaction id", method),
+            ZebraRpcError::MALFORMED_RESPONSE,
+            HTTP_OK,
+            false,
+            0);
     }
     return txid;
 }
 
-ZebraIdentity::Failure ClassifyIdentityException(const std::string& error)
+std::string ZebraRpcResponseBudgetHint()
 {
-    if (error.find("authentication failed") != std::string::npos ||
-        error.find("HTTP status 401") != std::string::npos ||
-        error.find("HTTP status 403") != std::string::npos) {
+    return "Check zcashd -zebra-compat-sync-response-budget-mb and Zebra [rpc].max_response_body_size.";
+}
+
+std::string ZebraRpcTransportErrorMessage(const std::string& prefix, const std::string& transportError)
+{
+    std::string message = prefix + " " + transportError;
+    if (transportError == "response body exceeded maximum size") {
+        message += ". " + ZebraRpcResponseBudgetHint();
+    }
+    return message;
+}
+
+ZebraIdentity::Failure ClassifyIdentityRpcError(const ZebraRpcError& error)
+{
+    if (error.ErrorKind() == ZebraRpcError::AUTHENTICATION ||
+        error.HttpStatus() == HTTP_UNAUTHORIZED ||
+        error.HttpStatus() == HTTP_FORBIDDEN) {
         return ZebraIdentity::AUTHENTICATION;
     }
 
-    if (error.find("malformed JSON") != std::string::npos ||
-        error.find("malformed") != std::string::npos ||
-        error.find("missing") != std::string::npos ||
-        error.find("invalid") != std::string::npos ||
-        error.find("non-object") != std::string::npos ||
-        error.find("non-string") != std::string::npos ||
-        error.find("non-numeric") != std::string::npos ||
-        error.find("exceeded maximum size") != std::string::npos) {
+    if (error.ErrorKind() == ZebraRpcError::MALFORMED_RESPONSE) {
+        return ZebraIdentity::MALFORMED_RESPONSE;
+    }
+
+    if (error.ErrorKind() == ZebraRpcError::RPC_ERROR) {
         return ZebraIdentity::MALFORMED_RESPONSE;
     }
 
@@ -284,11 +315,27 @@ ZebraRpcError::ZebraRpcError(
     int httpStatusIn,
     bool hasRpcCodeIn,
     int rpcCodeIn) :
+    ZebraRpcError(message, RPC_ERROR, httpStatusIn, hasRpcCodeIn, rpcCodeIn)
+{
+}
+
+ZebraRpcError::ZebraRpcError(
+    const std::string& message,
+    Kind kindIn,
+    int httpStatusIn,
+    bool hasRpcCodeIn,
+    int rpcCodeIn) :
     std::runtime_error(message),
+    kind(kindIn),
     httpStatus(httpStatusIn),
     hasRpcCode(hasRpcCodeIn),
     rpcCode(rpcCodeIn)
 {
+}
+
+ZebraRpcError::Kind ZebraRpcError::ErrorKind() const
+{
+    return kind;
 }
 
 int ZebraRpcError::HttpStatus() const
@@ -545,21 +592,46 @@ UniValue ZebraCompatClient::CallRpc(const std::string& method, const UniValue& p
 {
     ZebraRpcResponse response = transport->Call(config, method, params);
     if (response.body.size() > ZebraRpcMaxResponseBodySize()) {
-        throw std::runtime_error(strprintf("Zebra JSON-RPC %s response body exceeded maximum size", method));
+        throw ZebraRpcError(
+            strprintf("Zebra JSON-RPC %s response body exceeded maximum size. %s", method, ZebraRpcResponseBudgetHint()),
+            ZebraRpcError::TRANSPORT,
+            response.httpStatus,
+            false,
+            0);
     }
     if (!response.transportError.empty()) {
-        throw ZebraRpcError(strprintf("Zebra JSON-RPC %s %s", method, response.transportError), response.httpStatus, false, 0);
+        throw ZebraRpcError(
+            ZebraRpcTransportErrorMessage(strprintf("Zebra JSON-RPC %s", method), response.transportError),
+            ZebraRpcError::TRANSPORT,
+            response.httpStatus,
+            false,
+            0);
     }
     if (response.httpStatus == HTTP_UNAUTHORIZED || response.httpStatus == HTTP_FORBIDDEN) {
-        throw ZebraRpcError(strprintf("Zebra JSON-RPC authentication failed with HTTP status %d", response.httpStatus), response.httpStatus, false, 0);
+        throw ZebraRpcError(
+            strprintf("Zebra JSON-RPC authentication failed with HTTP status %d", response.httpStatus),
+            ZebraRpcError::AUTHENTICATION,
+            response.httpStatus,
+            false,
+            0);
     }
     if (response.httpStatus != HTTP_OK) {
-        throw ZebraRpcError(strprintf("Zebra JSON-RPC %s failed with HTTP status %d", method, response.httpStatus), response.httpStatus, false, 0);
+        throw ZebraRpcError(
+            strprintf("Zebra JSON-RPC %s failed with HTTP status %d", method, response.httpStatus),
+            ZebraRpcError::HTTP_STATUS,
+            response.httpStatus,
+            false,
+            0);
     }
 
     UniValue reply;
     if (!reply.read(response.body) || !reply.isObject()) {
-        throw std::runtime_error(strprintf("Zebra JSON-RPC %s returned malformed JSON", method));
+        throw ZebraRpcError(
+            strprintf("Zebra JSON-RPC %s returned malformed JSON", method),
+            ZebraRpcError::MALFORMED_RESPONSE,
+            response.httpStatus,
+            false,
+            0);
     }
 
     const UniValue& error = find_value(reply.get_obj(), "error");
@@ -570,17 +642,28 @@ UniValue ZebraCompatClient::CallRpc(const std::string& method, const UniValue& p
             if (message.isStr()) {
                 throw ZebraRpcError(
                     strprintf("Zebra JSON-RPC %s error: %s", method, message.get_str()),
+                    ZebraRpcError::RPC_ERROR,
                     response.httpStatus,
                     code.isNum(),
                     code.isNum() ? code.get_int() : 0);
             }
         }
-        throw ZebraRpcError(strprintf("Zebra JSON-RPC %s returned an error", method), response.httpStatus, false, 0);
+        throw ZebraRpcError(
+            strprintf("Zebra JSON-RPC %s returned an error", method),
+            ZebraRpcError::RPC_ERROR,
+            response.httpStatus,
+            false,
+            0);
     }
 
     const UniValue& result = find_value(reply.get_obj(), "result");
     if (result.isNull()) {
-        throw std::runtime_error(strprintf("Zebra JSON-RPC %s response is missing result", method));
+        throw ZebraRpcError(
+            strprintf("Zebra JSON-RPC %s response is missing result", method),
+            ZebraRpcError::MALFORMED_RESPONSE,
+            response.httpStatus,
+            false,
+            0);
     }
     return result;
 }
@@ -593,34 +676,76 @@ std::vector<UniValue> ZebraCompatClient::CallRpcBatch(const std::vector<ZebraRpc
 
     ZebraRpcResponse response = transport->CallBatch(config, calls);
     if (response.body.size() > ZebraRpcMaxResponseBodySize()) {
-        throw std::runtime_error("Zebra JSON-RPC batch response body exceeded maximum size");
+        throw ZebraRpcError(
+            strprintf("Zebra JSON-RPC batch response body exceeded maximum size. %s", ZebraRpcResponseBudgetHint()),
+            ZebraRpcError::TRANSPORT,
+            response.httpStatus,
+            false,
+            0);
     }
     if (!response.transportError.empty()) {
-        throw std::runtime_error(strprintf("Zebra JSON-RPC batch %s", response.transportError));
+        throw ZebraRpcError(
+            ZebraRpcTransportErrorMessage("Zebra JSON-RPC batch", response.transportError),
+            ZebraRpcError::TRANSPORT,
+            response.httpStatus,
+            false,
+            0);
     }
     if (response.httpStatus == HTTP_UNAUTHORIZED || response.httpStatus == HTTP_FORBIDDEN) {
-        throw std::runtime_error(strprintf("Zebra JSON-RPC authentication failed with HTTP status %d", response.httpStatus));
+        throw ZebraRpcError(
+            strprintf("Zebra JSON-RPC authentication failed with HTTP status %d", response.httpStatus),
+            ZebraRpcError::AUTHENTICATION,
+            response.httpStatus,
+            false,
+            0);
     }
     if (response.httpStatus != HTTP_OK) {
-        throw std::runtime_error(strprintf("Zebra JSON-RPC batch failed with HTTP status %d", response.httpStatus));
+        throw ZebraRpcError(
+            strprintf("Zebra JSON-RPC batch failed with HTTP status %d", response.httpStatus),
+            ZebraRpcError::HTTP_STATUS,
+            response.httpStatus,
+            false,
+            0);
     }
 
     UniValue reply;
     if (!reply.read(response.body) || !reply.isArray()) {
-        throw std::runtime_error("Zebra JSON-RPC batch returned malformed JSON");
+        throw ZebraRpcError(
+            "Zebra JSON-RPC batch returned malformed JSON",
+            ZebraRpcError::MALFORMED_RESPONSE,
+            response.httpStatus,
+            false,
+            0);
     }
 
     std::map<std::string, UniValue> repliesById;
     for (size_t i = 0; i < reply.size(); i++) {
         const UniValue& item = reply[i];
         if (!item.isObject()) {
-            throw std::runtime_error("Zebra JSON-RPC batch returned a non-object response");
+            throw ZebraRpcError(
+                "Zebra JSON-RPC batch returned a non-object response",
+                ZebraRpcError::MALFORMED_RESPONSE,
+                response.httpStatus,
+                false,
+                0);
         }
         const UniValue& id = find_value(item.get_obj(), "id");
         if (!id.isStr()) {
-            throw std::runtime_error("Zebra JSON-RPC batch response is missing string id");
+            throw ZebraRpcError(
+                "Zebra JSON-RPC batch response is missing string id",
+                ZebraRpcError::MALFORMED_RESPONSE,
+                response.httpStatus,
+                false,
+                0);
         }
-        repliesById[id.get_str()] = item;
+        if (!repliesById.insert(std::make_pair(id.get_str(), item)).second) {
+            throw ZebraRpcError(
+                strprintf("Zebra JSON-RPC batch response contains duplicate id %s", id.get_str()),
+                ZebraRpcError::MALFORMED_RESPONSE,
+                response.httpStatus,
+                false,
+                0);
+        }
     }
 
     std::vector<UniValue> results;
@@ -629,24 +754,45 @@ std::vector<UniValue> ZebraCompatClient::CallRpcBatch(const std::vector<ZebraRpc
         const std::string id = strprintf("%s-%d", ZEBRA_COMPAT_JSONRPC_ID, i);
         auto it = repliesById.find(id);
         if (it == repliesById.end()) {
-            throw std::runtime_error(strprintf("Zebra JSON-RPC batch response is missing id %s", id));
+            throw ZebraRpcError(
+                strprintf("Zebra JSON-RPC batch response is missing id %s", id),
+                ZebraRpcError::MALFORMED_RESPONSE,
+                response.httpStatus,
+                false,
+                0);
         }
 
         const UniValue& item = it->second;
         const UniValue& error = find_value(item.get_obj(), "error");
         if (!error.isNull()) {
             if (error.isObject()) {
+                const UniValue& code = find_value(error.get_obj(), "code");
                 const UniValue& message = find_value(error.get_obj(), "message");
                 if (message.isStr()) {
-                    throw std::runtime_error(strprintf("Zebra JSON-RPC %s error: %s", calls[i].method, message.get_str()));
+                    throw ZebraRpcError(
+                        strprintf("Zebra JSON-RPC %s error: %s", calls[i].method, message.get_str()),
+                        ZebraRpcError::RPC_ERROR,
+                        response.httpStatus,
+                        code.isNum(),
+                        code.isNum() ? code.get_int() : 0);
                 }
             }
-            throw std::runtime_error(strprintf("Zebra JSON-RPC %s returned an error", calls[i].method));
+            throw ZebraRpcError(
+                strprintf("Zebra JSON-RPC %s returned an error", calls[i].method),
+                ZebraRpcError::RPC_ERROR,
+                response.httpStatus,
+                false,
+                0);
         }
 
         const UniValue& result = find_value(item.get_obj(), "result");
         if (result.isNull()) {
-            throw std::runtime_error(strprintf("Zebra JSON-RPC %s response is missing result", calls[i].method));
+            throw ZebraRpcError(
+                strprintf("Zebra JSON-RPC %s response is missing result", calls[i].method),
+                ZebraRpcError::MALFORMED_RESPONSE,
+                response.httpStatus,
+                false,
+                0);
         }
         results.push_back(result);
     }
@@ -658,14 +804,24 @@ ZebraBlockchainInfo ZebraCompatClient::GetBlockchainInfo()
 {
     UniValue result = CallRpc("getblockchaininfo", NoParams());
     if (!result.isObject()) {
-        throw std::runtime_error("Zebra RPC getblockchaininfo returned a non-object result");
+        throw ZebraRpcError(
+            "Zebra RPC getblockchaininfo returned a non-object result",
+            ZebraRpcError::MALFORMED_RESPONSE,
+            HTTP_OK,
+            false,
+            0);
     }
 
     const UniValue& network = find_value(result.get_obj(), "chain");
     const UniValue& blocks = find_value(result.get_obj(), "blocks");
     const UniValue& bestBlockHash = find_value(result.get_obj(), "bestblockhash");
     if (!network.isStr() || !blocks.isNum() || !bestBlockHash.isStr()) {
-        throw std::runtime_error("Zebra RPC getblockchaininfo result is missing required chain, blocks, or bestblockhash fields");
+        throw ZebraRpcError(
+            "Zebra RPC getblockchaininfo result is missing required chain, blocks, or bestblockhash fields",
+            ZebraRpcError::MALFORMED_RESPONSE,
+            HTTP_OK,
+            false,
+            0);
     }
 
     ZebraBlockchainInfo info;
@@ -673,7 +829,12 @@ ZebraBlockchainInfo ZebraCompatClient::GetBlockchainInfo()
     info.blocks = blocks.get_int();
     info.bestBlockHash = bestBlockHash.get_str();
     if (!IsValidHashHex(info.bestBlockHash)) {
-        throw std::runtime_error("Zebra RPC getblockchaininfo returned an invalid bestblockhash");
+        throw ZebraRpcError(
+            "Zebra RPC getblockchaininfo returned an invalid bestblockhash",
+            ZebraRpcError::MALFORMED_RESPONSE,
+            HTTP_OK,
+            false,
+            0);
     }
     return info;
 }
@@ -724,7 +885,12 @@ std::string ZebraCompatClient::GetRawBlock(const std::string& hash)
     }
     std::string rawBlock = RequireStringResult(CallRpc("getblock", TwoParams(UniValue(hash), UniValue(0))), "getblock");
     if (!IsHex(rawBlock)) {
-        throw std::runtime_error("Zebra RPC getblock returned non-hex block data");
+        throw ZebraRpcError(
+            "Zebra RPC getblock returned non-hex block data",
+            ZebraRpcError::MALFORMED_RESPONSE,
+            HTTP_OK,
+            false,
+            0);
     }
     return rawBlock;
 }
@@ -753,7 +919,12 @@ std::vector<std::string> ZebraCompatClient::GetRawBlocks(const std::vector<std::
         for (const UniValue& result : results) {
             std::string rawBlock = RequireStringResult(result, "getblock");
             if (!IsHex(rawBlock)) {
-                throw std::runtime_error("Zebra RPC getblock returned non-hex block data");
+                throw ZebraRpcError(
+                    "Zebra RPC getblock returned non-hex block data",
+                    ZebraRpcError::MALFORMED_RESPONSE,
+                    HTTP_OK,
+                    false,
+                    0);
             }
             rawBlocks.push_back(rawBlock);
         }
@@ -765,7 +936,12 @@ std::vector<std::string> ZebraCompatClient::GetRawMempool()
 {
     UniValue result = CallRpc("getrawmempool", NoParams());
     if (!result.isArray()) {
-        throw std::runtime_error("Zebra RPC getrawmempool returned a non-array result");
+        throw ZebraRpcError(
+            "Zebra RPC getrawmempool returned a non-array result",
+            ZebraRpcError::MALFORMED_RESPONSE,
+            HTTP_OK,
+            false,
+            0);
     }
 
     std::vector<std::string> txids;
@@ -780,7 +956,12 @@ ZebraMempoolInfo ZebraCompatClient::GetMempoolInfo()
 {
     UniValue result = CallRpc("getmempoolinfo", NoParams());
     if (!result.isObject()) {
-        throw std::runtime_error("Zebra RPC getmempoolinfo returned a non-object result");
+        throw ZebraRpcError(
+            "Zebra RPC getmempoolinfo returned a non-object result",
+            ZebraRpcError::MALFORMED_RESPONSE,
+            HTTP_OK,
+            false,
+            0);
     }
 
     ZebraMempoolInfo info;
@@ -797,7 +978,12 @@ ZebraMempoolInfo ZebraCompatClient::GetMempoolInfo()
         info.usage = usage.get_int64();
     }
     if (info.size < 0) {
-        throw std::runtime_error("Zebra RPC getmempoolinfo result is missing required size field");
+        throw ZebraRpcError(
+            "Zebra RPC getmempoolinfo result is missing required size field",
+            ZebraRpcError::MALFORMED_RESPONSE,
+            HTTP_OK,
+            false,
+            0);
     }
     return info;
 }
@@ -811,7 +997,12 @@ std::string ZebraCompatClient::GetRawTransaction(const std::string& txid)
         CallRpc("getrawtransaction", TwoParams(UniValue(txid), UniValue(0))),
         "getrawtransaction");
     if (!IsHex(rawTx)) {
-        throw std::runtime_error("Zebra RPC getrawtransaction returned non-hex transaction data");
+        throw ZebraRpcError(
+            "Zebra RPC getrawtransaction returned non-hex transaction data",
+            ZebraRpcError::MALFORMED_RESPONSE,
+            HTTP_OK,
+            false,
+            0);
     }
     return rawTx;
 }
@@ -842,7 +1033,12 @@ std::vector<std::string> ZebraCompatClient::GetRawTransactions(const std::vector
     for (const UniValue& result : results) {
         std::string rawTx = RequireStringResult(result, "getrawtransaction");
         if (!IsHex(rawTx)) {
-            throw std::runtime_error("Zebra RPC getrawtransaction returned non-hex transaction data");
+            throw ZebraRpcError(
+                "Zebra RPC getrawtransaction returned non-hex transaction data",
+                ZebraRpcError::MALFORMED_RESPONSE,
+                HTTP_OK,
+                false,
+                0);
         }
         rawTxs.push_back(rawTx);
     }
@@ -894,9 +1090,14 @@ ZebraIdentity ZebraCompatClient::CheckIdentity(const CChainParams& chainparams)
 
         identity.identityVerified = true;
         return identity;
+    } catch (const ZebraRpcError& e) {
+        identity.lastError = e.what();
+        identity.failure = ClassifyIdentityRpcError(e);
+        identity.reachable = identity.failure != ZebraIdentity::TRANSIENT;
+        return identity;
     } catch (const std::exception& e) {
         identity.lastError = e.what();
-        identity.failure = ClassifyIdentityException(identity.lastError);
+        identity.failure = ZebraIdentity::TRANSIENT;
         identity.reachable = identity.failure != ZebraIdentity::TRANSIENT;
         return identity;
     }

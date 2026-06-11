@@ -6511,9 +6511,15 @@ bool ProcessNewTrustedBlockBatch(CValidationState& state, const CChainParams& ch
     }
 
     if (lastBlockConnected) {
-        if (lastBlockHeight != lastAcceptedHeight) {
-            zebra_compat::TrustedBlockBoundary boundary =
-                zebra_compat::MakeTrustedBlockBoundary(lastBlockHeight, lastBlockHash, chainparams);
+        zebra_compat::TrustedBlockBoundary boundary =
+            zebra_compat::MakeTrustedBlockBoundary(lastBlockHeight, lastBlockHash, chainparams);
+        zebra_compat::TrustedBlockBoundary currentBoundary;
+        const bool boundaryAlreadyCurrent =
+            zebra_compat::GetCachedTrustedBlockBoundary(currentBoundary) &&
+            zebra_compat::TrustedBoundaryMatchesConfiguredSource(currentBoundary, chainparams) &&
+            currentBoundary.nHeight == boundary.nHeight &&
+            currentBoundary.hash == boundary.hash;
+        if (!boundaryAlreadyCurrent) {
             if (!PersistZebraCompatTrustedBoundary(boundary)) {
                 return state.Error("failed to persist zebra-compat trusted block boundary after activation");
             }

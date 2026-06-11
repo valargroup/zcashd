@@ -289,6 +289,29 @@ bool static InitWarning(const std::string &str)
     return true;
 }
 
+static void WarnIfZebraCompatTrustedBoundarySourceChanged(const CChainParams& chainparams)
+{
+    zebra_compat::TrustedBlockBoundary boundary;
+    if (!zebra_compat::GetCachedTrustedBlockBoundary(boundary) || !boundary.IsSet()) {
+        return;
+    }
+
+    const std::string configuredEndpoint = GetArg("-zebra-compat-url", "");
+    if (configuredEndpoint.empty() ||
+        boundary.network != chainparams.NetworkIDString() ||
+        boundary.genesisHash != chainparams.GetConsensus().hashGenesisBlock.GetHex() ||
+        boundary.zebraEndpoint == configuredEndpoint) {
+        return;
+    }
+
+    LogPrintf(
+        "WARNING: zebra-compat trusted boundary was recorded from Zebra endpoint %s, "
+        "but the configured endpoint is %s; the stored boundary is inactive for this source "
+        "and the next trusted batch will establish a new source boundary\n",
+        boundary.zebraEndpoint.c_str(),
+        configuredEndpoint.c_str());
+}
+
 bool static Bind(const CService &addr, unsigned int flags) {
     if (!(flags & BF_EXPLICIT) && IsLimited(addr))
         return false;
@@ -1827,6 +1850,9 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
                 if (zebra_compat::IsTrustedValidationEnabled() && !zebra_compat::InitZebraCompatMetadata()) {
                     strLoadError = _("Error opening zebra-compat metadata database");
                     break;
+                }
+                if (zebra_compat::IsTrustedValidationEnabled()) {
+                    WarnIfZebraCompatTrustedBoundarySourceChanged(chainparams);
                 }
 
                 if (!LoadBlockIndex()) {

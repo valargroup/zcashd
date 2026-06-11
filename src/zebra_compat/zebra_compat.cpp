@@ -704,6 +704,36 @@ SyncOutcome SyncZebraCompatReorgToZebraBest(
         return {false, true};
     }
 
+    bool zebraTipAlreadyIndexed = false;
+    {
+        LOCK(cs_main);
+        auto it = mapBlockIndex.find(uint256S(zebraBestHash));
+        zebraTipAlreadyIndexed =
+            it != mapBlockIndex.end() &&
+            it->second != nullptr &&
+            it->second->nHeight == zebraBestHeight;
+    }
+    if (zebraTipAlreadyIndexed) {
+        LocalTipSnapshot newTip = GetLocalTipSnapshot();
+        if (newTip.hash != zebraBestHash || newTip.height != zebraBestHeight) {
+            UpdateSyncStatus("ready", "syncing", "validating_indexed_zebra_reorg_branch");
+            return ValidatePostIngestionTipOnZebraBestChain(
+                client,
+                chainparams,
+                newTip,
+                zebraBestHeight,
+                zebraBestHash,
+                strprintf("local tip after indexed Zebra reorg is %s at height %d, expected %s at height %d",
+                          newTip.hash, newTip.height, zebraBestHash, zebraBestHeight),
+                "local_tip_not_on_zebra_best_chain_after_reorg",
+                /*reorgContext=*/true);
+        }
+
+        UpdateSyncedTip(newTip);
+        UpdateSyncStatus("ready", "synced", "zebra_tip_matched", "", true);
+        return {true, false};
+    }
+
     UpdateSyncStatus("ready", "syncing", "fetching_zebra_reorg_branch");
     const int startHeight = ancestor.height + 1;
     const int branchLength = zebraBestHeight - ancestor.height;
@@ -1031,8 +1061,14 @@ SyncOutcome SyncZebraCompatOnce(
     UpdateCommonAncestorStatus(ancestor);
 
     if (localTip.height == zebraBestHeight) {
+        // FindCommonAncestorWithZebra only reports the local tip as the common
+        // ancestor when Zebra's hash at that height matched the local tip hash.
         if (localTip.hash != zebraBestHash) {
-            UpdateSyncStatus("failed", "failed", "zebra_tip_mismatch", "local and Zebra tips differ at the same height");
+            UpdateSyncStatus(
+                "failed",
+                "failed",
+                "zebra_common_ancestor_invariant_violation",
+                "common ancestor search reported the local tip as shared but hashes differ");
             return {false, true};
         }
         UpdateSyncedTip(localTip);
@@ -1837,6 +1873,42 @@ ZebraCompatSyncTestOutcome TEST_SyncZebraTipBelowReorgWindow(
     testOutcome.stickyFault = outcome.stickyFault;
     testOutcome.transientFailure = outcome.transientFailure;
     RecordStickyFault(outcome.stickyFault);
+    return testOutcome;
+}
+
+ZebraCompatSyncTestOutcome TEST_SyncZebraCompatReorgToZebraBest(
+    ZebraCompatClient& client,
+    const CChainParams& chainparams,
+    int localTipHeight,
+    const std::string& localTipHash,
+    int zebraBestHeight,
+    const std::string& zebraBestHash,
+    int ancestorHeight,
+    const std::string& ancestorHash,
+    int disconnectLength)
+{
+    LocalTipSnapshot localTip;
+    localTip.height = localTipHeight;
+    localTip.hash = localTipHash;
+
+    CommonAncestorSearchResult ancestor;
+    ancestor.found = true;
+    ancestor.height = ancestorHeight;
+    ancestor.hash = ancestorHash;
+    ancestor.disconnectLength = disconnectLength;
+
+    SyncOutcome outcome = SyncZebraCompatReorgToZebraBest(
+        client,
+        chainparams,
+        localTip,
+        zebraBestHeight,
+        zebraBestHash,
+        ancestor);
+
+    ZebraCompatSyncTestOutcome testOutcome;
+    testOutcome.progressed = outcome.progressed;
+    testOutcome.stickyFault = outcome.stickyFault;
+    testOutcome.transientFailure = outcome.transientFailure;
     return testOutcome;
 }
 

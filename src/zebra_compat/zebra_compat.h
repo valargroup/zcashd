@@ -135,6 +135,19 @@ ZebraCompatSyncTestOutcome TEST_SyncZebraTipBelowReorgWindow(
     bool haveLocalHashAtZebraHeight,
     const std::string& localHashAtZebraHeight);
 
+// Test seam for reorg sync with an already-computed common ancestor.
+ZebraCompatSyncTestOutcome TEST_SyncZebraCompatReorgToZebraBest(
+    ZebraCompatClient& client,
+    const CChainParams& chainparams,
+    int localTipHeight,
+    const std::string& localTipHash,
+    int zebraBestHeight,
+    const std::string& zebraBestHash,
+    int ancestorHeight,
+    const std::string& ancestorHash,
+    int disconnectLength);
+
+
 // Test seam for one worker config-load attempt. Sets `stickyFault` to true only
 // for non-retryable configuration errors.
 bool TEST_LoadZebraClientConfigForWorker(bool& stickyFault);
