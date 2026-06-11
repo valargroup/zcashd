@@ -24,6 +24,7 @@ The lower-level knobs are available for testing and staged rollout:
 -zebra-compat-poll-interval=<seconds>
 -zebra-compat-sync-batch-size=<blocks>
 -zebra-compat-sync-response-budget-mb=<MiB>
+-zebra-compat-timeout=<seconds>
 -zebra-compat-zebra-rpc-max-response-body-bytes=<bytes>
 ```
 
@@ -176,6 +177,8 @@ Three settings must agree when increasing zebra-compat sync depth:
 - `-zebra-compat-sync-response-budget-mb=<MiB>`: zcashd's memory budget for one
   batched raw-block response. It defaults to `128` MiB and bounds the effective
   sync batch size.
+- `-zebra-compat-timeout=<seconds>`: how long zcashd waits for each Zebra RPC
+  response. It defaults to `30` seconds.
 - Zebra `rpc.max_response_body_size`: Zebra's own HTTP response-body limit. It
   must be large enough for the same batch response.
 
@@ -201,6 +204,11 @@ the effective sync batch. Zebra sets this flag automatically when it supervises
 zcashd. If zcashd is managed externally, set it explicitly to get the same
 fail-early validation.
 
+On split-host links, large valid batch responses can also exceed the default
+timeout even when the response-size limits are high enough. Raise
+`-zebra-compat-timeout` together with the batch and response-budget settings if
+large ingest responses are timing out before Zebra finishes sending them.
+
 For an externally managed 80-block batch, raise zcashd's response budget and
 pass Zebra's configured response limit to zcashd:
 
@@ -208,6 +216,7 @@ pass Zebra's configured response limit to zcashd:
 ./src/zcashd -zebra-compat \
   -zebra-compat-sync-batch-size=80 \
   -zebra-compat-sync-response-budget-mb=320 \
+  -zebra-compat-timeout=120 \
   -zebra-compat-zebra-rpc-max-response-body-bytes=335544320 \
   -zebra-compat-url=http://127.0.0.1:8232 \
   -zebra-compat-cookiefile=/path/to/zebra/.cookie

@@ -1266,6 +1266,11 @@ std::string ValidateParameterInteraction()
             std::to_string(effectiveSyncBatchSize) + " or lower";
     }
 
+    const int64_t configuredTimeout = GetArg("-zebra-compat-timeout", ZebraCompatTimeoutSeconds());
+    if (configuredTimeout < 1) {
+        return "-zebra-compat-timeout must be at least 1";
+    }
+
     const std::string zebraRpcMaxResponseBodyArg = "-zebra-compat-zebra-rpc-max-response-body-bytes";
     if (IsExplicitlySet(zebraRpcMaxResponseBodyArg)) {
         const int64_t configuredZebraRpcMaxResponseBodySize =
@@ -1566,6 +1571,7 @@ UniValue GetZebraCompatInfo()
     limits.pushKV("max_retry_backoff_seconds", MAX_ZEBRA_COMPAT_RETRY_BACKOFF_SECONDS);
     limits.pushKV("sync_batch_size", ZebraCompatSyncBatchSize());
     limits.pushKV("forward_drive_batches", ZebraCompatForwardDriveBatches());
+    limits.pushKV("zebra_rpc_timeout_seconds", ZebraCompatTimeoutSeconds());
     limits.pushKV("zebra_rpc_max_response_body_bytes", static_cast<int64_t>(ZebraRpcMaxResponseBodySize()));
     limits.pushKV("mempool_txids_per_poll", static_cast<int64_t>(MaxMempoolMirrorTxIdsPerPoll()));
     limits.pushKV("mempool_divergence_details", static_cast<int64_t>(MaxMempoolMirrorDivergenceDetails()));
