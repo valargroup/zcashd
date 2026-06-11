@@ -38,11 +38,23 @@ struct MempoolMirrorResult {
     std::string error;
 };
 
+// Reconciles the local mempool with Zebra's mempool once. Returns success for a
+// completed poll, while policy divergence is reported in the result and status.
 MempoolMirrorResult SyncMempoolMirrorOnce(ZebraCompatClient& client, const CChainParams& chainparams);
+
+// Returns the latest mirror status snapshot under the mirror lock.
 MempoolMirrorStatus GetMempoolMirrorStatus();
+
+// Serializes the latest mirror status for `getzebracompatinfo`.
 UniValue MempoolMirrorStatusToJSON();
+
+// Clears mirror status and divergence samples for unit tests.
 void ResetMempoolMirrorForTesting();
+
+// Returns the per-poll cap on Zebra mempool txids reconciled into zcashd.
 size_t MaxMempoolMirrorTxIdsPerPoll();
+
+// Returns the maximum number of divergent txids retained for status details.
 size_t MaxMempoolMirrorDivergenceDetails();
 
 } // namespace zebra_compat

@@ -21,8 +21,15 @@ struct BlockIngestionResult {
     std::string error;
 };
 
+// Ingests one block through the configured zebra-compat validation mode.
+// Records the result globally and reports validation or connection failures.
 BlockIngestionResult IngestBlock(const CBlock& block, const CChainParams& chainparams);
+
+// Ingests a contiguous block batch and records the result globally. An empty
+// batch succeeds without side effects on chainstate.
 BlockIngestionResult IngestBlockBatch(const std::vector<CBlock>& blocks, const CChainParams& chainparams);
+
+// Publishes the most recent block ingestion result for status RPC consumers.
 void RecordBlockIngestionResult(const BlockIngestionResult& result);
 
 } // namespace zebra_compat
