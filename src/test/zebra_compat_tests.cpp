@@ -1716,6 +1716,51 @@ BOOST_AUTO_TEST_CASE(zebra_client_classifies_transport_text_by_type_not_substrin
     BOOST_CHECK(identity.lastError.find("invalid proxy restart payload") != std::string::npos);
 }
 
+BOOST_AUTO_TEST_CASE(zebra_client_retries_identity_rpc_errors)
+{
+    std::unique_ptr<MockZebraTransport> transport = HealthyMainnetTransport(Params());
+    transport->responses["getblockhash"] = {
+        HTTP_OK,
+        RpcErrorResult(RPC_INVALID_PARAMETER, "Block not found").write()};
+    zebra_compat::ZebraCompatClient client(MockZebraConfig(), std::move(transport));
+
+    zebra_compat::ZebraIdentity identity = client.CheckIdentity(Params());
+    BOOST_CHECK(!identity.reachable);
+    BOOST_CHECK(!identity.identityVerified);
+    BOOST_CHECK_EQUAL(identity.failure, zebra_compat::ZebraIdentity::TRANSIENT);
+    BOOST_CHECK(identity.lastError.find("Block not found") != std::string::npos);
+}
+
+BOOST_FIXTURE_TEST_CASE(zebra_compat_sync_retries_identity_rpc_errors, TestingSetup)
+{
+    ArgsSnapshot snapshot;
+    ApplyZebraCompatArgs("-zebra-compat -zebra-compat-url=http://127.0.0.1:8232");
+
+    std::unique_ptr<MockZebraTransport> transport = HealthyMainnetTransport(Params());
+    transport->responses["getblockhash"] = {
+        HTTP_OK,
+        RpcErrorResult(RPC_INVALID_PARAMETER, "Block not found").write()};
+    zebra_compat::ZebraCompatClient client(MockZebraConfig(), std::move(transport));
+    zebra_compat::ZebraCompatClient prefetchClient(
+        MockZebraConfig(),
+        std::unique_ptr<zebra_compat::ZebraRpcTransport>(new MockZebraTransport()));
+
+    zebra_compat::ZebraCompatSyncTestOutcome outcome =
+        zebra_compat::TEST_SyncZebraCompatOnce(client, prefetchClient, Params());
+    BOOST_CHECK(!outcome.progressed);
+    BOOST_CHECK(!outcome.stickyFault);
+    BOOST_CHECK(outcome.transientFailure);
+
+    UniValue info = zebra_compat::GetZebraCompatInfo();
+    UniValue sync = find_value(info.get_obj(), "sync");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "state").get_str(), "degraded");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "detail").get_str(), "zebra_unreachable");
+    BOOST_CHECK(
+        find_value(sync.get_obj(), "last_error")
+            .get_str()
+            .find("Block not found") != std::string::npos);
+}
+
 BOOST_AUTO_TEST_CASE(zebra_client_fails_closed_on_malformed_payload)
 {
     std::unique_ptr<MockZebraTransport> transport(new MockZebraTransport());

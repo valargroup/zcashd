@@ -373,7 +373,9 @@ P2P-control RPCs are unavailable while `-p2p=0`.
 For transient Zebra outages:
 
 1. Keep `zcashd -zebra-compat` running.
-2. Restore Zebra availability or authentication.
+2. Restore Zebra availability or authentication. During first boot with a
+   co-started Zebra, zcashd also stays in this retry path until Zebra has
+   committed genesis and can answer identity RPCs such as `getblockhash(0)`.
 3. Watch `getzebracompatinfo.sync.retry_count`,
    `getzebracompatinfo.sync.current_backoff_seconds`, and
    `getzebracompatinfo.readiness`.
