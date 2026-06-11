@@ -40,6 +40,7 @@ class FakePollingZebraServer:
         self.reject_sendraw = False
         self.hidden_mempool_txids = set()
         self.getrawmempool_calls = 0
+        self.sendrawtransaction_txids = []
         self.reorg_tip_on_next_getblockhash_batch = False
 
     def start(self, port=0):
@@ -110,15 +111,20 @@ class FakePollingZebraServer:
                 elif method == 'getrawtransaction':
                     result = source.getrawtransaction(params[0], 0)
                 elif method == 'sendrawtransaction':
+                    txid = source.decoderawtransaction(params[0])['txid']
                     with fake.lock:
                         reject_sendraw = fake.reject_sendraw
+                        fake.sendrawtransaction_txids.append(txid)
                     if reject_sendraw:
                         return {
                             'result': None,
                             'error': {'code': -26, 'message': 'zebra rejected transaction'},
                             'id': request.get('id'),
                         }
-                    result = source.sendrawtransaction(params[0])
+                    if txid in source.getrawmempool():
+                        result = txid
+                    else:
+                        result = source.sendrawtransaction(params[0])
                 else:
                     return {
                         'result': None,
@@ -176,6 +182,10 @@ class FakePollingZebraServer:
     def mempool_poll_count(self):
         with self.lock:
             return self.getrawmempool_calls
+
+    def sendrawtransaction_count(self, txid):
+        with self.lock:
+            return self.sendrawtransaction_txids.count(txid)
 
     def set_reorg_tip_on_next_getblockhash_batch(self):
         with self.lock:

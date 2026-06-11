@@ -4876,13 +4876,21 @@ void CWallet::ReacceptWalletTransactions()
 bool CWalletTx::RelayWalletTransaction()
 {
     assert(pwallet->GetBroadcastTransactions());
-    if (zebra_compat::IsEnabled()) {
-        LogPrint("wallet", "zebra-compat wallet rebroadcast does not use Zcash P2P relay for wtx %s\n", GetHash().ToString());
-        return false;
-    }
     if (!IsCoinBase())
     {
         if (GetDepthInMainChain(std::nullopt) == 0) {
+            if (zebra_compat::IsEnabled()) {
+                const CTransaction txToForward = (CTransaction)*this;
+                zebra_compat::TxForwardingResult result =
+                    zebra_compat::ForwardRawTransaction(EncodeHexTx(txToForward), txToForward.GetHash());
+                if (!result.success) {
+                    LogPrintf("zebra-compat wallet rebroadcast failed for wtx %s: %s\n",
+                              txToForward.GetHash().ToString(), result.error);
+                    return false;
+                }
+                LogPrintf("zebra-compat wallet rebroadcast forwarded wtx %s\n", txToForward.GetHash().ToString());
+                return true;
+            }
             LogPrintf("Relaying wtx %s\n", GetHash().ToString());
             RelayTransaction((CTransaction)*this);
             return true;

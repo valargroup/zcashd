@@ -29,6 +29,7 @@ class ZebraCompatTransactionForwardingTest(BitcoinTestFramework):
 
     def zebra_compat_args(self, endpoint):
         return [
+            '-allowdeprecated=getnewaddress',
             '-zebra-compat',
             '-zebra-compat-url=%s' % endpoint,
             '-zebra-compat-rpc-user=user',
@@ -58,7 +59,7 @@ class ZebraCompatTransactionForwardingTest(BitcoinTestFramework):
         wait_until(lambda: fake_zebra.mempool_poll_count() >= previous_count + polls, timeout=60)
 
     def run_test(self):
-        source = start_node(0, self.options.tmpdir, [])
+        source = start_node(0, self.options.tmpdir, ['-allowdeprecated=getnewaddress'])
         source.generate(101)
 
         fake_zebra = FakePollingZebraServer(source)
@@ -82,6 +83,31 @@ class ZebraCompatTransactionForwardingTest(BitcoinTestFramework):
             source.generate(1)
             self.wait_for_zebra_compat_tip(zebra_compat, source)
             wait_until(lambda: zebra_compat.getbalance() >= Decimal('1.0'), timeout=60)
+
+            rebroadcast_txid = zebra_compat.sendtoaddress(source.getnewaddress(), Decimal('0.1'))
+            wait_until(lambda: rebroadcast_txid in source.getrawmempool(), timeout=60)
+            wait_until(lambda: rebroadcast_txid in zebra_compat.getrawmempool(), timeout=60)
+            assert_equal(fake_zebra.sendrawtransaction_count(rebroadcast_txid), 1)
+
+            fake_zebra.hide_mempool_txid(rebroadcast_txid)
+            rebroadcasted = zebra_compat.resendwallettransactions()
+            assert rebroadcast_txid in rebroadcasted
+            assert_equal(fake_zebra.sendrawtransaction_count(rebroadcast_txid), 2)
+
+            fake_zebra.set_reject_sendraw(True)
+            try:
+                failed_rebroadcasted = zebra_compat.resendwallettransactions()
+            finally:
+                fake_zebra.set_reject_sendraw(False)
+            assert rebroadcast_txid not in failed_rebroadcasted
+            assert_equal(fake_zebra.sendrawtransaction_count(rebroadcast_txid), 3)
+
+            fake_zebra.unhide_mempool_txid(rebroadcast_txid)
+            wait_until(lambda: zebra_compat.getzebracompatinfo()['tx_forwarding']['pending'] == 0, timeout=60)
+
+            source.generate(1)
+            self.wait_for_zebra_compat_tip(zebra_compat, source)
+            wait_until(lambda: rebroadcast_txid not in zebra_compat.getrawmempool(), timeout=60)
 
             wallet_txids_before = [entry['txid'] for entry in zebra_compat.listtransactions('*', 1000, 0)]
             zebra_compat_mempool_before = set(zebra_compat.getrawmempool())
