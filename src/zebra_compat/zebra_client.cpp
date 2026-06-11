@@ -254,6 +254,29 @@ void HttpErrorCallback(enum evhttp_request_error err, void* arg)
 }
 #endif
 
+bool IsLoopbackAddress(const CNetAddr& addr)
+{
+    if (addr.IsIPv4()) {
+        return addr.GetByte(3) == 127;
+    }
+    return addr.IsLocal();
+}
+
+bool ZebraEndpointResolvesToLoopbackOnly(const ZebraEndpoint& endpoint)
+{
+    std::vector<CNetAddr> addresses;
+    if (!LookupHost(endpoint.host.c_str(), addresses, 0, true) || addresses.empty()) {
+        return false;
+    }
+
+    for (const CNetAddr& address : addresses) {
+        if (!IsLoopbackAddress(address)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 ZebraRpcError::ZebraRpcError(
@@ -368,6 +391,22 @@ bool LoadZebraClientConfig(ZebraClientConfig& config, std::string& error)
 
     if (!ParseZebraEndpoint(url, config.endpoint, error)) {
         return false;
+    }
+
+    const bool endpointIsLoopback = ZebraEndpointResolvesToLoopbackOnly(config.endpoint);
+    if (!endpointIsLoopback && !GetBoolArg("-zebra-compat-allow-remote-http", false)) {
+        error = strprintf(
+            "Refusing insecure Zebra RPC endpoint %s: http:// uses Basic authentication in cleartext "
+            "and is only allowed for loopback hosts. Use -zebra-compat-allow-remote-http=1 only if "
+            "the connection is protected by a trusted tunnel or private network.",
+            config.endpoint.url);
+        return false;
+    }
+    if (!endpointIsLoopback) {
+        LogPrintf(
+            "WARNING: zebra-compat connecting to non-loopback plain HTTP Zebra RPC endpoint %s; "
+            "Basic authentication credentials will be sent in cleartext\n",
+            config.endpoint.url.c_str());
     }
 
     const std::string user = GetArg("-zebra-compat-rpc-user", "");

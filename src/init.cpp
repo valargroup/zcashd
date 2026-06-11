@@ -380,6 +380,7 @@ std::string HelpMessage(HelpMessageMode mode)
     strUsage += HelpMessageOpt("-zebra-compat-sync-response-budget-mb=<n>", _("Maximum cumulative size in MiB of one Zebra getblock batch response, bounding the effective sync batch size (default: 128). Zebra's max_response_body_size must be at least this large"));
     strUsage += HelpMessageOpt("-zebra-compat-zebra-rpc-max-response-body-bytes=<n>", _("Zebra's configured RPC max_response_body_size in bytes; when set, zebra-compat validates it can carry the configured sync batch"));
     strUsage += HelpMessageOpt("-zebra-compat-url=<scheme://host:port>", _("Zebra JSON-RPC endpoint for zebra-compat mode"));
+    strUsage += HelpMessageOpt("-zebra-compat-allow-remote-http", _("Allow zebra-compat to connect to a non-loopback http:// Zebra RPC endpoint, sending Basic authentication credentials in cleartext (dangerous; use only with a trusted tunnel or private network)"));
     strUsage += HelpMessageOpt("-zebra-compat-cookiefile=<path>", _("Cookie file for Zebra JSON-RPC authentication"));
     strUsage += HelpMessageOpt("-zebra-compat-rpc-password=<password>", _("Password for Zebra JSON-RPC authentication"));
     strUsage += HelpMessageOpt("-zebra-compat-rpc-user=<user>", _("Username for Zebra JSON-RPC authentication"));

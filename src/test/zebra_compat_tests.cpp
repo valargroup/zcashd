@@ -75,6 +75,7 @@ void ResetArgs(const std::string& strArg)
         replacePrefix("-zebra-compat-sync-drive-batches=", "-zebra-compat-sync-drive-batches=");
         replacePrefix("-zebra-compat-sync-response-budget-mb=", "-zebra-compat-sync-response-budget-mb=");
         replacePrefix("-zebra-compat-zebra-rpc-max-response-body-bytes=", "-zebra-compat-zebra-rpc-max-response-body-bytes=");
+        replacePrefix("-zebra-compat-allow-remote-http=", "-zebra-compat-allow-remote-http=");
         replacePrefix("-zebra-compat-trusted-validation-fixture", "-zebra-compat-trusted-validation-fixture");
         if (arg == "-zebra-compat-fail-trusted-boundary-write=1") arg = "-zebra-compat-fail-trusted-boundary-write=1";
     }
@@ -315,6 +316,72 @@ BOOST_AUTO_TEST_CASE(zebra_compat_rejects_invalid_option_values)
 
     ApplyZebraCompatArgs("-blockvalidation=bad");
     BOOST_CHECK_NE(zebra_compat::ValidateParameterInteraction(), "");
+}
+
+BOOST_AUTO_TEST_CASE(zebra_client_config_accepts_loopback_http_endpoints)
+{
+    ArgsSnapshot snapshot;
+    const std::vector<std::string> urls = {
+        "http://127.0.0.1:8232",
+        "http://[::1]:8232",
+    };
+
+    for (const std::string& url : urls) {
+        ApplyZebraCompatArgs(
+            "-zebra-compat-url=" + url +
+            " -zebra-compat-rpc-user=user -zebra-compat-rpc-password=pass");
+        zebra_compat::ZebraClientConfig config;
+        std::string error;
+        BOOST_CHECK_MESSAGE(zebra_compat::LoadZebraClientConfig(config, error), error);
+        BOOST_CHECK_EQUAL(config.endpoint.url, url);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(zebra_client_config_rejects_remote_plain_http_by_default)
+{
+    ArgsSnapshot snapshot;
+    const std::vector<std::string> urls = {
+        "http://10.0.0.2:8232",
+        "http://192.168.0.2:8232",
+    };
+
+    for (const std::string& url : urls) {
+        ApplyZebraCompatArgs(
+            "-zebra-compat-url=" + url +
+            " -zebra-compat-rpc-user=user -zebra-compat-rpc-password=pass");
+        zebra_compat::ZebraClientConfig config;
+        std::string error;
+        BOOST_CHECK(!zebra_compat::LoadZebraClientConfig(config, error));
+        BOOST_CHECK(error.find("-zebra-compat-allow-remote-http") != std::string::npos);
+        BOOST_CHECK(error.find("Basic authentication") != std::string::npos);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(zebra_client_config_allows_remote_plain_http_with_override)
+{
+    ArgsSnapshot snapshot;
+    ApplyZebraCompatArgs(
+        "-zebra-compat-url=http://10.0.0.2:8232"
+        " -zebra-compat-rpc-user=user -zebra-compat-rpc-password=pass"
+        " -zebra-compat-allow-remote-http=1");
+
+    zebra_compat::ZebraClientConfig config;
+    std::string error;
+    BOOST_CHECK_MESSAGE(zebra_compat::LoadZebraClientConfig(config, error), error);
+    BOOST_CHECK_EQUAL(config.endpoint.host, "10.0.0.2");
+}
+
+BOOST_AUTO_TEST_CASE(zebra_client_config_fails_closed_for_unresolved_plain_http_names)
+{
+    ArgsSnapshot snapshot;
+    ApplyZebraCompatArgs(
+        "-zebra-compat-url=http://zebra-compat-unresolved.invalid:8232"
+        " -zebra-compat-rpc-user=user -zebra-compat-rpc-password=pass");
+
+    zebra_compat::ZebraClientConfig config;
+    std::string error;
+    BOOST_CHECK(!zebra_compat::LoadZebraClientConfig(config, error));
+    BOOST_CHECK(error.find("-zebra-compat-allow-remote-http") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(zebra_compat_rejects_trusted_zebra_without_zebra_source)
