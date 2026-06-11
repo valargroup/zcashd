@@ -33,7 +33,7 @@
 #include <utility>
 
 #include <boost/bind/bind.hpp>
-#include <boost/chrono.hpp>
+#include <boost/chrono/chrono.hpp>
 #include <boost/thread.hpp>
 #include <univalue.h>
 
@@ -581,7 +581,7 @@ SyncOutcome ValidatePostIngestionTipOnZebraBestChain(
     if (localTip.height >= 0 && localTip.height <= current.blocks) {
         if (localTip.height == current.blocks) {
             zebraHashAtLocalHeight = current.bestBlockHash;
-        
+
             // If we don't have the zebra hash at the local height, we need to get it from the client
         } else if (!GetCachedZebraBestChainHash(
                        localTip.height,
