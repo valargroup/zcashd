@@ -29,6 +29,7 @@
 #include <utility>
 
 #include <boost/bind/bind.hpp>
+#include <boost/chrono.hpp>
 #include <boost/thread.hpp>
 #include <univalue.h>
 
@@ -39,6 +40,9 @@ std::atomic<bool> g_zebra_compat_started(false);
 std::atomic<bool> g_zebra_compat_interrupt(false);
 std::unique_ptr<boost::thread> g_zebra_compat_worker;
 CCriticalSection cs_zebra_compat_status;
+boost::condition_variable g_zebra_compat_retry_cv;
+boost::mutex g_zebra_compat_retry_mutex;
+uint64_t g_zebra_compat_retry_wakeups = 0;
 
 static const int DEFAULT_ZEBRA_COMPAT_POLL_INTERVAL_SECONDS = 5;
 static const int MAX_ZEBRA_COMPAT_RETRY_BACKOFF_SECONDS = 60;
@@ -68,6 +72,8 @@ struct ZebraCompatStatus {
     int64_t nextRetryTime = 0;
     bool readinessWasReady = false;
     int64_t readinessDegradedSince = 0;
+    bool stickyFault = false;
+    bool retryRequested = false;
 };
 
 struct ZebraSourceView {
@@ -398,6 +404,28 @@ void UpdateRetryStatus(int consecutiveRetryCount, int backoffSeconds)
     g_status.consecutiveRetryCount = consecutiveRetryCount;
     g_status.currentBackoffSeconds = backoffSeconds;
     g_status.nextRetryTime = backoffSeconds > 0 ? GetTime() + backoffSeconds : 0;
+}
+
+// Publishes whether the worker is parked on a sticky fault. Any fresh worker
+// outcome consumes a pending manual retry request.
+void RecordStickyFault(bool stickyFault)
+{
+    LOCK(cs_zebra_compat_status);
+    g_status.stickyFault = stickyFault;
+    g_status.retryRequested = false;
+}
+
+// Consumes one manual retry request and clears the exposed sticky latch.
+// Returns false when no operator retry is pending.
+bool ConsumeStickyFaultRetryRequest()
+{
+    LOCK(cs_zebra_compat_status);
+    if (!g_status.retryRequested) {
+        return false;
+    }
+    g_status.retryRequested = false;
+    g_status.stickyFault = false;
+    return true;
 }
 
 bool DecodeFetchedBlocks(
@@ -1096,6 +1124,32 @@ std::string ApplyReadinessHysteresis(const std::string& rawReadiness, int64_t no
     return now - g_status.readinessDegradedSince >= degradeAfter ? "degraded" : "ready";
 }
 
+// Wakes retry/backoff sleepers and marks the wake so spurious condition-variable
+// wakeups do not shorten retry intervals.
+void WakeZebraCompatRetryWaiters()
+{
+    {
+        boost::unique_lock<boost::mutex> lock(g_zebra_compat_retry_mutex);
+        g_zebra_compat_retry_wakeups++;
+    }
+    g_zebra_compat_retry_cv.notify_all();
+}
+
+// Sleeps until the requested retry/backoff interval elapses or an operator retry
+// wakes the worker. Does not consume the retry request.
+void WaitForZebraCompatRetryOrTimeout(int seconds)
+{
+    boost::unique_lock<boost::mutex> lock(g_zebra_compat_retry_mutex);
+    const uint64_t observedWakeups = g_zebra_compat_retry_wakeups;
+    const boost::chrono::steady_clock::time_point deadline =
+        boost::chrono::steady_clock::now() + boost::chrono::seconds(seconds);
+    while (g_zebra_compat_retry_wakeups == observedWakeups) {
+        if (g_zebra_compat_retry_cv.wait_until(lock, deadline) == boost::cv_status::timeout) {
+            return;
+        }
+    }
+}
+
 void SleepZebraCompatRetry(int& consecutiveRetryCount, bool countTransientFailure)
 {
     if (countTransientFailure) {
@@ -1106,7 +1160,7 @@ void SleepZebraCompatRetry(int& consecutiveRetryCount, bool countTransientFailur
     const int backoffSeconds = countTransientFailure ?
         ZebraCompatRetryBackoffSeconds(consecutiveRetryCount) : 0;
     UpdateRetryStatus(consecutiveRetryCount, backoffSeconds);
-    MilliSleep((backoffSeconds > 0 ? backoffSeconds : ZebraCompatPollIntervalSeconds()) * 1000);
+    WaitForZebraCompatRetryOrTimeout(backoffSeconds > 0 ? backoffSeconds : ZebraCompatPollIntervalSeconds());
 }
 
 void ZebraCompatBlockSourceThread(std::string chainName)
@@ -1121,11 +1175,22 @@ void ZebraCompatBlockSourceThread(std::string chainName)
             try {
                 if (stickyFault) {
                     UpdateRetryStatus(consecutiveRetryCount, 0);
-                    MilliSleep(ZebraCompatPollIntervalSeconds() * 1000);
-                    continue;
+                    bool retryRequested = ConsumeStickyFaultRetryRequest();
+                    if (!retryRequested) {
+                        WaitForZebraCompatRetryOrTimeout(ZebraCompatPollIntervalSeconds());
+                        retryRequested = ConsumeStickyFaultRetryRequest();
+                    }
+                    if (!retryRequested) {
+                        continue;
+                    }
+                    stickyFault = false;
+                    consecutiveRetryCount = 0;
+                    UpdateRetryStatus(0, 0);
+                    LogPrintf("zebra-compat retrying parked sticky fault after RPC request\n");
                 }
                 ZebraClientConfig config;
                 if (!LoadZebraClientConfigForWorker(config, stickyFault)) {
+                    RecordStickyFault(stickyFault);
                     SleepZebraCompatRetry(consecutiveRetryCount, !stickyFault);
                     continue;
                 }
@@ -1136,6 +1201,7 @@ void ZebraCompatBlockSourceThread(std::string chainName)
                 ZebraCompatClient prefetchClient(config, std::unique_ptr<ZebraRpcTransport>(new LibeventZebraRpcTransport()));
                 SyncOutcome outcome = SyncZebraCompatOnce(client, prefetchClient, chainparams);
                 stickyFault = outcome.stickyFault;
+                RecordStickyFault(stickyFault);
                 const bool synced = IsZebraCompatSynced();
                 if (outcome.progressed || stickyFault || synced || !outcome.transientFailure) {
                     consecutiveRetryCount = 0;
@@ -1169,6 +1235,7 @@ void ZebraCompatBlockSourceThread(std::string chainName)
 void InterruptZebraCompatWorker()
 {
     g_zebra_compat_interrupt = true;
+    WakeZebraCompatRetryWaiters();
     if (g_zebra_compat_worker) {
         g_zebra_compat_worker->interrupt();
     }
@@ -1618,6 +1685,8 @@ UniValue GetZebraCompatInfo()
         syncLag = NullUniValue;
     }
     sync.pushKV("lag", syncLag);
+    sync.pushKV("sticky_fault", status.stickyFault);
+    sync.pushKV("retry_requested", status.retryRequested);
     sync.pushKV("retry_count", status.consecutiveRetryCount);
     sync.pushKV("current_backoff_seconds", status.currentBackoffSeconds);
     if (status.nextRetryTime > 0) {
@@ -1657,6 +1726,35 @@ UniValue GetZebraCompatInfo()
     obj.pushKV("limits", limits);
 
     return obj;
+}
+
+// Requests a single sync retry from a parked sticky fault. The request is
+// best-effort and observable through `getzebracompatinfo` until the worker consumes it.
+ZebraCompatRetryResult RetryZebraCompatStickyFault()
+{
+    ZebraCompatRetryResult result;
+    result.workerRunning = g_zebra_compat_started.load();
+    bool shouldNotify = false;
+    {
+        LOCK(cs_zebra_compat_status);
+        result.stickyFault = g_status.stickyFault;
+        result.state = g_status.syncState;
+        result.detail = g_status.syncDetail;
+        if (result.workerRunning && g_status.stickyFault) {
+            g_status.retryRequested = true;
+            g_status.stickyFault = false;
+            g_status.consecutiveRetryCount = 0;
+            g_status.currentBackoffSeconds = 0;
+            g_status.nextRetryTime = 0;
+            result.retryRequested = true;
+            shouldNotify = true;
+        }
+    }
+
+    if (shouldNotify) {
+        WakeZebraCompatRetryWaiters();
+    }
+    return result;
 }
 
 void ThrowIfP2PDisabled(const std::string& method)
@@ -1702,6 +1800,7 @@ ZebraCompatSyncTestOutcome TEST_ValidatePostIngestionTipOnZebraBestChain(
     testOutcome.progressed = outcome.progressed;
     testOutcome.stickyFault = outcome.stickyFault;
     testOutcome.transientFailure = outcome.transientFailure;
+    RecordStickyFault(outcome.stickyFault);
     return testOutcome;
 }
 
@@ -1737,6 +1836,7 @@ ZebraCompatSyncTestOutcome TEST_SyncZebraTipBelowReorgWindow(
     testOutcome.progressed = outcome.progressed;
     testOutcome.stickyFault = outcome.stickyFault;
     testOutcome.transientFailure = outcome.transientFailure;
+    RecordStickyFault(outcome.stickyFault);
     return testOutcome;
 }
 
@@ -1757,6 +1857,7 @@ ZebraCompatSyncTestOutcome TEST_SyncZebraCompatOnce(
     testOutcome.progressed = outcome.progressed;
     testOutcome.stickyFault = outcome.stickyFault;
     testOutcome.transientFailure = outcome.transientFailure;
+    RecordStickyFault(outcome.stickyFault);
     return testOutcome;
 }
 
@@ -1801,6 +1902,16 @@ std::string TEST_ComputeZebraCompatReadiness(
         IsMempoolMirrorReady(mirrorStatus, now),
         notificationsCaughtUp);
     return ApplyReadinessHysteresis(rawReadiness, now, /*allowHysteresis=*/true);
+}
+
+void TEST_SetZebraCompatStickyFault(bool stickyFault)
+{
+    RecordStickyFault(stickyFault);
+}
+
+void TEST_SetZebraCompatStarted(bool started)
+{
+    g_zebra_compat_started = started;
 }
 
 } // namespace zebra_compat

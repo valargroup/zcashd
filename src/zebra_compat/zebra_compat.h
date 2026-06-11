@@ -78,6 +78,19 @@ CommonAncestorSearchResult FindCommonAncestorInHashRange(
 // Returns the complete zebra-compat status object used by RPC reporting.
 UniValue GetZebraCompatInfo();
 
+// Describes the observable result of a sticky-fault retry request.
+struct ZebraCompatRetryResult {
+    bool retryRequested = false;
+    bool stickyFault = false;
+    bool workerRunning = false;
+    std::string state;
+    std::string detail;
+};
+
+// Requests one fresh sync pass when the worker is parked on a sticky fault.
+// Returns a no-op result when zebra-compat is stopped or no sticky fault is set.
+ZebraCompatRetryResult RetryZebraCompatStickyFault();
+
 // Throws an RPC error when `method` requires local P2P but P2P is disabled.
 void ThrowIfP2PDisabled(const std::string& method);
 
@@ -97,6 +110,7 @@ struct ZebraCompatSyncTestOutcome {
 };
 
 // Test seam for post-ingestion Zebra-tip validation without applying blocks.
+// Records the sticky-fault status that a real worker pass would expose.
 ZebraCompatSyncTestOutcome TEST_ValidatePostIngestionTipOnZebraBestChain(
     ZebraCompatClient& client,
     const CChainParams& chainparams,
@@ -110,6 +124,7 @@ ZebraCompatSyncTestOutcome TEST_ValidatePostIngestionTipOnZebraBestChain(
 
 // Test seam for classifying a Zebra tip below the reorg window without mutating
 // chainstate. The supplied local hash models the active chain at Zebra's height.
+// Records the sticky-fault status that a real worker pass would expose.
 ZebraCompatSyncTestOutcome TEST_SyncZebraTipBelowReorgWindow(
     ZebraCompatClient& client,
     const CChainParams& chainparams,
@@ -120,8 +135,12 @@ ZebraCompatSyncTestOutcome TEST_SyncZebraTipBelowReorgWindow(
     bool haveLocalHashAtZebraHeight,
     const std::string& localHashAtZebraHeight);
 
+// Test seam for one worker config-load attempt. Sets `stickyFault` to true only
+// for non-retryable configuration errors.
 bool TEST_LoadZebraClientConfigForWorker(bool& stickyFault);
 
+// Test seam for one full sync pass using caller-provided clients.
+// Records the sticky-fault status that a real worker pass would expose.
 ZebraCompatSyncTestOutcome TEST_SyncZebraCompatOnce(
     ZebraCompatClient& client,
     ZebraCompatClient& prefetchClient,
@@ -142,6 +161,12 @@ std::string TEST_ComputeZebraCompatReadiness(
     const MempoolMirrorStatus& mirrorStatus,
     bool notificationsCaughtUp,
     int64_t now);
+
+// Test-only setter for the status field that reports a parked sticky fault.
+void TEST_SetZebraCompatStickyFault(bool stickyFault);
+
+// Test-only setter for worker-running state used by retry RPC tests.
+void TEST_SetZebraCompatStarted(bool started);
 
 } // namespace zebra_compat
 

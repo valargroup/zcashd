@@ -185,6 +185,7 @@ static const CRPCConvertTable rpcCvtTable =
     { "z_getnotescount",             {{}, {o, o}} },
     // zebra-compat
     { "getzebracompatinfo",          {{}, {}} },
+    { "zebracompatretry",            {{}, {}} },
     // server
     { "help",                        {{}, {s}} },
     { "setlogfilter",                {{s}, {}} },
