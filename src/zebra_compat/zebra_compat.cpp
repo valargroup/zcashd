@@ -214,6 +214,51 @@ std::vector<std::string> GetLocalChainHashes(int startHeight, int endHeight)
     return hashes;
 }
 
+bool GetLocalChainHash(int height, std::string& hash)
+{
+    if (height < 0) {
+        return false;
+    }
+
+    LOCK(cs_main);
+    CBlockIndex* index = chainActive[height];
+    if (index == nullptr) {
+        return false;
+    }
+    hash = index->GetBlockHash().GetHex();
+    return true;
+}
+
+// Classifies the case where Zebra's best height is below the normal comparison
+// window. Matching local/Zebra hashes mean Zebra is only behind; mismatch means
+// the divergence is deeper than zebra-compat's reorg policy.
+CommonAncestorSearchResult ClassifyZebraTipBelowReorgWindow(
+    const LocalTipSnapshot& localTip,
+    int zebraBestHeight,
+    const std::string& zebraBestHash,
+    bool haveLocalHashAtZebraHeight,
+    const std::string& localHashAtZebraHeight)
+{
+    CommonAncestorSearchResult result;
+    if (haveLocalHashAtZebraHeight &&
+        localHashAtZebraHeight == zebraBestHash) {
+        result.found = true;
+        result.height = zebraBestHeight;
+        result.hash = zebraBestHash;
+        result.disconnectLength = localTip.height - zebraBestHeight;
+        return result;
+    }
+
+    result.overLimit = true;
+    result.disconnectLength = localTip.height - zebraBestHeight;
+    result.error = strprintf(
+        "Zebra best chain is below zebra-compat reorg policy: local height %d, Zebra height %d, max reorg %u",
+        localTip.height,
+        zebraBestHeight,
+        MAX_REORG_LENGTH);
+    return result;
+}
+
 void UpdateZebraStatus(const ZebraIdentity& identity)
 {
     LOCK(cs_zebra_compat_status);
@@ -402,14 +447,15 @@ CommonAncestorSearchResult FindCommonAncestorWithZebra(
         0,
         localTip.height - static_cast<int>(MAX_REORG_LENGTH));
     if (maxCompareHeight < firstAllowedHeight) {
-        result.overLimit = true;
-        result.disconnectLength = localTip.height - maxCompareHeight;
-        result.error = strprintf(
-            "Zebra best chain is below zebra-compat reorg policy: local height %d, Zebra height %d, max reorg %u",
-            localTip.height,
+        std::string localHashAtZebraHeight;
+        const bool haveLocalHashAtZebraHeight =
+            GetLocalChainHash(zebraBestHeight, localHashAtZebraHeight);
+        return ClassifyZebraTipBelowReorgWindow(
+            localTip,
             zebraBestHeight,
-            MAX_REORG_LENGTH);
-        return result;
+            zebraBestHash,
+            haveLocalHashAtZebraHeight,
+            localHashAtZebraHeight);
     }
 
     if (localTip.height <= zebraBestHeight) {
@@ -594,6 +640,16 @@ SyncOutcome SyncZebraCompatReorgToZebraBest(
     }
     UpdateCommonAncestorStatus(ancestor);
 
+    if (zebraBestHeight <= ancestor.height) {
+        UpdateSyncStatus(
+            "waiting",
+            "degraded",
+            "zebra_tip_behind_local",
+            strprintf("Zebra best tip %s at height %d would require a disconnect-only rollback from local height %d",
+                      zebraBestHash, zebraBestHeight, localTip.height));
+        return {false, false};
+    }
+
     if (ancestor.overLimit ||
         ancestor.disconnectLength > static_cast<int>(MAX_REORG_LENGTH)) {
         UpdateSyncStatus(
@@ -603,16 +659,6 @@ SyncOutcome SyncZebraCompatReorgToZebraBest(
             strprintf("Zebra reorg would disconnect %d blocks, exceeding max reorg %u",
                       ancestor.disconnectLength, MAX_REORG_LENGTH));
         return {false, true};
-    }
-
-    if (zebraBestHeight <= ancestor.height) {
-        UpdateSyncStatus(
-            "waiting",
-            "degraded",
-            "zebra_tip_behind_local",
-            strprintf("Zebra best tip %s at height %d would require a disconnect-only rollback from local height %d",
-                      zebraBestHash, zebraBestHeight, localTip.height));
-        return {false, false};
     }
 
     const int branchLength = zebraBestHeight - ancestor.height;
@@ -1525,6 +1571,41 @@ ZebraCompatSyncTestOutcome TEST_ValidatePostIngestionTipOnZebraBestChain(
         mismatchError,
         offChainDetail,
         reorgContext);
+
+    ZebraCompatSyncTestOutcome testOutcome;
+    testOutcome.progressed = outcome.progressed;
+    testOutcome.stickyFault = outcome.stickyFault;
+    testOutcome.transientFailure = outcome.transientFailure;
+    return testOutcome;
+}
+
+ZebraCompatSyncTestOutcome TEST_SyncZebraTipBelowReorgWindow(
+    ZebraCompatClient& client,
+    const CChainParams& chainparams,
+    int localTipHeight,
+    const std::string& localTipHash,
+    int zebraBestHeight,
+    const std::string& zebraBestHash,
+    bool haveLocalHashAtZebraHeight,
+    const std::string& localHashAtZebraHeight)
+{
+    LocalTipSnapshot localTip;
+    localTip.height = localTipHeight;
+    localTip.hash = localTipHash;
+
+    CommonAncestorSearchResult ancestor = ClassifyZebraTipBelowReorgWindow(
+        localTip,
+        zebraBestHeight,
+        zebraBestHash,
+        haveLocalHashAtZebraHeight,
+        localHashAtZebraHeight);
+    SyncOutcome outcome = SyncZebraCompatReorgToZebraBest(
+        client,
+        chainparams,
+        localTip,
+        zebraBestHeight,
+        zebraBestHash,
+        ancestor);
 
     ZebraCompatSyncTestOutcome testOutcome;
     testOutcome.progressed = outcome.progressed;

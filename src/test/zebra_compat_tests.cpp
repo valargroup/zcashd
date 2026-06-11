@@ -575,6 +575,71 @@ BOOST_AUTO_TEST_CASE(zebra_compat_common_ancestor_search_reports_over_policy_reo
     BOOST_CHECK(result.error.find("exceeding max reorg") != std::string::npos);
 }
 
+BOOST_AUTO_TEST_CASE(zebra_compat_waits_when_far_behind_zebra_tip_is_local_ancestor)
+{
+    ArgsSnapshot snapshot;
+    ApplyZebraCompatArgs("-zebra-compat -zebra-compat-url=http://127.0.0.1:8232");
+
+    const int zebraBestHeight = 4056000;
+    const std::string zebraBestHash = HashWithLastChar('a');
+    const int localTipHeight = zebraBestHeight + 200;
+    const std::string localTipHash = HashWithLastChar('f');
+
+    std::unique_ptr<MockZebraTransport> transport(new MockZebraTransport());
+    zebra_compat::ZebraCompatClient client(MockZebraConfig(), std::move(transport));
+    zebra_compat::ZebraCompatSyncTestOutcome outcome = zebra_compat::TEST_SyncZebraTipBelowReorgWindow(
+        client,
+        Params(),
+        localTipHeight,
+        localTipHash,
+        zebraBestHeight,
+        zebraBestHash,
+        /*haveLocalHashAtZebraHeight=*/true,
+        zebraBestHash);
+
+    BOOST_CHECK(!outcome.progressed);
+    BOOST_CHECK(!outcome.stickyFault);
+    BOOST_CHECK(!outcome.transientFailure);
+
+    UniValue info = zebra_compat::GetZebraCompatInfo();
+    UniValue sync = find_value(info.get_obj(), "sync");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "state").get_str(), "degraded");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "detail").get_str(), "zebra_tip_behind_local");
+}
+
+BOOST_AUTO_TEST_CASE(zebra_compat_keeps_sticky_fault_when_far_behind_zebra_tip_diverged)
+{
+    ArgsSnapshot snapshot;
+    ApplyZebraCompatArgs("-zebra-compat -zebra-compat-url=http://127.0.0.1:8232");
+
+    const int zebraBestHeight = 4056000;
+    const std::string zebraBestHash = HashWithLastChar('a');
+    const int localTipHeight = zebraBestHeight + 200;
+    const std::string localTipHash = HashWithLastChar('f');
+    const std::string localHashAtZebraHeight = HashWithLastChar('b');
+
+    std::unique_ptr<MockZebraTransport> transport(new MockZebraTransport());
+    zebra_compat::ZebraCompatClient client(MockZebraConfig(), std::move(transport));
+    zebra_compat::ZebraCompatSyncTestOutcome outcome = zebra_compat::TEST_SyncZebraTipBelowReorgWindow(
+        client,
+        Params(),
+        localTipHeight,
+        localTipHash,
+        zebraBestHeight,
+        zebraBestHash,
+        /*haveLocalHashAtZebraHeight=*/true,
+        localHashAtZebraHeight);
+
+    BOOST_CHECK(!outcome.progressed);
+    BOOST_CHECK(outcome.stickyFault);
+    BOOST_CHECK(!outcome.transientFailure);
+
+    UniValue info = zebra_compat::GetZebraCompatInfo();
+    UniValue sync = find_value(info.get_obj(), "sync");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "state").get_str(), "failed");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "detail").get_str(), "over_policy_reorg");
+}
+
 BOOST_AUTO_TEST_CASE(zebra_client_polls_mempool_and_raw_transactions)
 {
     std::unique_ptr<MockZebraTransport> transport = HealthyMainnetTransport(Params());
