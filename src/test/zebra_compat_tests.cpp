@@ -2484,6 +2484,112 @@ BOOST_AUTO_TEST_CASE(zebra_compat_reorg_retry_skips_already_indexed_equal_work_b
     BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "detail").get_str(), "zebra_equal_work_reorg_not_activated");
 }
 
+BOOST_AUTO_TEST_CASE(zebra_compat_reorg_fetches_only_activation_prefix)
+{
+    ArgsSnapshot snapshot;
+    ApplyZebraCompatArgs(
+        "-zebra-compat -zebra-compat-url=http://127.0.0.1:8232 "
+        "-zebra-compat-sync-batch-size=2 -blockvalidation=full");
+    zebra_compat::ClearTrustedBlockBoundary();
+
+    int ancestorHeight = -1;
+    std::string ancestorHash;
+    {
+        LOCK(cs_main);
+        BOOST_REQUIRE(chainActive.Tip() != nullptr);
+        ancestorHeight = chainActive.Height();
+        ancestorHash = chainActive.Tip()->GetBlockHash().GetHex();
+    }
+
+    CBlock localBlock = CreateSolvedBlock(Params(), RandomCoinbaseScript());
+    CBlock zebraFirst = CreateSolvedBlock(Params(), RandomCoinbaseScript());
+
+    zebra_compat::BlockIngestionResult result = zebra_compat::IngestBlock(localBlock, Params());
+    BOOST_REQUIRE(result.success);
+    {
+        LOCK(cs_main);
+        auto it = mapBlockIndex.find(localBlock.GetHash());
+        BOOST_REQUIRE(it != mapBlockIndex.end());
+        it->second->nCachedBranchId = CurrentEpochBranchId(ancestorHeight + 1, Params().GetConsensus());
+    }
+
+    CBlock zebraSecond = CreateSolvedBlock(Params(), RandomCoinbaseScript());
+    zebraSecond.hashPrevBlock = zebraFirst.GetHash();
+    SolveBlock(zebraSecond, Params());
+
+    CBlock zebraThird = CreateSolvedBlock(Params(), RandomCoinbaseScript());
+    zebraThird.hashPrevBlock = zebraSecond.GetHash();
+    SolveBlock(zebraThird, Params());
+
+    const int localTipHeight = ancestorHeight + 1;
+    const std::string localTipHash = localBlock.GetHash().GetHex();
+    const int zebraBestHeight = ancestorHeight + 3;
+    const std::string zebraBestHash = zebraThird.GetHash().GetHex();
+
+    std::unique_ptr<MockZebraTransport> transport(new MockZebraTransport());
+    MockZebraTransport* rawTransport = transport.get();
+    UniValue blockchainInfo(UniValue::VOBJ);
+    blockchainInfo.pushKV("chain", Params().NetworkIDString());
+    blockchainInfo.pushKV("blocks", zebraBestHeight);
+    blockchainInfo.pushKV("bestblockhash", zebraBestHash);
+    transport->responses["getblockchaininfo"] = {HTTP_OK, RpcResult(blockchainInfo).write()};
+    transport->queuedResponses["getblockhash"] = {
+        {HTTP_OK, RpcResult(UniValue(zebraFirst.GetHash().GetHex())).write()},
+        {HTTP_OK, RpcResult(UniValue(zebraSecond.GetHash().GetHex())).write()},
+        {HTTP_OK, RpcResult(UniValue(Params().GetConsensus().hashGenesisBlock.GetHex())).write()},
+        {HTTP_OK, RpcResult(UniValue(zebraSecond.GetHash().GetHex())).write()}};
+    transport->queuedResponses["getblock"] = {
+        {HTTP_OK, RpcResult(UniValue(EncodeBlockHex(zebraFirst))).write()},
+        {HTTP_OK, RpcResult(UniValue(EncodeBlockHex(zebraSecond))).write()}};
+    zebra_compat::ZebraCompatClient client(MockZebraConfig(), std::move(transport));
+
+    zebra_compat::ZebraCompatSyncTestOutcome outcome =
+        zebra_compat::TEST_SyncZebraCompatReorgToZebraBest(
+            client,
+            Params(),
+            localTipHeight,
+            localTipHash,
+            zebraBestHeight,
+            zebraBestHash,
+            ancestorHeight,
+            ancestorHash,
+            1);
+
+    BOOST_CHECK(outcome.progressed);
+    BOOST_CHECK(!outcome.stickyFault);
+    BOOST_CHECK(!outcome.transientFailure);
+    {
+        LOCK(cs_main);
+        auto firstIt = mapBlockIndex.find(zebraFirst.GetHash());
+        auto secondIt = mapBlockIndex.find(zebraSecond.GetHash());
+        BOOST_REQUIRE(firstIt != mapBlockIndex.end());
+        BOOST_REQUIRE(secondIt != mapBlockIndex.end());
+        firstIt->second->nCachedBranchId = CurrentEpochBranchId(ancestorHeight + 1, Params().GetConsensus());
+        secondIt->second->nCachedBranchId = CurrentEpochBranchId(ancestorHeight + 2, Params().GetConsensus());
+    }
+    BOOST_REQUIRE_EQUAL(rawTransport->batchCalls.size(), 2);
+    BOOST_CHECK_EQUAL(rawTransport->batchCalls[0].size(), 2);
+    BOOST_CHECK_EQUAL(rawTransport->batchCalls[0][0], "getblockhash");
+    BOOST_CHECK_EQUAL(rawTransport->batchCalls[1].size(), 2);
+    BOOST_CHECK_EQUAL(rawTransport->batchCalls[1][0], "getblock");
+
+    {
+        LOCK(cs_main);
+        BOOST_REQUIRE(chainActive.Tip() != nullptr);
+        BOOST_CHECK_EQUAL(chainActive.Height(), ancestorHeight + 2);
+        BOOST_CHECK_EQUAL(chainActive.Tip()->GetBlockHash().GetHex(), zebraSecond.GetHash().GetHex());
+    }
+
+    UniValue info = zebra_compat::GetZebraCompatInfo();
+    UniValue sync = find_value(info.get_obj(), "sync");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "state").get_str(), "syncing");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "detail").get_str(), "zebra_backfill_in_progress");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "last_synced_height").get_int(), ancestorHeight + 2);
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "last_synced_hash").get_str(), zebraSecond.GetHash().GetHex());
+
+    zebra_compat::ClearTrustedBlockBoundary();
+}
+
 BOOST_AUTO_TEST_CASE(zebra_compat_forward_chunk_parent_break_is_retryable)
 {
     ArgsSnapshot snapshot;
