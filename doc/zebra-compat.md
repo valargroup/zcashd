@@ -314,14 +314,20 @@ For transient Zebra outages:
 4. zebra-compat should return to `ready` after it verifies Zebra identity and catches
    the local tip up to Zebra's best tip.
 
-For Zebra endpoint changes:
+For Zebra endpoint changes or static credential flag changes:
 
 1. Stop `zcashd`.
-2. Update `-zebra-compat-url` and its credentials.
+2. Update `-zebra-compat-url` or `-zebra-compat-rpc-user` /
+   `-zebra-compat-rpc-password`.
 3. Restart `zcashd -zebra-compat`.
 4. Confirm `getzebracompatinfo.zebra.identity_verified` is true.
 5. Confirm the trusted boundary in `getzebracompatinfo.trusted_boundary` is either
    inactive or matches the configured endpoint, network, and genesis.
+
+When using `-zebra-compat-cookiefile`, zcashd rereads the cookie during ingest
+polling. Zebra restarts that regenerate the cookie file should recover through
+normal retry/backoff without restarting zcashd, as long as the cookie file path
+and endpoint URL stay the same.
 
 If the trusted boundary does not match, zebra-compat must not silently apply the old
 trusted-source decision to a different source. Reconfirm the local data

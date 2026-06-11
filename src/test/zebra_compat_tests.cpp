@@ -25,6 +25,7 @@
 #include "util/system.h"
 
 #include <atomic>
+#include <fstream>
 #include <map>
 #include <functional>
 #include <memory>
@@ -382,6 +383,109 @@ BOOST_AUTO_TEST_CASE(zebra_client_config_fails_closed_for_unresolved_plain_http_
     std::string error;
     BOOST_CHECK(!zebra_compat::LoadZebraClientConfig(config, error));
     BOOST_CHECK(error.find("-zebra-compat-allow-remote-http") != std::string::npos);
+}
+
+BOOST_FIXTURE_TEST_CASE(zebra_client_config_rereads_cookie_file, TestingSetup)
+{
+    ArgsSnapshot snapshot;
+    const fs::path cookiePath = pathTemp / "zebra-compat.cookie";
+    {
+        std::ofstream cookie(cookiePath.string().c_str());
+        cookie << "user-one:pass-one\n";
+    }
+    ApplyZebraCompatArgs(
+        "-zebra-compat-url=http://127.0.0.1:8232"
+        " -zebra-compat-cookiefile=" + cookiePath.string());
+
+    zebra_compat::ZebraClientConfig firstConfig;
+    std::string error;
+    BOOST_CHECK_MESSAGE(zebra_compat::LoadZebraClientConfig(firstConfig, error), error);
+    BOOST_CHECK_EQUAL(firstConfig.auth.user, "user-one");
+    BOOST_CHECK_EQUAL(firstConfig.auth.password, "pass-one");
+
+    {
+        std::ofstream cookie(cookiePath.string().c_str());
+        cookie << "user-two:pass-two\n";
+    }
+
+    zebra_compat::ZebraClientConfig secondConfig;
+    BOOST_CHECK_MESSAGE(zebra_compat::LoadZebraClientConfig(secondConfig, error), error);
+    BOOST_CHECK_EQUAL(secondConfig.auth.user, "user-two");
+    BOOST_CHECK_EQUAL(secondConfig.auth.password, "pass-two");
+}
+
+BOOST_FIXTURE_TEST_CASE(zebra_compat_worker_treats_missing_cookie_as_retryable_config, TestingSetup)
+{
+    ArgsSnapshot snapshot;
+    const fs::path cookiePath = pathTemp / "missing-zebra-compat.cookie";
+    ApplyZebraCompatArgs(
+        "-zebra-compat -zebra-compat-url=http://127.0.0.1:8232"
+        " -zebra-compat-cookiefile=" + cookiePath.string());
+
+    bool stickyFault = true;
+    BOOST_CHECK(!zebra_compat::TEST_LoadZebraClientConfigForWorker(stickyFault));
+    BOOST_CHECK(!stickyFault);
+
+    UniValue info = zebra_compat::GetZebraCompatInfo();
+    UniValue sync = find_value(info.get_obj(), "sync");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "state").get_str(), "degraded");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "detail").get_str(), "zebra_configuration_unavailable");
+    BOOST_CHECK(
+        find_value(sync.get_obj(), "last_error")
+            .get_str()
+            .find("Unable to open Zebra RPC cookie file") != std::string::npos);
+}
+
+BOOST_FIXTURE_TEST_CASE(zebra_compat_worker_treats_malformed_cookie_as_retryable_config, TestingSetup)
+{
+    ArgsSnapshot snapshot;
+    const fs::path cookiePath = pathTemp / "malformed-zebra-compat.cookie";
+    {
+        std::ofstream cookie(cookiePath.string().c_str());
+        cookie << "missing-separator\n";
+    }
+    ApplyZebraCompatArgs(
+        "-zebra-compat -zebra-compat-url=http://127.0.0.1:8232"
+        " -zebra-compat-cookiefile=" + cookiePath.string());
+
+    bool stickyFault = true;
+    BOOST_CHECK(!zebra_compat::TEST_LoadZebraClientConfigForWorker(stickyFault));
+    BOOST_CHECK(!stickyFault);
+
+    UniValue info = zebra_compat::GetZebraCompatInfo();
+    UniValue sync = find_value(info.get_obj(), "sync");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "state").get_str(), "degraded");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "detail").get_str(), "zebra_configuration_unavailable");
+    BOOST_CHECK_EQUAL(
+        find_value(sync.get_obj(), "last_error").get_str(),
+        "Zebra RPC cookie must be in user:password format");
+}
+
+BOOST_FIXTURE_TEST_CASE(zebra_compat_worker_keeps_static_config_errors_terminal, TestingSetup)
+{
+    ArgsSnapshot snapshot;
+    const fs::path cookiePath = pathTemp / "zebra-compat.cookie";
+    {
+        std::ofstream cookie(cookiePath.string().c_str());
+        cookie << "user:pass\n";
+    }
+    ApplyZebraCompatArgs(
+        "-zebra-compat -zebra-compat-url=http://127.0.0.1:8232"
+        " -zebra-compat-cookiefile=" + cookiePath.string() +
+        " -zebra-compat-rpc-user=user -zebra-compat-rpc-password=pass");
+
+    bool stickyFault = false;
+    BOOST_CHECK(!zebra_compat::TEST_LoadZebraClientConfigForWorker(stickyFault));
+    BOOST_CHECK(stickyFault);
+
+    UniValue info = zebra_compat::GetZebraCompatInfo();
+    UniValue sync = find_value(info.get_obj(), "sync");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "state").get_str(), "failed");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "detail").get_str(), "zebra_configuration_error");
+    BOOST_CHECK(
+        find_value(sync.get_obj(), "last_error")
+            .get_str()
+            .find("incompatible") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(zebra_compat_rejects_trusted_zebra_without_zebra_source)
@@ -932,6 +1036,41 @@ BOOST_AUTO_TEST_CASE(zebra_client_fails_closed_on_auth_failure)
     BOOST_CHECK(!identity.identityVerified);
     BOOST_CHECK_EQUAL(identity.failure, zebra_compat::ZebraIdentity::AUTHENTICATION);
     BOOST_CHECK(identity.lastError.find("authentication failed") != std::string::npos);
+}
+
+BOOST_FIXTURE_TEST_CASE(zebra_compat_sync_retries_cookie_auth_failures, TestingSetup)
+{
+    ArgsSnapshot snapshot;
+    const fs::path cookiePath = pathTemp / "zebra-compat.cookie";
+    {
+        std::ofstream cookie(cookiePath.string().c_str());
+        cookie << "stale-user:stale-pass\n";
+    }
+    ApplyZebraCompatArgs(
+        "-zebra-compat -zebra-compat-url=http://127.0.0.1:8232"
+        " -zebra-compat-cookiefile=" + cookiePath.string());
+
+    std::unique_ptr<MockZebraTransport> transport(new MockZebraTransport());
+    transport->responses["getblockchaininfo"] = {HTTP_UNAUTHORIZED, ""};
+    zebra_compat::ZebraCompatClient client(MockZebraConfig(), std::move(transport));
+    zebra_compat::ZebraCompatClient prefetchClient(
+        MockZebraConfig(),
+        std::unique_ptr<zebra_compat::ZebraRpcTransport>(new MockZebraTransport()));
+
+    zebra_compat::ZebraCompatSyncTestOutcome outcome =
+        zebra_compat::TEST_SyncZebraCompatOnce(client, prefetchClient, Params());
+    BOOST_CHECK(!outcome.progressed);
+    BOOST_CHECK(!outcome.stickyFault);
+    BOOST_CHECK(outcome.transientFailure);
+
+    UniValue info = zebra_compat::GetZebraCompatInfo();
+    UniValue sync = find_value(info.get_obj(), "sync");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "state").get_str(), "degraded");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "detail").get_str(), "zebra_authentication_retry");
+    BOOST_CHECK(
+        find_value(sync.get_obj(), "last_error")
+            .get_str()
+            .find("authentication failed") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(zebra_client_fails_closed_on_network_mismatch)

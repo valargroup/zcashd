@@ -119,6 +119,13 @@ ZebraCompatSyncTestOutcome TEST_SyncZebraTipBelowReorgWindow(
     bool haveLocalHashAtZebraHeight,
     const std::string& localHashAtZebraHeight);
 
+bool TEST_LoadZebraClientConfigForWorker(bool& stickyFault);
+
+ZebraCompatSyncTestOutcome TEST_SyncZebraCompatOnce(
+    ZebraCompatClient& client,
+    ZebraCompatClient& prefetchClient,
+    const CChainParams& chainparams);
+
 } // namespace zebra_compat
 
 #endif // BITCOIN_ZEBRA_COMPAT_ZEBRA_COMPAT_H
