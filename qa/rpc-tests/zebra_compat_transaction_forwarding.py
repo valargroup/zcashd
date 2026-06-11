@@ -16,7 +16,7 @@ from test_framework.util import (
 from zebra_compat_polling_sync import FakePollingZebraServer, wait_until
 
 
-class UnityTransactionForwardingTest(BitcoinTestFramework):
+class ZebraCompatTransactionForwardingTest(BitcoinTestFramework):
 
     def __init__(self):
         super().__init__()
@@ -27,7 +27,7 @@ class UnityTransactionForwardingTest(BitcoinTestFramework):
         self.nodes = []
         self.is_network_split = False
 
-    def unity_args(self, endpoint):
+    def zebra_compat_args(self, endpoint):
         return [
             '-zebra-compat',
             '-zebra-compat-url=%s' % endpoint,
@@ -37,10 +37,10 @@ class UnityTransactionForwardingTest(BitcoinTestFramework):
             '-zebra-compat-sync-batch-size=2',
         ]
 
-    def wait_for_unity_tip(self, unity, source):
-        wait_until(lambda: unity.getblockcount() == source.getblockcount() and
-                   unity.getbestblockhash() == source.getbestblockhash(), timeout=60)
-        assert_equal(unity.getzebracompatinfo()['sync']['state'], 'synced')
+    def wait_for_zebra_compat_tip(self, zebra_compat, source):
+        wait_until(lambda: zebra_compat.getblockcount() == source.getblockcount() and
+                   zebra_compat.getbestblockhash() == source.getbestblockhash(), timeout=60)
+        assert_equal(zebra_compat.getzebracompatinfo()['sync']['state'], 'synced')
 
     def make_signed_tx(self, source):
         utxo = source.listunspent()[0]
@@ -64,73 +64,73 @@ class UnityTransactionForwardingTest(BitcoinTestFramework):
         fake_zebra = FakePollingZebraServer(source)
         endpoint = fake_zebra.start()
         try:
-            unity = start_node(1, self.options.tmpdir, self.unity_args(endpoint))
-            self.wait_for_unity_tip(unity, source)
+            zebra_compat = start_node(1, self.options.tmpdir, self.zebra_compat_args(endpoint))
+            self.wait_for_zebra_compat_tip(zebra_compat, source)
 
             tx_hex, txid = self.make_signed_tx(source)
-            assert_equal(unity.sendrawtransaction(tx_hex), txid)
+            assert_equal(zebra_compat.sendrawtransaction(tx_hex), txid)
             wait_until(lambda: txid in source.getrawmempool(), timeout=60)
-            wait_until(lambda: txid in unity.getrawmempool(), timeout=60)
-            wait_until(lambda: unity.getzebracompatinfo()['tx_forwarding']['pending'] == 0, timeout=60)
+            wait_until(lambda: txid in zebra_compat.getrawmempool(), timeout=60)
+            wait_until(lambda: zebra_compat.getzebracompatinfo()['tx_forwarding']['pending'] == 0, timeout=60)
 
             source.generate(1)
-            self.wait_for_unity_tip(unity, source)
-            wait_until(lambda: txid not in unity.getrawmempool(), timeout=60)
+            self.wait_for_zebra_compat_tip(zebra_compat, source)
+            wait_until(lambda: txid not in zebra_compat.getrawmempool(), timeout=60)
 
-            unity_receive = unity.getnewaddress()
-            source.sendtoaddress(unity_receive, Decimal('1.0'))
+            zebra_compat_receive = zebra_compat.getnewaddress()
+            source.sendtoaddress(zebra_compat_receive, Decimal('1.0'))
             source.generate(1)
-            self.wait_for_unity_tip(unity, source)
-            wait_until(lambda: unity.getbalance() >= Decimal('1.0'), timeout=60)
+            self.wait_for_zebra_compat_tip(zebra_compat, source)
+            wait_until(lambda: zebra_compat.getbalance() >= Decimal('1.0'), timeout=60)
 
-            wallet_txids_before = [entry['txid'] for entry in unity.listtransactions('*', 1000, 0)]
-            unity_mempool_before = set(unity.getrawmempool())
+            wallet_txids_before = [entry['txid'] for entry in zebra_compat.listtransactions('*', 1000, 0)]
+            zebra_compat_mempool_before = set(zebra_compat.getrawmempool())
             source_mempool_before = set(source.getrawmempool())
             fake_zebra.set_reject_sendraw(True)
             try:
-                unity.sendtoaddress(source.getnewaddress(), Decimal('0.1'))
+                zebra_compat.sendtoaddress(source.getnewaddress(), Decimal('0.1'))
                 raise AssertionError('sendtoaddress unexpectedly succeeded')
             except JSONRPCException as e:
                 assert_equal(e.error['code'], -4)
-                assert 'Unity transaction forwarding failed' in e.error['message']
+                assert 'zebra-compat transaction forwarding failed' in e.error['message']
                 assert 'zebra rejected transaction' in e.error['message']
             fake_zebra.set_reject_sendraw(False)
-            wallet_txids_after = [entry['txid'] for entry in unity.listtransactions('*', 1000, 0)]
+            wallet_txids_after = [entry['txid'] for entry in zebra_compat.listtransactions('*', 1000, 0)]
             assert_equal(wallet_txids_after, wallet_txids_before)
-            assert_equal(set(unity.getrawmempool()), unity_mempool_before)
+            assert_equal(set(zebra_compat.getrawmempool()), zebra_compat_mempool_before)
             assert_equal(set(source.getrawmempool()), source_mempool_before)
 
             reject_hex, reject_txid = self.make_signed_tx(source)
             fake_zebra.set_reject_sendraw(True)
             try:
-                unity.sendrawtransaction(reject_hex)
+                zebra_compat.sendrawtransaction(reject_hex)
                 raise AssertionError('sendrawtransaction unexpectedly succeeded')
             except JSONRPCException as e:
                 assert_equal(e.error['code'], -26)
                 assert 'zebra rejected transaction' in e.error['message']
             fake_zebra.set_reject_sendraw(False)
-            assert reject_txid not in unity.getrawmempool()
+            assert reject_txid not in zebra_compat.getrawmempool()
             assert reject_txid not in source.getrawmempool()
 
             grace_hex, grace_txid = self.make_signed_tx(source)
             fake_zebra.hide_mempool_txid(grace_txid)
             before_polls = fake_zebra.mempool_poll_count()
-            assert_equal(unity.sendrawtransaction(grace_hex), grace_txid)
+            assert_equal(zebra_compat.sendrawtransaction(grace_hex), grace_txid)
             wait_until(lambda: grace_txid in source.getrawmempool(), timeout=60)
-            wait_until(lambda: grace_txid in unity.getrawmempool(), timeout=60)
+            wait_until(lambda: grace_txid in zebra_compat.getrawmempool(), timeout=60)
             self.wait_for_mirror_poll_after(fake_zebra, before_polls, polls=2)
-            assert grace_txid in unity.getrawmempool()
-            assert_equal(unity.getzebracompatinfo()['tx_forwarding']['pending'], 1)
+            assert grace_txid in zebra_compat.getrawmempool()
+            assert_equal(zebra_compat.getzebracompatinfo()['tx_forwarding']['pending'], 1)
 
             fake_zebra.unhide_mempool_txid(grace_txid)
-            wait_until(lambda: unity.getzebracompatinfo()['tx_forwarding']['pending'] == 0, timeout=60)
-            assert grace_txid in unity.getrawmempool()
+            wait_until(lambda: zebra_compat.getzebracompatinfo()['tx_forwarding']['pending'] == 0, timeout=60)
+            assert grace_txid in zebra_compat.getrawmempool()
 
-            stop_node(unity, 1)
+            stop_node(zebra_compat, 1)
             stop_node(source, 0)
         finally:
             fake_zebra.stop()
 
 
 if __name__ == '__main__':
-    UnityTransactionForwardingTest().main()
+    ZebraCompatTransactionForwardingTest().main()

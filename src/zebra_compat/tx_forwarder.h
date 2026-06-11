@@ -14,9 +14,9 @@
 
 class UniValue;
 
-namespace unity {
+namespace zebra_compat {
 
-class UnityZebraClient;
+class ZebraCompatClient;
 
 struct TxForwardingResult {
     bool success = false;
@@ -33,7 +33,7 @@ struct TxForwardingStatus {
 };
 
 TxForwardingResult ForwardRawTransaction(
-    UnityZebraClient& client,
+    ZebraCompatClient& client,
     const std::string& txHex,
     const uint256& expectedTxId);
 TxForwardingResult ForwardRawTransaction(
@@ -51,6 +51,6 @@ void ResetTxForwardingForTesting();
 size_t PendingForwardedOrderSizeForTesting();
 size_t MaxPendingForwardedTransactions();
 
-} // namespace unity
+} // namespace zebra_compat
 
 #endif // ZCASH_ZEBRA_COMPAT_TX_FORWARDER_H

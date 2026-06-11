@@ -230,10 +230,10 @@ namespace {
     multimap<CBlockIndex*, CBlockIndex*> mapBlocksUnlinked;
 
     /**
-     * Blocks accepted through Unity's trusted Zebra ingestion boundary but not
+     * Blocks accepted through zebra-compat's trusted Zebra ingestion boundary but not
      * yet covered by the persisted trusted boundary.
      */
-    set<uint256> setUnityTrustedBlockCandidates;
+    set<uint256> setZebraCompatTrustedBlockCandidates;
 
     CCriticalSection cs_LastBlockFile;
     std::vector<CBlockFileInfo> vinfoBlockFile;
@@ -2311,13 +2311,13 @@ static bool IsTrustedZebraRegtestBlock(const CChainParams& chainparams, const CB
 {
     if (pindex == nullptr ||
         chainparams.NetworkIDString() != CBaseChainParams::REGTEST ||
-        !unity::IsTrustedValidationEnabled()) {
+        !zebra_compat::IsTrustedValidationEnabled()) {
         return false;
     }
 
-    unity::TrustedBlockBoundary boundary;
-    if (!unity::GetCachedTrustedBlockBoundary(boundary) ||
-        !unity::TrustedBoundaryMatchesConfiguredSource(boundary, chainparams) ||
+    zebra_compat::TrustedBlockBoundary boundary;
+    if (!zebra_compat::GetCachedTrustedBlockBoundary(boundary) ||
+        !zebra_compat::TrustedBoundaryMatchesConfiguredSource(boundary, chainparams) ||
         pindex->nHeight > boundary.nHeight) {
         return false;
     }
@@ -3305,13 +3305,13 @@ static bool TrustZebraRegtestHeaderWork(const CChainParams& chainparams, CheckAs
 {
     return chainparams.NetworkIDString() == CBaseChainParams::REGTEST &&
         blockChecks == CheckAs::TrustedBlock &&
-        unity::IsTrustedValidationEnabled();
+        zebra_compat::IsTrustedValidationEnabled();
 }
 
-size_t TEST_GetUnityTrustedBlockCandidateCount()
+size_t TEST_GetZebraCompatTrustedBlockCandidateCount()
 {
     LOCK(cs_main);
-    return setUnityTrustedBlockCandidates.size();
+    return setZebraCompatTrustedBlockCandidates.size();
 }
 
 static bool CheckBlockBodyAuthCommitment(
@@ -4586,26 +4586,26 @@ std::atomic<uint64_t> nNotifiedSequence{0};
 
 namespace {
 
-bool PersistUnityTrustedBoundary(const unity::TrustedBlockBoundary& boundary)
+bool PersistZebraCompatTrustedBoundary(const zebra_compat::TrustedBlockBoundary& boundary)
 {
-    return unity::WriteTrustedBlockBoundary(boundary);
+    return zebra_compat::WriteTrustedBlockBoundary(boundary);
 }
 
-bool RestoreUnityTrustedBoundary(
+bool RestoreZebraCompatTrustedBoundary(
     bool hadPreviousBoundary,
-    const unity::TrustedBlockBoundary& previousBoundary)
+    const zebra_compat::TrustedBlockBoundary& previousBoundary)
 {
     if (hadPreviousBoundary) {
-        return PersistUnityTrustedBoundary(previousBoundary);
+        return PersistZebraCompatTrustedBoundary(previousBoundary);
     }
-    return unity::ClearTrustedBlockBoundary();
+    return zebra_compat::ClearTrustedBlockBoundary();
 }
 
-bool UnityTrustedBoundaryCoversBlock(const CBlockIndex* pindex, const CChainParams& chainparams)
+bool ZebraCompatTrustedBoundaryCoversBlock(const CBlockIndex* pindex, const CChainParams& chainparams)
 {
-    unity::TrustedBlockBoundary boundary;
-    if (!unity::GetCachedTrustedBlockBoundary(boundary) ||
-        !unity::TrustedBoundaryMatchesConfiguredSource(boundary, chainparams) ||
+    zebra_compat::TrustedBlockBoundary boundary;
+    if (!zebra_compat::GetCachedTrustedBlockBoundary(boundary) ||
+        !zebra_compat::TrustedBoundaryMatchesConfiguredSource(boundary, chainparams) ||
         pindex == nullptr ||
         pindex->nHeight > boundary.nHeight) {
         return false;
@@ -4621,10 +4621,10 @@ bool UnityTrustedBoundaryCoversBlock(const CBlockIndex* pindex, const CChainPara
 
 CheckAs GetConnectBlockCheckMode(const CBlockIndex* pindex, const CChainParams& chainparams)
 {
-    if (unity::IsTrustedValidationEnabled()) {
+    if (zebra_compat::IsTrustedValidationEnabled()) {
         const uint256 hash = pindex->GetBlockHash();
-        if (setUnityTrustedBlockCandidates.count(hash) ||
-            UnityTrustedBoundaryCoversBlock(pindex, chainparams)) {
+        if (setZebraCompatTrustedBlockCandidates.count(hash) ||
+            ZebraCompatTrustedBoundaryCoversBlock(pindex, chainparams)) {
             return CheckAs::TrustedBlock;
         }
     }
@@ -6391,18 +6391,18 @@ bool ProcessNewTrustedBlockBatch(CValidationState& state, const CChainParams& ch
         return true;
     }
 
-    if (!unity::IsTrustedValidationEnabled()) {
-        return state.Error("Unity trusted block ingestion requires -blockvalidation=trusted-zebra");
+    if (!zebra_compat::IsTrustedValidationEnabled()) {
+        return state.Error("zebra-compat trusted block ingestion requires -blockvalidation=trusted-zebra");
     }
-    if (!unity::InitUnityMetadata()) {
-        return state.Error("failed to initialize Unity metadata database");
+    if (!zebra_compat::InitZebraCompatMetadata()) {
+        return state.Error("failed to initialize zebra-compat metadata database");
     }
 
     std::vector<uint256> acceptedHashes;
     acceptedHashes.reserve(blocks.size());
-    unity::TrustedBlockBoundary previousBoundary;
-    const bool hadPreviousBoundary = unity::GetCachedTrustedBlockBoundary(previousBoundary);
-    unity::TrustedBlockBoundary batchBoundary;
+    zebra_compat::TrustedBlockBoundary previousBoundary;
+    const bool hadPreviousBoundary = zebra_compat::GetCachedTrustedBlockBoundary(previousBoundary);
+    zebra_compat::TrustedBlockBoundary batchBoundary;
     bool wroteBatchBoundary = false;
     int lastAcceptedHeight = -1;
     struct CandidateCleanup {
@@ -6412,7 +6412,7 @@ bool ProcessNewTrustedBlockBatch(CValidationState& state, const CChainParams& ch
         {
             LOCK(cs_main);
             for (const uint256& hash : hashes) {
-                setUnityTrustedBlockCandidates.erase(hash);
+                setZebraCompatTrustedBlockCandidates.erase(hash);
             }
         }
     } cleanup{acceptedHashes};
@@ -6424,14 +6424,14 @@ bool ProcessNewTrustedBlockBatch(CValidationState& state, const CChainParams& ch
         if (mapBlockIndex.find(expectedPrev) == mapBlockIndex.end() &&
             blocks.front().GetHash() != chainparams.GetConsensus().hashGenesisBlock) {
             return state.DoS(10, error("%s: first block parent is unknown", __func__),
-                             REJECT_INVALID, "unity-first-parent-unknown");
+                             REJECT_INVALID, "zebra-compat-first-parent-unknown");
         }
 
         for (const CBlock& block : blocks) {
             const uint256 hash = block.GetHash();
             if (block.hashPrevBlock != expectedPrev) {
-                return state.DoS(10, error("%s: non-contiguous Unity block batch", __func__),
-                                 REJECT_INVALID, "unity-non-contiguous-batch");
+                return state.DoS(10, error("%s: non-contiguous zebra-compat block batch", __func__),
+                                 REJECT_INVALID, "zebra-compat-non-contiguous-batch");
             }
 
             MarkBlockAsReceived(hash);
@@ -6445,7 +6445,7 @@ bool ProcessNewTrustedBlockBatch(CValidationState& state, const CChainParams& ch
                 lastAcceptedHeight = pindex->nHeight;
             }
 
-            setUnityTrustedBlockCandidates.insert(hash);
+            setZebraCompatTrustedBlockCandidates.insert(hash);
             acceptedHashes.push_back(hash);
             expectedPrev = hash;
         }
@@ -6454,14 +6454,14 @@ bool ProcessNewTrustedBlockBatch(CValidationState& state, const CChainParams& ch
     }
 
     if (lastAcceptedHeight >= 0) {
-        unity::TrustedBlockBoundary currentBoundary;
-        if (!unity::GetCachedTrustedBlockBoundary(currentBoundary) ||
-            !unity::TrustedBoundaryMatchesConfiguredSource(currentBoundary, chainparams) ||
+        zebra_compat::TrustedBlockBoundary currentBoundary;
+        if (!zebra_compat::GetCachedTrustedBlockBoundary(currentBoundary) ||
+            !zebra_compat::TrustedBoundaryMatchesConfiguredSource(currentBoundary, chainparams) ||
             lastAcceptedHeight >= currentBoundary.nHeight) {
             batchBoundary =
-                unity::MakeTrustedBlockBoundary(lastAcceptedHeight, blocks.back().GetHash(), chainparams);
-            if (!PersistUnityTrustedBoundary(batchBoundary)) {
-                return state.Error("failed to persist Unity trusted block boundary before activation");
+                zebra_compat::MakeTrustedBlockBoundary(lastAcceptedHeight, blocks.back().GetHash(), chainparams);
+            if (!PersistZebraCompatTrustedBoundary(batchBoundary)) {
+                return state.Error("failed to persist zebra-compat trusted block boundary before activation");
             }
             wroteBatchBoundary = true;
         }
@@ -6471,8 +6471,8 @@ bool ProcessNewTrustedBlockBatch(CValidationState& state, const CChainParams& ch
 
     if (!ActivateBestChain(state, chainparams, &blocks.back())) {
         if (wroteBatchBoundary) {
-            if (!RestoreUnityTrustedBoundary(hadPreviousBoundary, previousBoundary)) {
-                return state.Error("failed to restore Unity trusted block boundary after activation failure");
+            if (!RestoreZebraCompatTrustedBoundary(hadPreviousBoundary, previousBoundary)) {
+                return state.Error("failed to restore zebra-compat trusted block boundary after activation failure");
             }
         }
         return error("%s: ActivateBestChain failed", __func__);
@@ -6492,15 +6492,15 @@ bool ProcessNewTrustedBlockBatch(CValidationState& state, const CChainParams& ch
 
     if (lastBlockConnected) {
         if (lastBlockHeight != lastAcceptedHeight) {
-            unity::TrustedBlockBoundary boundary =
-                unity::MakeTrustedBlockBoundary(lastBlockHeight, lastBlockHash, chainparams);
-            if (!PersistUnityTrustedBoundary(boundary)) {
-                return state.Error("failed to persist Unity trusted block boundary after activation");
+            zebra_compat::TrustedBlockBoundary boundary =
+                zebra_compat::MakeTrustedBlockBoundary(lastBlockHeight, lastBlockHash, chainparams);
+            if (!PersistZebraCompatTrustedBoundary(boundary)) {
+                return state.Error("failed to persist zebra-compat trusted block boundary after activation");
             }
         }
     } else if (wroteBatchBoundary) {
-        if (!RestoreUnityTrustedBoundary(hadPreviousBoundary, previousBoundary)) {
-            return state.Error("failed to restore Unity trusted block boundary after inactive trusted batch");
+        if (!RestoreZebraCompatTrustedBoundary(hadPreviousBoundary, previousBoundary)) {
+            return state.Error("failed to restore zebra-compat trusted block boundary after inactive trusted batch");
         }
     }
 
@@ -7490,7 +7490,7 @@ void UnloadBlockIndex()
     mapOrphanTransactionsByPrev.clear();
     nSyncStarted = 0;
     mapBlocksUnlinked.clear();
-    setUnityTrustedBlockCandidates.clear();
+    setZebraCompatTrustedBlockCandidates.clear();
     nConnectedSequence = 0;
     nNotifiedSequence.store(0);
     vinfoBlockFile.clear();

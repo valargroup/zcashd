@@ -20,9 +20,9 @@ void RegisterMiscRPCCommands(CRPCTable &tableRPC);
 void RegisterMiningRPCCommands(CRPCTable &tableRPC);
 /** Register raw transaction RPC commands */
 void RegisterRawTransactionRPCCommands(CRPCTable &tableRPC);
-namespace unity {
-/** Register Unity RPC commands */
-void RegisterUnityRPCCommands(CRPCTable &tableRPC);
+namespace zebra_compat {
+/** Register zebra-compat RPC commands */
+void RegisterZebraCompatRPCCommands(CRPCTable &tableRPC);
 }
 
 static inline void RegisterAllCoreRPCCommands(CRPCTable &tableRPC)
@@ -32,7 +32,7 @@ static inline void RegisterAllCoreRPCCommands(CRPCTable &tableRPC)
     RegisterMiscRPCCommands(tableRPC);
     RegisterMiningRPCCommands(tableRPC);
     RegisterRawTransactionRPCCommands(tableRPC);
-    unity::RegisterUnityRPCCommands(tableRPC);
+    zebra_compat::RegisterZebraCompatRPCCommands(tableRPC);
 }
 
 #endif // BITCOIN_RPC_REGISTER_H

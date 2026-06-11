@@ -26,7 +26,7 @@
 
 #include <univalue.h>
 
-namespace unity {
+namespace zebra_compat {
 namespace {
 
 CCriticalSection cs_mempool_mirror;
@@ -117,7 +117,7 @@ void RemoveTransactionsNotInZebra(const std::set<std::string>& zebraTxIds, int& 
             continue;
         }
         if (ShouldKeepForwardedTransaction(txid)) {
-            LogPrint("mempool", "Unity mempool mirror retained forwarded txid %s pending Zebra mempool observation\n", txid);
+            LogPrint("mempool", "zebra-compat mempool mirror retained forwarded txid %s pending Zebra mempool observation\n", txid);
             continue;
         }
 
@@ -129,7 +129,7 @@ void RemoveTransactionsNotInZebra(const std::set<std::string>& zebraTxIds, int& 
         std::list<CTransaction> removedTxs;
         mempool.remove(*tx, removedTxs, true);
         removed += removedTxs.size();
-        LogPrint("mempool", "Unity mempool mirror removed txid %s absent from Zebra mempool\n", txid);
+        LogPrint("mempool", "zebra-compat mempool mirror removed txid %s absent from Zebra mempool\n", txid);
     }
 }
 
@@ -147,7 +147,7 @@ void RecordDivergence(const std::string& txid, const std::string& reason)
     } else if (g_divergent_transactions.size() < MAX_DIVERGENCE_DETAILS) {
         g_divergent_transactions.insert(std::make_pair(txid, reason));
     }
-    LogPrintf("Unity mempool mirror divergence for %s: %s\n", txid, reason);
+    LogPrintf("zebra-compat mempool mirror divergence for %s: %s\n", txid, reason);
 }
 
 void ClearDivergence(const std::string& txid)
@@ -254,14 +254,14 @@ void ApplyDecodedTransactions(
 }
 
 void ProcessTransactionIdChunks(
-    UnityZebraClient& client,
+    ZebraCompatClient& client,
     const std::vector<std::string>& txids,
     const std::set<std::string>& zebraTxIds,
     const CChainParams& chainparams,
     std::vector<std::string>& deferred,
     MempoolMirrorResult& result)
 {
-    const size_t batchSize = static_cast<size_t>(UnitySyncBatchSize());
+    const size_t batchSize = static_cast<size_t>(ZebraCompatSyncBatchSize());
     for (size_t start = 0; start < txids.size(); start += batchSize) {
         const size_t end = std::min(txids.size(), start + batchSize);
         const std::vector<std::string> chunk(txids.begin() + start, txids.begin() + end);
@@ -287,7 +287,7 @@ void ProcessTransactionIdChunks(
 
 } // namespace
 
-MempoolMirrorResult SyncMempoolMirrorOnce(UnityZebraClient& client, const CChainParams& chainparams)
+MempoolMirrorResult SyncMempoolMirrorOnce(ZebraCompatClient& client, const CChainParams& chainparams)
 {
     MempoolMirrorResult result;
 
@@ -332,7 +332,7 @@ MempoolMirrorResult SyncMempoolMirrorOnce(UnityZebraClient& client, const CChain
                 if (localTxIdsSnapshot.count(txid)) {
                     continue;
                 }
-                RecordDivergence(txid, "not reconciled: Zebra mempool exceeds Unity mirror per-poll cap");
+                RecordDivergence(txid, "not reconciled: Zebra mempool exceeds zebra-compat mirror per-poll cap");
                 sampled++;
                 if (sampled >= MAX_DIVERGENCE_DETAILS) {
                     break;
@@ -357,7 +357,7 @@ MempoolMirrorResult SyncMempoolMirrorOnce(UnityZebraClient& client, const CChain
         std::string statusError;
         if (missingCount > missingTxIds.size()) {
             statusError = strprintf(
-                "Zebra mempool has %d missing transactions; Unity reconciled %d this poll",
+                "Zebra mempool has %d missing transactions; zebra-compat reconciled %d this poll",
                 static_cast<int>(missingCount),
                 static_cast<int>(missingTxIds.size()));
         }
@@ -427,4 +427,4 @@ size_t MaxMempoolMirrorDivergenceDetails()
     return MAX_DIVERGENCE_DETAILS;
 }
 
-} // namespace unity
+} // namespace zebra_compat

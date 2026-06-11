@@ -20,7 +20,7 @@ from test_framework.zip317 import conventional_fee
 from zebra_compat_polling_sync import FakePollingZebraServer, wait_until
 
 
-class UnityWalletIndexTest(BitcoinTestFramework):
+class ZebraCompatWalletIndexTest(BitcoinTestFramework):
 
     def __init__(self):
         super().__init__()
@@ -31,7 +31,7 @@ class UnityWalletIndexTest(BitcoinTestFramework):
         self.nodes = []
         self.is_network_split = False
 
-    def unity_args(self, endpoint=None):
+    def zebra_compat_args(self, endpoint=None):
         args = [
             '-zebra-compat',
             '-allowdeprecated=getnewaddress',
@@ -51,7 +51,7 @@ class UnityWalletIndexTest(BitcoinTestFramework):
             ])
         return args
 
-    def wait_for_unity_tip(self, node, source):
+    def wait_for_zebra_compat_tip(self, node, source):
         wait_until(lambda: node.getblockcount() == source.getblockcount() and
                    node.getbestblockhash() == source.getbestblockhash(), timeout=60)
         info = node.getzebracompatinfo()
@@ -77,44 +77,44 @@ class UnityWalletIndexTest(BitcoinTestFramework):
         raise AssertionError('transaction does not pay expected transparent address')
 
     def assert_local_compatibility_state(
-            self, unity, miner_addr, sapling_addr, mined_hashes,
+            self, zebra_compat, miner_addr, sapling_addr, mined_hashes,
             transparent_txid, transparent_amount, sapling_txid, sapling_amount):
-        assert_equal(unity.getblockchaininfo()['blocks'], len(mined_hashes))
-        assert_equal(unity.getbestblockhash(), mined_hashes[-1])
-        assert_equal(unity.getblockcount(), len(mined_hashes))
-        assert_equal(unity.getblockhash(1), mined_hashes[0])
+        assert_equal(zebra_compat.getblockchaininfo()['blocks'], len(mined_hashes))
+        assert_equal(zebra_compat.getbestblockhash(), mined_hashes[-1])
+        assert_equal(zebra_compat.getblockcount(), len(mined_hashes))
+        assert_equal(zebra_compat.getblockhash(1), mined_hashes[0])
 
-        first_block = unity.getblock(mined_hashes[0])
+        first_block = zebra_compat.getblock(mined_hashes[0])
         assert_equal(first_block['hash'], mined_hashes[0])
         assert_equal(first_block['height'], 1)
 
-        raw_tx = unity.getrawtransaction(transparent_txid, 1)
+        raw_tx = zebra_compat.getrawtransaction(transparent_txid, 1)
         assert_equal(raw_tx['txid'], transparent_txid)
         assert_equal(raw_tx['confirmations'], 1)
         transparent_vout = self.find_vout_for_address(raw_tx, miner_addr)
 
-        txout = unity.gettxout(transparent_txid, transparent_vout)
+        txout = zebra_compat.gettxout(transparent_txid, transparent_vout)
         assert txout is not None
         assert_equal(txout['bestblock'], mined_hashes[-1])
         assert_equal(Decimal(txout['value']), transparent_amount)
 
-        txoutset = unity.gettxoutsetinfo()
+        txoutset = zebra_compat.gettxoutsetinfo()
         assert_equal(txoutset['height'], len(mined_hashes))
         assert_equal(txoutset['bestblock'], mined_hashes[-1])
 
-        addr_txids = unity.getaddresstxids(miner_addr)
+        addr_txids = zebra_compat.getaddresstxids(miner_addr)
         assert_equal(addr_txids, [transparent_txid])
 
-        balance = unity.getaddressbalance(miner_addr)
+        balance = zebra_compat.getaddressbalance(miner_addr)
         assert_equal(balance['received'], int(transparent_amount * COIN))
         assert_equal(balance['balance'], int(transparent_amount * COIN))
 
-        utxos = unity.getaddressutxos(miner_addr)
+        utxos = zebra_compat.getaddressutxos(miner_addr)
         assert_equal(len(utxos), 1)
         assert_equal(utxos[0]['txid'], transparent_txid)
         assert_equal(utxos[0]['outputIndex'], transparent_vout)
 
-        deltas = unity.getaddressdeltas({
+        deltas = zebra_compat.getaddressdeltas({
             'addresses': [miner_addr],
             'start': 1,
             'end': len(mined_hashes),
@@ -123,38 +123,38 @@ class UnityWalletIndexTest(BitcoinTestFramework):
         assert_equal(deltas[0]['txid'], transparent_txid)
         assert_equal(deltas[0]['satoshis'], int(transparent_amount * COIN))
 
-        shielded_tx = unity.getrawtransaction(sapling_txid, 1)
+        shielded_tx = zebra_compat.getrawtransaction(sapling_txid, 1)
         assert_equal(shielded_tx['txid'], sapling_txid)
         assert_greater_than(len(shielded_tx['vShieldedOutput']), 0)
 
-        tip_block = unity.getblock(mined_hashes[-1])
+        tip_block = zebra_compat.getblock(mined_hashes[-1])
         assert_greater_than(tip_block['trees']['sapling']['size'], 0)
 
-        treestate = unity.z_gettreestate(str(len(mined_hashes)))
+        treestate = zebra_compat.z_gettreestate(str(len(mined_hashes)))
         assert_equal(treestate['height'], len(mined_hashes))
         assert_equal(treestate['hash'], mined_hashes[-1])
         assert_equal(
             treestate['sapling']['commitments']['finalRoot'],
             tip_block['finalsaplingroot'])
 
-        self.wait_for_shielded_credit(unity, sapling_addr, sapling_amount)
+        self.wait_for_shielded_credit(zebra_compat, sapling_addr, sapling_amount)
 
-        sapling_subtrees = unity.z_getsubtreesbyindex('sapling', 0)
+        sapling_subtrees = zebra_compat.z_getsubtreesbyindex('sapling', 0)
         assert_equal(sapling_subtrees['pool'], 'sapling')
         assert_equal(sapling_subtrees['start_index'], 0)
         assert_equal(len(sapling_subtrees['subtrees']), 0)
 
-        orchard_subtrees = unity.z_getsubtreesbyindex('orchard', 0)
+        orchard_subtrees = zebra_compat.z_getsubtreesbyindex('orchard', 0)
         assert_equal(orchard_subtrees['pool'], 'orchard')
         assert_equal(orchard_subtrees['start_index'], 0)
         assert_equal(len(orchard_subtrees['subtrees']), 0)
 
     def run_test(self):
-        unity = start_node(1, self.options.tmpdir, self.unity_args())
-        wait_until(lambda: unity.getzebracompatinfo()['sync']['detail'] == 'waiting_for_zebra_endpoint')
-        miner_addr = unity.getnewaddress()
-        sapling_addr = unity.z_getnewaddress('sapling')
-        stop_node(unity, 1)
+        zebra_compat = start_node(1, self.options.tmpdir, self.zebra_compat_args())
+        wait_until(lambda: zebra_compat.getzebracompatinfo()['sync']['detail'] == 'waiting_for_zebra_endpoint')
+        miner_addr = zebra_compat.getnewaddress()
+        sapling_addr = zebra_compat.z_getnewaddress('sapling')
+        stop_node(zebra_compat, 1)
         wait_bitcoinds()
 
         source = start_node(0, self.options.tmpdir, [
@@ -182,28 +182,28 @@ class UnityWalletIndexTest(BitcoinTestFramework):
         fake_zebra = FakePollingZebraServer(source)
         endpoint = fake_zebra.start()
         try:
-            unity = start_node(1, self.options.tmpdir, self.unity_args(endpoint))
-            self.wait_for_unity_tip(unity, source)
-            self.wait_for_wallet_credit(unity)
+            zebra_compat = start_node(1, self.options.tmpdir, self.zebra_compat_args(endpoint))
+            self.wait_for_zebra_compat_tip(zebra_compat, source)
+            self.wait_for_wallet_credit(zebra_compat)
             self.assert_local_compatibility_state(
-                unity, miner_addr, sapling_addr, mined_hashes,
+                zebra_compat, miner_addr, sapling_addr, mined_hashes,
                 transparent_txid, transparent_amount, sapling_txid, sapling_amount)
 
-            stop_node(unity, 1)
+            stop_node(zebra_compat, 1)
             wait_bitcoinds()
 
-            unity = start_node(1, self.options.tmpdir, self.unity_args(endpoint) + ['-rescan'])
-            self.wait_for_unity_tip(unity, source)
-            self.wait_for_wallet_credit(unity)
+            zebra_compat = start_node(1, self.options.tmpdir, self.zebra_compat_args(endpoint) + ['-rescan'])
+            self.wait_for_zebra_compat_tip(zebra_compat, source)
+            self.wait_for_wallet_credit(zebra_compat)
             self.assert_local_compatibility_state(
-                unity, miner_addr, sapling_addr, mined_hashes,
+                zebra_compat, miner_addr, sapling_addr, mined_hashes,
                 transparent_txid, transparent_amount, sapling_txid, sapling_amount)
 
-            stop_node(unity, 1)
+            stop_node(zebra_compat, 1)
             stop_node(source, 0)
         finally:
             fake_zebra.stop()
 
 
 if __name__ == '__main__':
-    UnityWalletIndexTest().main()
+    ZebraCompatWalletIndexTest().main()

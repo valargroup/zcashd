@@ -25,15 +25,15 @@ using namespace std;
 
 namespace {
 
-bool IsTrustedZebraRegtestBoundaryEnabled(const CChainParams& chainParams, unity::TrustedBlockBoundary& boundary)
+bool IsTrustedZebraRegtestBoundaryEnabled(const CChainParams& chainParams, zebra_compat::TrustedBlockBoundary& boundary)
 {
     if (chainParams.NetworkIDString() != CBaseChainParams::REGTEST ||
-        !unity::IsTrustedValidationEnabled()) {
+        !zebra_compat::IsTrustedValidationEnabled()) {
         return false;
     }
 
-    return unity::GetCachedTrustedBlockBoundary(boundary) &&
-        unity::TrustedBoundaryMatchesConfiguredSource(boundary, chainParams);
+    return zebra_compat::GetCachedTrustedBlockBoundary(boundary) &&
+        zebra_compat::TrustedBoundaryMatchesConfiguredSource(boundary, chainParams);
 }
 
 CBlockIndex* FindLoadedBlockIndex(
@@ -815,7 +815,7 @@ bool CBlockTreeDB::LoadBlockIndexGuts(
         }
     }
 
-    unity::TrustedBlockBoundary trustedBoundary;
+    zebra_compat::TrustedBlockBoundary trustedBoundary;
     CBlockIndex* trustedBoundaryIndex = nullptr;
     if (IsTrustedZebraRegtestBoundaryEnabled(chainParams, trustedBoundary)) {
         trustedBoundaryIndex = FindLoadedBlockIndex(loadedIndexes, trustedBoundary.hash);

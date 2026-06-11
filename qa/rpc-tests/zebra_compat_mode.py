@@ -16,7 +16,7 @@ from test_framework.util import (
 )
 
 
-class UnityModeTest(BitcoinTestFramework):
+class ZebraCompatModeTest(BitcoinTestFramework):
 
     def __init__(self):
         super().__init__()
@@ -62,10 +62,10 @@ class UnityModeTest(BitcoinTestFramework):
         assert_raises_message(JSONRPCException, 'unavailable when Zcash P2P is disabled', node.setban, '127.0.0.0', 'add')
         assert_raises_message(JSONRPCException, 'unavailable when Zcash P2P is disabled', node.listbanned)
         assert_raises_message(JSONRPCException, 'unavailable when Zcash P2P is disabled', node.clearbanned)
-        assert_raises_message(JSONRPCException, 'unavailable in unity mode', node.getblocktemplate)
-        assert_raises_message(JSONRPCException, 'unavailable in unity mode', node.submitblock, '00')
-        assert_raises_message(JSONRPCException, 'unavailable in unity mode', node.generate, 1)
-        assert_raises_message(JSONRPCException, 'unavailable in unity mode', node.setgenerate, True)
+        assert_raises_message(JSONRPCException, 'unavailable in zebra-compat mode', node.getblocktemplate)
+        assert_raises_message(JSONRPCException, 'unavailable in zebra-compat mode', node.submitblock, '00')
+        assert_raises_message(JSONRPCException, 'unavailable in zebra-compat mode', node.generate, 1)
+        assert_raises_message(JSONRPCException, 'unavailable in zebra-compat mode', node.setgenerate, True)
 
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(1)
@@ -74,7 +74,7 @@ class UnityModeTest(BitcoinTestFramework):
             except OSError:
                 pass
             else:
-                raise AssertionError('Unity mode started a Zcash P2P listener')
+                raise AssertionError('zebra-compat mode started a Zcash P2P listener')
 
         assert_start_raises_init_error(
             1,
@@ -85,4 +85,4 @@ class UnityModeTest(BitcoinTestFramework):
 
 
 if __name__ == '__main__':
-    UnityModeTest().main()
+    ZebraCompatModeTest().main()

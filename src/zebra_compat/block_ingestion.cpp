@@ -7,7 +7,7 @@
 #include "main.h"
 #include "zebra_compat/zebra_compat.h"
 
-namespace unity {
+namespace zebra_compat {
 namespace {
 
 void SetResultError(BlockIngestionResult& result, const CValidationState& state)
@@ -80,4 +80,4 @@ BlockIngestionResult IngestBlockBatch(const std::vector<CBlock>& blocks, const C
     return result;
 }
 
-} // namespace unity
+} // namespace zebra_compat

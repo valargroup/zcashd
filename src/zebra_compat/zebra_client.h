@@ -17,7 +17,7 @@
 
 class CChainParams;
 
-namespace unity {
+namespace zebra_compat {
 
 struct ZebraEndpoint {
     std::string url;
@@ -130,9 +130,9 @@ private:
         const std::string& requestBody);
 };
 
-class UnityZebraClient {
+class ZebraCompatClient {
 public:
-    UnityZebraClient(ZebraClientConfig config, std::unique_ptr<ZebraRpcTransport> transport);
+    ZebraCompatClient(ZebraClientConfig config, std::unique_ptr<ZebraRpcTransport> transport);
 
     ZebraBlockchainInfo GetBlockchainInfo();
     std::string GetBestBlockHash();
@@ -158,9 +158,9 @@ private:
 
 bool ParseZebraEndpoint(const std::string& url, ZebraEndpoint& endpoint, std::string& error);
 bool LoadZebraClientConfig(ZebraClientConfig& config, std::string& error);
-int UnitySyncBatchSize();
+int ZebraCompatSyncBatchSize();
 size_t ZebraRpcMaxResponseBodySize();
 
-} // namespace unity
+} // namespace zebra_compat
 
 #endif // ZCASH_ZEBRA_COMPAT_ZEBRA_CLIENT_H

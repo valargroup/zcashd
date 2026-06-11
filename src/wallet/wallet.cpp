@@ -4876,8 +4876,8 @@ void CWallet::ReacceptWalletTransactions()
 bool CWalletTx::RelayWalletTransaction()
 {
     assert(pwallet->GetBroadcastTransactions());
-    if (unity::IsEnabled()) {
-        LogPrint("wallet", "Unity wallet rebroadcast does not use Zcash P2P relay for wtx %s\n", GetHash().ToString());
+    if (zebra_compat::IsEnabled()) {
+        LogPrint("wallet", "zebra-compat wallet rebroadcast does not use Zcash P2P relay for wtx %s\n", GetHash().ToString());
         return false;
     }
     if (!IsCoinBase())
@@ -5894,14 +5894,14 @@ bool CWallet::CreateTransaction(const vector<CRecipient>& vecSend, CWalletTx& wt
  */
 bool CWallet::CommitTransaction(CWalletTx& wtxNew, std::optional<std::reference_wrapper<CReserveKey>> reservekey, CValidationState& state)
 {
-    if (fBroadcastTransactions && unity::IsEnabled()) {
+    if (fBroadcastTransactions && zebra_compat::IsEnabled()) {
         const CTransaction txToForward = (CTransaction)wtxNew;
-        unity::TxForwardingResult result =
-            unity::ForwardRawTransaction(EncodeHexTx(txToForward), txToForward.GetHash());
+        zebra_compat::TxForwardingResult result =
+            zebra_compat::ForwardRawTransaction(EncodeHexTx(txToForward), txToForward.GetHash());
         if (!result.success) {
-            LogPrintf("CommitTransaction(): Unity transaction forwarding failed for %s: %s\n",
+            LogPrintf("CommitTransaction(): zebra-compat transaction forwarding failed for %s: %s\n",
                       txToForward.GetHash().GetHex(), result.error);
-            return state.Error(strprintf("Unity transaction forwarding failed: %s", result.error));
+            return state.Error(strprintf("zebra-compat transaction forwarding failed: %s", result.error));
         }
     }
 
@@ -5943,15 +5943,15 @@ bool CWallet::CommitTransaction(CWalletTx& wtxNew, std::optional<std::reference_
             {
                 // This must not fail. The transaction has already been signed and recorded.
                 LogPrintf("CommitTransaction(): Error: Transaction not valid, %s\n", state.GetRejectReason());
-                if (unity::IsEnabled()) {
+                if (zebra_compat::IsEnabled()) {
                     LogPrintf("CommitTransaction(): Zebra accepted tx %s but local mempool did not accept it; mempool mirror will reconcile pending state\n",
                               wtxNew.GetHash().GetHex());
                     return true;
                 }
                 return false;
             }
-            if (unity::IsEnabled()) {
-                LogPrintf("CommitTransaction(): Unity transaction %s accepted by Zebra; local wallet state committed\n",
+            if (zebra_compat::IsEnabled()) {
+                LogPrintf("CommitTransaction(): zebra-compat transaction %s accepted by Zebra; local wallet state committed\n",
                           wtxNew.GetHash().GetHex());
             } else {
                 wtxNew.RelayWalletTransaction();

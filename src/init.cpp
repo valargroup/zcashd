@@ -176,7 +176,7 @@ static CCoinsViewErrorCatcher *pcoinscatcher = NULL;
 
 void Interrupt(boost::thread_group& threadGroup)
 {
-    unity::InterruptUnityNode();
+    zebra_compat::InterruptZebraCompatNode();
     InterruptHTTPServer();
     InterruptHTTPRPC();
     InterruptRPC();
@@ -213,7 +213,7 @@ void Shutdown()
 #ifdef ENABLE_MINING
     GenerateBitcoins(false, 0, Params());
 #endif
-    unity::StopUnityNode();
+    zebra_compat::StopZebraCompatNode();
     StopNode();
     StopTorControl();
     UnregisterNodeSignals(GetNodeSignals());
@@ -912,7 +912,7 @@ bool AppInitServers(boost::thread_group& threadGroup)
 // Parameter interaction based on rules
 void InitParameterInteraction()
 {
-    unity::InitParameterInteraction();
+    zebra_compat::InitParameterInteraction();
 
     // when specifying an explicit binding address, you want to listen on it
     // even when -connect or -proxy is specified
@@ -1097,7 +1097,7 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
         return InitError(err.value());
     }
 
-    std::string unityOptionError = unity::ValidateParameterInteraction();
+    std::string unityOptionError = zebra_compat::ValidateParameterInteraction();
     if (!unityOptionError.empty()) {
         return InitError(unityOptionError);
     }
@@ -1698,7 +1698,7 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
     }
 
     // see Step 2: parameter interactions for more information about these
-    fListen = GetBoolArg("-listen", DEFAULT_LISTEN) && unity::IsP2PEnabled();
+    fListen = GetBoolArg("-listen", DEFAULT_LISTEN) && zebra_compat::IsP2PEnabled();
     fDiscover = GetBoolArg("-discover", true);
     fNameLookup = GetBoolArg("-dns", DEFAULT_NAME_LOOKUP);
 
@@ -1817,12 +1817,12 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
                         CleanupBlockRevFiles();
                 }
 
-                // Open the Unity metadata database before loading the block
+                // Open the zebra-compat metadata database before loading the block
                 // index: LoadBlockIndex consults the cached trusted block
                 // boundary to skip header work checks for trusted Zebra
                 // regtest blocks (see LoadBlockIndexGuts).
-                if (unity::IsTrustedValidationEnabled() && !unity::InitUnityMetadata()) {
-                    strLoadError = _("Error opening Unity metadata database");
+                if (zebra_compat::IsTrustedValidationEnabled() && !zebra_compat::InitZebraCompatMetadata()) {
+                    strLoadError = _("Error opening zebra-compat metadata database");
                     break;
                 }
 
@@ -2134,20 +2134,20 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
     }
 #endif
 
-    if (unity::IsP2PEnabled()) {
+    if (zebra_compat::IsP2PEnabled()) {
         if (GetBoolArg("-listenonion", DEFAULT_LISTEN_ONION))
             StartTorControl(threadGroup, scheduler);
 
         StartNode(threadGroup, scheduler);
     } else {
-        if (!unity::StartUnityNode(threadGroup, scheduler, chainparams)) {
-            return InitError(_("Unable to start Unity node"));
+        if (!zebra_compat::StartZebraCompatNode(threadGroup, scheduler, chainparams)) {
+            return InitError(_("Unable to start zebra-compat node"));
         }
     }
 
 #ifdef ENABLE_MINING
     // Generate coins in the background
-    if (!unity::IsEnabled()) {
+    if (!zebra_compat::IsEnabled()) {
         GenerateBitcoins(GetBoolArg("-gen", DEFAULT_GENERATE), GetArg("-genproclimit", DEFAULT_GENERATE_THREADS), chainparams);
     }
 #endif

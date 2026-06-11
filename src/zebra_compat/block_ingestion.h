@@ -11,7 +11,7 @@
 class CBlock;
 class CChainParams;
 
-namespace unity {
+namespace zebra_compat {
 
 struct BlockIngestionResult {
     bool success = false;
@@ -25,6 +25,6 @@ BlockIngestionResult IngestBlock(const CBlock& block, const CChainParams& chainp
 BlockIngestionResult IngestBlockBatch(const std::vector<CBlock>& blocks, const CChainParams& chainparams);
 void RecordBlockIngestionResult(const BlockIngestionResult& result);
 
-} // namespace unity
+} // namespace zebra_compat
 
 #endif // ZCASH_ZEBRA_COMPAT_BLOCK_INGESTION_H

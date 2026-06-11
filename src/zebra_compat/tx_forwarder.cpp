@@ -17,7 +17,7 @@
 
 #include <univalue.h>
 
-namespace unity {
+namespace zebra_compat {
 namespace {
 
 CCriticalSection cs_tx_forwarding;
@@ -58,7 +58,7 @@ TxForwardingResult Failure(int rpcErrorCode, const std::string& error, bool tran
         g_tx_forwarding_status.lastTransportError = error;
     }
     LogPrintf(
-        "Unity transaction forwarding failed: rpc_error_code=%d error=\"%s\" pending=%d\n",
+        "zebra-compat transaction forwarding failed: rpc_error_code=%d error=\"%s\" pending=%d\n",
         rpcErrorCode,
         error.c_str(),
         static_cast<int>(g_tx_forwarding_status.pending));
@@ -87,7 +87,7 @@ void PrunePendingForwardedTransactions(int64_t now)
         g_pending_forwarded_order.pop_front();
         g_pending_forwarded_transactions.erase(txid);
         g_tx_forwarding_status.lastError =
-            "Unity transaction forwarding grace set exceeded its bound; evicted oldest pending transaction";
+            "zebra-compat transaction forwarding grace set exceeded its bound; evicted oldest pending transaction";
         g_tx_forwarding_status.lastTransportError =
             g_tx_forwarding_status.lastError;
     }
@@ -116,7 +116,7 @@ void RecordSuccess()
 } // namespace
 
 TxForwardingResult ForwardRawTransaction(
-    UnityZebraClient& client,
+    ZebraCompatClient& client,
     const std::string& txHex,
     const uint256& expectedTxId)
 {
@@ -154,12 +154,12 @@ TxForwardingResult ForwardRawTransaction(
     std::string error;
     if (!LoadZebraClientConfig(config, error)) {
         if (error == "waiting_for_zebra_endpoint") {
-            error = "Unity Zebra endpoint is not configured";
+            error = "zebra-compat Zebra endpoint is not configured";
         }
         return Failure(RPC_CLIENT_NOT_CONNECTED, error, true);
     }
 
-    UnityZebraClient client(config, std::unique_ptr<ZebraRpcTransport>(new LibeventZebraRpcTransport()));
+    ZebraCompatClient client(config, std::unique_ptr<ZebraRpcTransport>(new LibeventZebraRpcTransport()));
     return ForwardRawTransaction(client, txHex, expectedTxId);
 }
 
@@ -247,4 +247,4 @@ size_t MaxPendingForwardedTransactions()
     return MAX_PENDING_FORWARDED_TXIDS;
 }
 
-} // namespace unity
+} // namespace zebra_compat

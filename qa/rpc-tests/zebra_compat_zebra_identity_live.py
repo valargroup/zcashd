@@ -19,7 +19,7 @@ from test_framework.util import (
 REGTEST_GENESIS = '029f11d80ef9765602235e1bc9727e3eb6ba20839319f761fee920d63401e327'
 
 
-class UnityZebraIdentityLiveTest(BitcoinTestFramework):
+class ZebraCompatZebraIdentityLiveTest(BitcoinTestFramework):
 
     def __init__(self):
         super().__init__()
@@ -28,16 +28,16 @@ class UnityZebraIdentityLiveTest(BitcoinTestFramework):
 
     def add_options(self, parser):
         parser.add_option('--zebra-rpc-url', dest='zebra_rpc_url',
-                          default=os.getenv('UNITY_ZEBRA_RPC_URL', ''),
-                          help='Real regtest Zebra JSON-RPC URL for the live Unity identity gate')
+                          default=os.getenv('ZEBRA_COMPAT_ZEBRA_RPC_URL', ''),
+                          help='Real regtest Zebra JSON-RPC URL for the live zebra-compat identity gate')
         parser.add_option('--zebra-rpc-user', dest='zebra_rpc_user',
-                          default=os.getenv('UNITY_ZEBRA_RPC_USER', ''),
+                          default=os.getenv('ZEBRA_COMPAT_ZEBRA_RPC_USER', ''),
                           help='Zebra JSON-RPC username')
         parser.add_option('--zebra-rpc-password', dest='zebra_rpc_password',
-                          default=os.getenv('UNITY_ZEBRA_RPC_PASSWORD', ''),
+                          default=os.getenv('ZEBRA_COMPAT_ZEBRA_RPC_PASSWORD', ''),
                           help='Zebra JSON-RPC password')
         parser.add_option('--zebra-rpc-cookiefile', dest='zebra_rpc_cookiefile',
-                          default=os.getenv('UNITY_ZEBRA_RPC_COOKIEFILE', ''),
+                          default=os.getenv('ZEBRA_COMPAT_ZEBRA_RPC_COOKIEFILE', ''),
                           help='Zebra JSON-RPC cookie file')
 
     def setup_chain(self):
@@ -61,7 +61,7 @@ class UnityZebraIdentityLiveTest(BitcoinTestFramework):
     def zebra_rpc(self, method, params=None):
         payload = json.dumps({
             'jsonrpc': '1.0',
-            'id': 'unity-live-test',
+            'id': 'zebra-compat-live-test',
             'method': method,
             'params': [] if params is None else params,
         }).encode('utf8')
@@ -79,7 +79,7 @@ class UnityZebraIdentityLiveTest(BitcoinTestFramework):
             raise AssertionError('Zebra RPC %s returned error: %r' % (method, body['error']))
         return body['result']
 
-    def unity_args(self):
+    def zebra_compat_args(self):
         args = [
             '-zebra-compat',
             '-zebra-compat-url=%s' % self.options.zebra_rpc_url,
@@ -105,7 +105,7 @@ class UnityZebraIdentityLiveTest(BitcoinTestFramework):
         assert_equal(zebra_chain['chain'], 'regtest')
         assert_equal(zebra_genesis, REGTEST_GENESIS)
 
-        node = start_node(0, self.options.tmpdir, self.unity_args())
+        node = start_node(0, self.options.tmpdir, self.zebra_compat_args())
         try:
             info = node.getzebracompatinfo()
             assert_equal(info['zebra']['reachable'], True)
@@ -119,4 +119,4 @@ class UnityZebraIdentityLiveTest(BitcoinTestFramework):
 
 
 if __name__ == '__main__':
-    UnityZebraIdentityLiveTest().main()
+    ZebraCompatZebraIdentityLiveTest().main()
