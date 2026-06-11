@@ -429,6 +429,7 @@ struct SyncOutcome {
 };
 
 bool IsTransientIdentityFailure(const ZebraIdentity& identity);
+const char* IdentityFailureDetail(const ZebraIdentity& identity, bool transient);
 
 CommonAncestorSearchResult FindCommonAncestorWithZebra(
     ZebraCompatClient& client,
@@ -516,7 +517,7 @@ SyncOutcome ValidatePostIngestionTipOnZebraBestChain(
         UpdateSyncStatus(
             transient ? "waiting" : "failed",
             transient ? "degraded" : "failed",
-            transient ? "zebra_unreachable" : "zebra_identity_error",
+            IdentityFailureDetail(current, transient),
             current.lastError);
         return {false, !transient, transient};
     }
@@ -735,7 +736,67 @@ SyncOutcome SyncZebraCompatReorgToZebraBest(
 
 bool IsTransientIdentityFailure(const ZebraIdentity& identity)
 {
-    return identity.failure == ZebraIdentity::TRANSIENT;
+    return identity.failure == ZebraIdentity::TRANSIENT ||
+        (identity.failure == ZebraIdentity::AUTHENTICATION &&
+         !GetArg("-zebra-compat-cookiefile", "").empty());
+}
+
+// Returns the sync status detail for a Zebra identity failure.
+// Authentication is retryable only when cookie auth is configured, because the
+// next worker pass can reload a rotated cookie from disk.
+const char* IdentityFailureDetail(const ZebraIdentity& identity, bool transient)
+{
+    if (transient) {
+        return identity.failure == ZebraIdentity::AUTHENTICATION ?
+            "zebra_authentication_retry" :
+            "zebra_unreachable";
+    }
+    return "zebra_identity_error";
+}
+
+// Returns true for client-configuration failures that can clear without a
+// zcashd restart, such as Zebra writing or replacing the configured cookie file.
+bool IsRetryableZebraClientConfigError(const std::string& error)
+{
+    return error == "waiting_for_zebra_endpoint" ||
+        error.find("Unable to open Zebra RPC cookie file") != std::string::npos ||
+        error == "Zebra RPC cookie must be in user:password format";
+}
+
+// Loads the Zebra RPC config for one worker pass.
+//
+// Returns true when `config` is ready to use. On failure, updates zebra-compat
+// sync status and sets `stickyFault` to indicate whether the worker should stop
+// retrying this configuration until restart.
+bool LoadZebraClientConfigForWorker(ZebraClientConfig& config, bool& stickyFault)
+{
+    std::string error;
+    if (LoadZebraClientConfig(config, error)) {
+        stickyFault = false;
+        return true;
+    }
+
+    stickyFault = !IsRetryableZebraClientConfigError(error);
+    if (stickyFault) {
+        UpdateSyncStatus("failed", "failed", "zebra_configuration_error", error);
+        LogPrintf("zebra-compat Zebra configuration failed: %s\n", error);
+        return false;
+    }
+
+    const std::string statusError = error == "waiting_for_zebra_endpoint" ? "" : error;
+    UpdateSyncStatus(
+        "waiting",
+        "degraded",
+        error == "waiting_for_zebra_endpoint" ?
+            "waiting_for_zebra_endpoint" :
+            "zebra_configuration_unavailable",
+        statusError);
+    if (error == "waiting_for_zebra_endpoint") {
+        LogPrint(
+            "zebra-compat",
+            "zebra-compat node waiting for Zebra endpoint configuration (-zebra-compat-url)\n");
+    }
+    return false;
 }
 
 struct ForwardFetch {
@@ -898,7 +959,7 @@ SyncOutcome SyncZebraCompatOnce(
         UpdateSyncStatus(
             transient ? "waiting" : "failed",
             transient ? "degraded" : "failed",
-            transient ? "zebra_unreachable" : "zebra_identity_error",
+            IdentityFailureDetail(identity, transient),
             identity.lastError);
         return {false, !transient, transient};
     }
@@ -973,16 +1034,11 @@ void SleepZebraCompatRetry(int& consecutiveRetryCount, bool countTransientFailur
     MilliSleep((backoffSeconds > 0 ? backoffSeconds : ZebraCompatPollIntervalSeconds()) * 1000);
 }
 
-void ZebraCompatBlockSourceThread(ZebraClientConfig config, std::string chainName)
+void ZebraCompatBlockSourceThread(std::string chainName)
 {
     RenameThread("zcash-zebra-compat");
     try {
         const CChainParams& chainparams = Params(chainName);
-        ZebraCompatClient client(config, std::unique_ptr<ZebraRpcTransport>(new LibeventZebraRpcTransport()));
-        // Dedicated client for prefetching the next batch concurrently with applying the
-        // current one. A second client keeps acquisition and application from sharing any
-        // per-call transport state.
-        ZebraCompatClient prefetchClient(config, std::unique_ptr<ZebraRpcTransport>(new LibeventZebraRpcTransport()));
         bool stickyFault = false;
         int consecutiveRetryCount = 0;
         while (!g_zebra_compat_interrupt.load()) {
@@ -993,6 +1049,16 @@ void ZebraCompatBlockSourceThread(ZebraClientConfig config, std::string chainNam
                     MilliSleep(ZebraCompatPollIntervalSeconds() * 1000);
                     continue;
                 }
+                ZebraClientConfig config;
+                if (!LoadZebraClientConfigForWorker(config, stickyFault)) {
+                    SleepZebraCompatRetry(consecutiveRetryCount, !stickyFault);
+                    continue;
+                }
+                // Dedicated client for prefetching the next batch concurrently with applying the
+                // current one. A second client keeps acquisition and application from sharing any
+                // per-call transport state. Rebuilding both clients each pass reloads cookie auth.
+                ZebraCompatClient client(config, std::unique_ptr<ZebraRpcTransport>(new LibeventZebraRpcTransport()));
+                ZebraCompatClient prefetchClient(config, std::unique_ptr<ZebraRpcTransport>(new LibeventZebraRpcTransport()));
                 SyncOutcome outcome = SyncZebraCompatOnce(client, prefetchClient, chainparams);
                 stickyFault = outcome.stickyFault;
                 const bool synced = IsZebraCompatSynced();
@@ -1252,38 +1318,14 @@ bool StartZebraCompatNode(boost::thread_group& threadGroup, CScheduler& schedule
         return true;
     }
 
-    ZebraClientConfig config;
-    std::string error;
-    if (!LoadZebraClientConfig(config, error)) {
-        status.lastError = error == "waiting_for_zebra_endpoint" ? "" : error;
-        if (error != "waiting_for_zebra_endpoint") {
-            status.serviceState = "failed";
-            status.syncState = "failed";
-            status.syncDetail = "zebra_configuration_error";
-            LogPrintf("zebra-compat Zebra configuration failed: %s\n", error);
-        } else {
-            LogPrintf("zebra-compat node waiting for Zebra endpoint configuration (-zebra-compat-url)\n");
-        }
-    } else {
-        status.serviceState = "waiting";
-        status.syncState = "degraded";
-        status.syncDetail = "waiting_for_zebra_health";
-        LogPrintf("zebra-compat node starting Zebra polling worker for %s\n", config.endpoint.url.c_str());
-        {
-            LOCK(cs_zebra_compat_status);
-            g_status = status;
-        }
-        g_zebra_compat_worker.reset(new boost::thread(boost::bind(
-            &ZebraCompatBlockSourceThread,
-            config,
-            chainparams.NetworkIDString())));
-        return true;
-    }
-
     {
         LOCK(cs_zebra_compat_status);
         g_status = status;
     }
+    LogPrintf("zebra-compat node starting Zebra polling worker\n");
+    g_zebra_compat_worker.reset(new boost::thread(boost::bind(
+        &ZebraCompatBlockSourceThread,
+        chainparams.NetworkIDString())));
     return true;
 }
 
@@ -1606,6 +1648,26 @@ ZebraCompatSyncTestOutcome TEST_SyncZebraTipBelowReorgWindow(
         zebraBestHeight,
         zebraBestHash,
         ancestor);
+
+    ZebraCompatSyncTestOutcome testOutcome;
+    testOutcome.progressed = outcome.progressed;
+    testOutcome.stickyFault = outcome.stickyFault;
+    testOutcome.transientFailure = outcome.transientFailure;
+    return testOutcome;
+}
+
+bool TEST_LoadZebraClientConfigForWorker(bool& stickyFault)
+{
+    ZebraClientConfig config;
+    return LoadZebraClientConfigForWorker(config, stickyFault);
+}
+
+ZebraCompatSyncTestOutcome TEST_SyncZebraCompatOnce(
+    ZebraCompatClient& client,
+    ZebraCompatClient& prefetchClient,
+    const CChainParams& chainparams)
+{
+    SyncOutcome outcome = SyncZebraCompatOnce(client, prefetchClient, chainparams);
 
     ZebraCompatSyncTestOutcome testOutcome;
     testOutcome.progressed = outcome.progressed;
