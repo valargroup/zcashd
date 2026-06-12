@@ -396,6 +396,7 @@ std::string HelpMessage(HelpMessageMode mode)
     strUsage += HelpMessageOpt("-zebra-compat", _("Run in zebra-compat mode: use Zebra as the block source, disable local Zcash P2P, and use trusted Zebra block validation"));
 
     strUsage += HelpMessageGroup(_("zebra-compat options:"));
+    strUsage += HelpMessageOpt("-zebra-compat-flush-interval=<seconds>", _("Maximum age in seconds of un-flushed chainstate while ingesting trusted blocks from Zebra; bounds the replay window after an unclean shutdown (default: 300, 0 to use the stock flush policy)"));
     strUsage += HelpMessageOpt("-zebra-compat-poll-interval=<seconds>", _("zebra-compat Zebra polling interval in seconds (default: 5)"));
     strUsage += HelpMessageOpt("-zebra-compat-prefer-stream", _("Prefer Zebra streaming when available (reserved for a later zebra-compat checkpoint; not active yet)"));
     strUsage += HelpMessageOpt("-zebra-compat-sync-batch-size=<n>", _("zebra-compat Zebra polling block batch size; also bounds the deepest Zebra reorg zcashd can follow (default: 30)"));

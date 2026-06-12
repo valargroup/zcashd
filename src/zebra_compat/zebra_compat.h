@@ -165,6 +165,24 @@ void TEST_ResetReadinessHysteresis();
 // reporting state after other tests mutate sync details.
 void TEST_ResetZebraCompatStatusForTesting();
 
+// Test seam for the trusted-ingest chainstate flush decision.
+bool TEST_ShouldFlushZebraCompatChainstate(
+    int64_t now,
+    int64_t lastFlushTime,
+    int64_t intervalSeconds,
+    bool progressSinceFlush,
+    bool syncedTransition);
+
+// Test seam that publishes a synced-tip observation as the sync worker would.
+void TEST_UpdateZebraCompatSyncedTip(int height, const std::string& hash);
+
+// Test-only read of whether un-flushed ingest progress is pending.
+bool TEST_GetZebraCompatProgressSinceFlush();
+
+// Test-only clear of pending ingest progress, as a successful flush would do,
+// without touching the recorded synced tip.
+void TEST_ClearZebraCompatProgressSinceFlush();
+
 void TEST_SetZebraCompatStatusForReadiness(
     bool identityVerified,
     bool tipMatchedZebra,

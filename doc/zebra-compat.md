@@ -34,6 +34,7 @@ The lower-level knobs are available for testing and staged rollout:
 -zebra-compat-sync-response-budget-mb=<MiB>
 -zebra-compat-timeout=<seconds>
 -zebra-compat-zebra-rpc-max-response-body-bytes=<bytes>
+-zebra-compat-flush-interval=<seconds>
 ```
 
 ## Quick Start
@@ -455,6 +456,40 @@ For hard sync faults:
    mismatch before restarting.
 5. If local block files or chainstate are corrupt, recover from backup or run
    the documented reindex strategy for the selected trusted-source policy.
+
+### Crash recovery and the chainstate flush interval
+
+Stock `zcashd` writes its coins database to disk only on a 24-hour timer, when
+the coin cache outgrows `-dbcache`, or during a clean shutdown. That policy
+assumes blocks arrive at wall-clock speed. In zebra-compat mode, ingest runs
+orders of magnitude faster, so under the stock policy an unclean shutdown
+(crash, SIGKILL, power loss) can discard the entire run's chainstate and force
+an equally long replay on the next start.
+
+zebra-compat therefore flushes the chainstate during trusted ingest:
+
+- every `-zebra-compat-flush-interval` seconds (default `300`) while new blocks
+  are being connected, and
+- once when catch-up first reaches Zebra's tip, so a steady-state restart
+  replays almost nothing.
+
+An idle node does not re-flush: flushes are scheduled only after new local tip
+progress. Setting `-zebra-compat-flush-interval=0` disables the compat flush
+and restores the stock policy; the replay window after an unclean shutdown is
+then bounded only by the stock triggers above.
+
+After an unclean shutdown, the next start replays from the last flushed
+chainstate toward the persisted trusted boundary. Blocks at or below the
+boundary that are already in local block files reconnect with trusted
+validation; anything beyond local data is re-fetched from Zebra. The expected
+replay is therefore at most the chain work ingested during one flush interval.
+Monitor flush behavior through `getzebracompatinfo.chainstate_flush`
+(`interval_seconds`, `last_flush_time`, `last_flushed_height`,
+`last_flushed_hash`, `pending_progress`, `last_error`).
+
+The trusted boundary metadata is fsynced on every ingested batch, so after a
+crash the boundary is normally ahead of the chainstate. That is expected: the
+boundary is what lets replayed blocks keep their trusted-validation decision.
 
 For reindex or reindex-chainstate:
 

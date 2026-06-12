@@ -463,6 +463,77 @@ BOOST_AUTO_TEST_CASE(zebra_compat_rejects_invalid_option_values)
     BOOST_CHECK(zebra_compat::ValidateParameterInteraction().find("-zebra-compat-timeout must be at least 1") != std::string::npos);
 }
 
+BOOST_AUTO_TEST_CASE(zebra_compat_flush_interval_option_validation)
+{
+    ArgsSnapshot snapshot;
+
+    ApplyZebraCompatArgs("-zebra-compat -blocksource=zebra -p2p=0 -blockvalidation=trusted-zebra");
+    BOOST_CHECK_EQUAL(zebra_compat::ValidateParameterInteraction(), "");
+
+    ApplyZebraCompatArgs(
+        "-zebra-compat -blocksource=zebra -p2p=0 -blockvalidation=trusted-zebra "
+        "-zebra-compat-flush-interval=0");
+    BOOST_CHECK_EQUAL(zebra_compat::ValidateParameterInteraction(), "");
+
+    ApplyZebraCompatArgs(
+        "-zebra-compat -blocksource=zebra -p2p=0 -blockvalidation=trusted-zebra "
+        "-zebra-compat-flush-interval=-1");
+    BOOST_CHECK(zebra_compat::ValidateParameterInteraction().find(
+                    "-zebra-compat-flush-interval must be at least 0") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(zebra_compat_flush_decision_matrix)
+{
+    const int64_t interval = 300;
+    const int64_t lastFlush = 1000;
+
+    // Disabled interval never flushes, even on a synced transition with progress.
+    BOOST_CHECK(!zebra_compat::TEST_ShouldFlushZebraCompatChainstate(
+        lastFlush + 10000, lastFlush, 0, /*progressSinceFlush=*/true, /*syncedTransition=*/true));
+
+    // No progress since the last flush never flushes: an idle node must not
+    // rewrite its chainstate every interval or on repeated synced polls.
+    BOOST_CHECK(!zebra_compat::TEST_ShouldFlushZebraCompatChainstate(
+        lastFlush + 10000, lastFlush, interval, /*progressSinceFlush=*/false, /*syncedTransition=*/false));
+    BOOST_CHECK(!zebra_compat::TEST_ShouldFlushZebraCompatChainstate(
+        lastFlush + 10000, lastFlush, interval, /*progressSinceFlush=*/false, /*syncedTransition=*/true));
+
+    // Progress within the interval waits for the interval to elapse.
+    BOOST_CHECK(!zebra_compat::TEST_ShouldFlushZebraCompatChainstate(
+        lastFlush + interval - 1, lastFlush, interval, /*progressSinceFlush=*/true, /*syncedTransition=*/false));
+    BOOST_CHECK(zebra_compat::TEST_ShouldFlushZebraCompatChainstate(
+        lastFlush + interval, lastFlush, interval, /*progressSinceFlush=*/true, /*syncedTransition=*/false));
+
+    // A synced transition with progress flushes immediately, bounding the replay
+    // window for steady-state restarts.
+    BOOST_CHECK(zebra_compat::TEST_ShouldFlushZebraCompatChainstate(
+        lastFlush + 1, lastFlush, interval, /*progressSinceFlush=*/true, /*syncedTransition=*/true));
+}
+
+BOOST_AUTO_TEST_CASE(zebra_compat_synced_tip_progress_marking)
+{
+    zebra_compat::TEST_ResetZebraCompatStatusForTesting();
+
+    BOOST_CHECK(!zebra_compat::TEST_GetZebraCompatProgressSinceFlush());
+
+    // A new tip marks flushable progress.
+    zebra_compat::TEST_UpdateZebraCompatSyncedTip(100, "00aa");
+    BOOST_CHECK(zebra_compat::TEST_GetZebraCompatProgressSinceFlush());
+
+    // After a flush clears the pending progress, republishing the unchanged tip
+    // (the already-synced poll path) must not mark progress again; otherwise an
+    // idle node would rewrite its chainstate once per interval forever.
+    zebra_compat::TEST_ClearZebraCompatProgressSinceFlush();
+    zebra_compat::TEST_UpdateZebraCompatSyncedTip(100, "00aa");
+    BOOST_CHECK(!zebra_compat::TEST_GetZebraCompatProgressSinceFlush());
+
+    // A genuinely new tip marks progress again.
+    zebra_compat::TEST_UpdateZebraCompatSyncedTip(101, "00ab");
+    BOOST_CHECK(zebra_compat::TEST_GetZebraCompatProgressSinceFlush());
+
+    zebra_compat::TEST_ResetZebraCompatStatusForTesting();
+}
+
 BOOST_AUTO_TEST_CASE(zebra_client_config_accepts_loopback_http_endpoints)
 {
     ArgsSnapshot snapshot;
