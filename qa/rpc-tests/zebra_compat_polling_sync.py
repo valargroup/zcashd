@@ -257,19 +257,26 @@ class ZebraCompatPollingSyncTest(BitcoinTestFramework):
     def wait_for_zebra_compat_tip(self, node, source):
         wait_until(lambda: node.getblockcount() == source.getblockcount() and
                    node.getbestblockhash() == source.getbestblockhash())
-        wait_until(lambda: node.getzebracompatinfo()['readiness'] == 'ready')
-        info = node.getzebracompatinfo()
-        assert_equal(info['sync']['state'], 'synced')
-        assert_equal(info['sync']['detail'], 'zebra_tip_matched')
-        assert_equal(info['readiness'], 'ready')
-        assert_equal(info['sync']['retry_count'], 0)
-        assert_equal(info['sync']['current_backoff_seconds'], 0)
-        assert_equal(info['metrics']['sync_lag'], 0)
-        assert_equal(info['metrics']['mempool_ready'], True)
-        assert_equal(info['metrics']['tx_forwarding_transport_ready'], True)
-        assert_equal(info['metrics']['validation_notifications_caught_up'], True)
-        assert_equal(info['zebra']['bestblockhash'], source.getbestblockhash())
-        assert_equal(info['local']['bestblockhash'], source.getbestblockhash())
+
+        # Evaluate every readiness condition against one snapshot: separate
+        # waits and asserts race against new blocks and readiness hysteresis,
+        # which can briefly hold `ready` while an underlying metric dips.
+        def fully_ready():
+            info = node.getzebracompatinfo()
+            source_tip = source.getbestblockhash()
+            return (info['readiness'] == 'ready' and
+                    info['sync']['state'] == 'synced' and
+                    info['sync']['detail'] == 'zebra_tip_matched' and
+                    info['sync']['retry_count'] == 0 and
+                    info['sync']['current_backoff_seconds'] == 0 and
+                    info['metrics']['sync_lag'] == 0 and
+                    info['metrics']['mempool_ready'] and
+                    info['metrics']['tx_forwarding_transport_ready'] and
+                    info['metrics']['validation_notifications_caught_up'] and
+                    info['zebra']['bestblockhash'] == source_tip and
+                    info['local']['bestblockhash'] == source_tip)
+
+        wait_until(fully_ready)
 
     def reserve_port(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -289,6 +296,7 @@ class ZebraCompatPollingSyncTest(BitcoinTestFramework):
         wait_until(lambda: zebra_compat.getzebracompatinfo()['sync']['detail'] in [
             'zebra_unreachable',
             'zebra_rpc_error',
+            'zebra_rpc_error_retry',
         ] and zebra_compat.getzebracompatinfo()['sync']['retry_count'] >= 1)
         unreachable_info = zebra_compat.getzebracompatinfo()
         assert_equal(unreachable_info['readiness'], 'degraded')
@@ -314,6 +322,10 @@ class ZebraCompatPollingSyncTest(BitcoinTestFramework):
             zebra_compat = start_node(1, self.options.tmpdir, self.zebra_compat_args(endpoint))
             source.generate(2)
             wait_until(lambda: zebra_compat.getzebracompatinfo()['sync']['detail'] == 'zebra_rpc_error')
+            # The node reached ready when its tip matched Zebra before the new
+            # blocks arrived, so readiness hysteresis holds `ready` for about two
+            # poll intervals before reporting the batch-fetch failures.
+            wait_until(lambda: zebra_compat.getzebracompatinfo()['readiness'] == 'degraded')
             rpc_error_info = zebra_compat.getzebracompatinfo()
             assert_equal(rpc_error_info['readiness'], 'degraded')
             assert rpc_error_info['sync']['retry_count'] >= 1
