@@ -16,6 +16,10 @@
 #include "util/strencodings.h"
 #include "util/time.h"
 
+#ifdef ENABLE_WALLET
+#include "wallet/wallet.h"
+#endif
+
 #include <algorithm>
 #include <list>
 #include <map>
@@ -37,6 +41,7 @@ static const size_t MAX_MIRROR_TXIDS_PER_POLL = 1024;
 static const size_t MAX_DEFERRED_TXIDS = MAX_MIRROR_TXIDS_PER_POLL;
 static const size_t MAX_DEFERRED_PASSES = 2;
 static const size_t MAX_DIVERGENCE_DETAILS = 128;
+static const size_t MAX_WALLET_RESUBMITS_PER_POLL = 64;
 
 bool IsValidTxIdHex(const std::string& value)
 {
@@ -104,7 +109,27 @@ bool MissingZebraMempoolParent(const CTransaction& tx, const std::set<std::strin
     return false;
 }
 
-size_t RemoveTransactionsNotInZebra(const std::set<std::string>& zebraTxIds, int& removed)
+// Returns true when the local wallet owns this transaction, so the mirror
+// resubmits it to Zebra instead of evicting it (e.g. wallet transactions
+// reaccepted into the local mempool at startup that Zebra has never seen).
+bool IsLocalWalletTransaction(const std::string& txid)
+{
+#ifdef ENABLE_WALLET
+    if (pwalletMain == nullptr) {
+        return false;
+    }
+    LOCK(pwalletMain->cs_wallet);
+    return pwalletMain->mapWallet.count(uint256S(txid)) > 0;
+#else
+    (void)txid;
+    return false;
+#endif
+}
+
+size_t RemoveTransactionsNotInZebra(
+    const std::set<std::string>& zebraTxIds,
+    int& removed,
+    std::vector<CTransaction>& walletResubmits)
 {
     size_t retainedForwarded = 0;
     ExpireForwardedTransactions();
@@ -125,6 +150,26 @@ size_t RemoveTransactionsNotInZebra(const std::set<std::string>& zebraTxIds, int
 
         std::shared_ptr<const CTransaction> tx = mempool.get(uint256S(txid));
         if (!tx) {
+            continue;
+        }
+
+        // Local wallet transactions absent from Zebra are resubmitted rather
+        // than evicted: register them in the forwarded grace set now (so the
+        // next passes retain them while forwarding settles) and queue them for
+        // forwarding after cs_main is released. If Zebra keeps rejecting one,
+        // its grace entry expires and it cycles through here again, giving
+        // persistent wallet rebroadcast bounded to one attempt per grace
+        // window. Over-cap transactions stay in the mempool untouched and are
+        // picked up on later polls.
+        if (IsLocalWalletTransaction(txid)) {
+            if (walletResubmits.size() < MAX_WALLET_RESUBMITS_PER_POLL) {
+                RecordForwardedTransaction(tx->GetHash());
+                walletResubmits.push_back(*tx);
+                LogPrint("mempool", "zebra-compat mempool mirror resubmitting wallet txid %s absent from Zebra mempool\n", txid);
+            } else {
+                LogPrint("mempool", "zebra-compat mempool mirror deferring wallet txid %s resubmission to a later poll\n", txid);
+            }
+            retainedForwarded++;
             continue;
         }
 
@@ -317,9 +362,11 @@ MempoolMirrorResult SyncMempoolMirrorOnce(ZebraCompatClient& client, const CChai
         std::set<std::string> localTxIdsSnapshot;
         size_t missingCount = 0;
         size_t retainedForwarded = 0;
+        std::vector<CTransaction> walletResubmits;
         {
             LOCK(cs_main);
-            retainedForwarded = RemoveTransactionsNotInZebra(zebraTxIds, result.removed);
+            retainedForwarded =
+                RemoveTransactionsNotInZebra(zebraTxIds, result.removed, walletResubmits);
 
             const std::set<std::string> localTxIds = LocalMempoolTxIds();
             localTxIdsSnapshot = localTxIds;
@@ -330,6 +377,21 @@ MempoolMirrorResult SyncMempoolMirrorOnce(ZebraCompatClient& client, const CChai
                         missingTxIds.push_back(txid);
                     }
                 }
+            }
+        }
+
+        // Forward retained wallet transactions to Zebra outside cs_main. A
+        // forwarding failure only logs: the grace-set registration above keeps
+        // the transaction in the local mempool, and the next grace expiry
+        // retries it.
+        for (const CTransaction& walletTx : walletResubmits) {
+            TxForwardingResult forwardResult =
+                ForwardRawTransaction(client, EncodeHexTx(walletTx), walletTx.GetHash());
+            if (!forwardResult.success) {
+                LogPrintf(
+                    "zebra-compat mempool mirror wallet resubmission failed for %s: %s\n",
+                    walletTx.GetHash().GetHex(),
+                    forwardResult.error);
             }
         }
 

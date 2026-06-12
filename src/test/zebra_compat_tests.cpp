@@ -1771,7 +1771,7 @@ BOOST_AUTO_TEST_CASE(zebra_client_retries_identity_rpc_errors)
     zebra_compat::ZebraCompatClient client(MockZebraConfig(), std::move(transport));
 
     zebra_compat::ZebraIdentity identity = client.CheckIdentity(Params());
-    BOOST_CHECK(!identity.reachable);
+    BOOST_CHECK(identity.reachable);
     BOOST_CHECK(!identity.identityVerified);
     BOOST_CHECK_EQUAL(identity.failure, zebra_compat::ZebraIdentity::TRANSIENT);
     BOOST_CHECK(identity.lastError.find("Block not found") != std::string::npos);
@@ -1800,7 +1800,7 @@ BOOST_FIXTURE_TEST_CASE(zebra_compat_sync_retries_identity_rpc_errors, TestingSe
     UniValue info = zebra_compat::GetZebraCompatInfo();
     UniValue sync = find_value(info.get_obj(), "sync");
     BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "state").get_str(), "degraded");
-    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "detail").get_str(), "zebra_unreachable");
+    BOOST_CHECK_EQUAL(find_value(sync.get_obj(), "detail").get_str(), "zebra_rpc_error_retry");
     BOOST_CHECK(
         find_value(sync.get_obj(), "last_error")
             .get_str()

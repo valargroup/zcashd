@@ -856,13 +856,17 @@ bool IsTransientIdentityFailure(const ZebraIdentity& identity)
 
 // Returns the sync status detail for a Zebra identity failure.
 // Authentication is retryable only when cookie auth is configured, because the
-// next worker pass can reload a rotated cookie from disk.
+// next worker pass can reload a rotated cookie from disk. A reachable Zebra
+// that answered with a JSON-RPC error (e.g. first boot before genesis is
+// committed) is distinguished from an unreachable endpoint so operators are
+// not told to debug connectivity that is working.
 const char* IdentityFailureDetail(const ZebraIdentity& identity, bool transient)
 {
     if (transient) {
-        return identity.failure == ZebraIdentity::AUTHENTICATION ?
-            "zebra_authentication_retry" :
-            "zebra_unreachable";
+        if (identity.failure == ZebraIdentity::AUTHENTICATION) {
+            return "zebra_authentication_retry";
+        }
+        return identity.reachable ? "zebra_rpc_error_retry" : "zebra_unreachable";
     }
     return "zebra_identity_error";
 }
@@ -1608,8 +1612,10 @@ void RecordBlockIngestionResult(const BlockIngestionResult& result)
     LOCK(cs_zebra_compat_status);
     g_status.lastIngestion = result;
     if (result.success) {
-        g_status.syncState = "degraded";
-        g_status.syncDetail = "last_block_ingested";
+        // Leave syncState/syncDetail alone on success: the sync worker
+        // publishes the authoritative state right after each batch, and
+        // overwriting it here makes `sync.state` flap to degraded between
+        // batches for concurrent RPC readers.
         g_status.lastError.clear();
     } else {
         g_status.tipMatchedZebra = false;
