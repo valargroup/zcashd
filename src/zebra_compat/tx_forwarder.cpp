@@ -198,6 +198,12 @@ void ExpireForwardedTransactions()
     PrunePendingForwardedTransactions(GetTime());
 }
 
+void ClearTxForwardingTransportError()
+{
+    LOCK(cs_tx_forwarding);
+    g_tx_forwarding_status.lastTransportError.clear();
+}
+
 TxForwardingStatus GetTxForwardingStatus()
 {
     LOCK(cs_tx_forwarding);

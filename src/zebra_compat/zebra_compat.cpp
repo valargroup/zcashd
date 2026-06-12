@@ -1087,6 +1087,7 @@ SyncOutcome SyncZebraCompatOnce(
             identity.lastError);
         return {false, !transient, transient};
     }
+    ClearTxForwardingTransportError();
 
     const std::string zebraBestHash = identity.bestBlockHash;
     const int zebraBestHeight = identity.blocks;

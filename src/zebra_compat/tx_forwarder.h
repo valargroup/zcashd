@@ -60,6 +60,9 @@ void MarkForwardedTransactionObserved(const std::string& txid);
 // Expires old forwarded transactions and updates forwarding status counters.
 void ExpireForwardedTransactions();
 
+// Clears the transport-readiness latch after independent Zebra health checks recover.
+void ClearTxForwardingTransportError();
+
 // Returns the latest transaction forwarding status snapshot.
 TxForwardingStatus GetTxForwardingStatus();
 
