@@ -551,6 +551,7 @@ case $host in
      AC_CHECK_LIB([oleaut32],   [main],,                    AC_MSG_ERROR(liboleaut32 missing))
      AC_CHECK_LIB([uuid],       [main],,                    AC_MSG_ERROR(libuuid missing))
      AC_CHECK_LIB([advapi32],   [CryptAcquireContextW],,    AC_MSG_ERROR(libadvapi32 missing))
+     AC_CHECK_LIB([crypt32],    [CertOpenSystemStoreW],,    AC_MSG_ERROR(libcrypt32 missing))
      AC_CHECK_LIB([ws2_32],     [WSAStartup],,              AC_MSG_ERROR(libws2_32 missing))
      AC_CHECK_LIB([shlwapi],    [PathRemoveFileSpecW],,     AC_MSG_ERROR(libshlwapi missing))
      AC_CHECK_LIB([iphlpapi],   [GetAdaptersAddresses],,    AC_MSG_ERROR(libiphlpapi missing))
