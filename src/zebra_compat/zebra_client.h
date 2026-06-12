@@ -5,8 +5,6 @@
 #ifndef ZCASH_ZEBRA_COMPAT_ZEBRA_CLIENT_H
 #define ZCASH_ZEBRA_COMPAT_ZEBRA_CLIENT_H
 
-#include "fs.h"
-
 #include <cstddef>
 #include <memory>
 #include <stdexcept>
@@ -237,8 +235,8 @@ private:
     std::unique_ptr<ZebraRpcTransport> transport;
 };
 
-// Parses an http:// Zebra RPC URL into endpoint fields. HTTPS and missing hosts
-// are rejected with `error` populated.
+// Parses an http:// or https:// Zebra RPC URL into endpoint fields. Missing or
+// unsupported URL components are rejected with `error` populated.
 bool ParseZebraEndpoint(const std::string& url, ZebraEndpoint& endpoint, std::string& error);
 
 // Loads endpoint, auth, and timeout settings from command-line arguments.
