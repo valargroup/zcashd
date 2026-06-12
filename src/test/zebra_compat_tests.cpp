@@ -1294,6 +1294,28 @@ BOOST_AUTO_TEST_CASE(tx_forwarder_maps_unreachable_zebra_to_not_connected)
     BOOST_CHECK(status.lastTransportError.find("transport unavailable") != std::string::npos);
 }
 
+BOOST_AUTO_TEST_CASE(tx_forwarder_clears_transport_error_after_zebra_recovers)
+{
+    zebra_compat::ResetTxForwardingForTesting();
+
+    std::unique_ptr<MockZebraTransport> transport(new MockZebraTransport());
+    transport->throwOnCall = true;
+    zebra_compat::ZebraCompatClient client(MockZebraConfig(), std::move(transport));
+
+    zebra_compat::TxForwardingResult result =
+        zebra_compat::ForwardRawTransaction(client, "00", uint256S(HashWithLastChar('b')));
+    BOOST_CHECK(!result.success);
+
+    zebra_compat::TxForwardingStatus status = zebra_compat::GetTxForwardingStatus();
+    BOOST_CHECK(status.lastError.find("transport unavailable") != std::string::npos);
+    BOOST_CHECK(status.lastTransportError.find("transport unavailable") != std::string::npos);
+
+    zebra_compat::ClearTxForwardingTransportError();
+    status = zebra_compat::GetTxForwardingStatus();
+    BOOST_CHECK(status.lastError.find("transport unavailable") != std::string::npos);
+    BOOST_CHECK_EQUAL(status.lastTransportError, "");
+}
+
 BOOST_AUTO_TEST_CASE(mempool_mirror_failure_does_not_record_successful_update)
 {
     zebra_compat::ResetMempoolMirrorForTesting();
@@ -1382,6 +1404,30 @@ BOOST_AUTO_TEST_CASE(zebra_compat_readiness_allows_mempool_divergence_metric)
         mirror,
         /*notificationsCaughtUp=*/true,
         /*now=*/1000), "ready");
+}
+
+BOOST_AUTO_TEST_CASE(zebra_compat_readiness_recovers_after_tx_forward_transport_clears)
+{
+    ArgsSnapshot snapshot;
+    ScopedZebraCompatReadinessTestState readinessState;
+    ResetArgs("-zebra-compat-poll-interval=5");
+    zebra_compat::TEST_SetZebraCompatStatusForReadiness(/*identityVerified=*/true, /*tipMatchedZebra=*/true);
+
+    zebra_compat::MempoolMirrorStatus mirror = FreshReadyMirrorStatus(/*now=*/1000);
+    BOOST_CHECK_EQUAL(zebra_compat::TEST_ComputeZebraCompatReadiness(
+        /*enabled=*/true,
+        /*initialBlockDownload=*/false,
+        /*txForwardingTransportReady=*/false,
+        mirror,
+        /*notificationsCaughtUp=*/true,
+        /*now=*/1000), "degraded");
+    BOOST_CHECK_EQUAL(zebra_compat::TEST_ComputeZebraCompatReadiness(
+        /*enabled=*/true,
+        /*initialBlockDownload=*/false,
+        /*txForwardingTransportReady=*/true,
+        mirror,
+        /*notificationsCaughtUp=*/true,
+        /*now=*/1001), "ready");
 }
 
 BOOST_AUTO_TEST_CASE(zebra_compat_readiness_hysteresis_smooths_transient_degradation)
