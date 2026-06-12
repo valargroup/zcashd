@@ -96,9 +96,10 @@ intentionally uses a remote plain-HTTP endpoint, startup requires
 bind Zebra RPC to a private interface, restrict it with a host firewall, or
 prefer a tunnel. See **Deployment Topology** below.
 
-For split-host deployments, prefer an `https://` endpoint exposed by a
-TLS-terminating proxy or tunnel in front of Zebra. If that proxy uses a
-certificate from an internal or private CA, pass that CA certificate to zcashd:
+For split-host deployments, prefer an `https://` endpoint. This can be Zebra's
+TLS-enabled zcashd-compat listener or a TLS-terminating proxy or tunnel in front
+of Zebra. If the endpoint uses a certificate from an internal or private CA, pass
+that CA certificate to zcashd:
 
 ```sh
 ./src/zcashd -zebra-compat \
@@ -268,8 +269,8 @@ automatically.
 
 | Endpoint | Typical address | Purpose |
 |---|---|---|
-| Zebra user RPC | `127.0.0.1:8232` | Operator JSON-RPC; `-zebra-compat-url` points here |
-| Zebra compat RPC | `127.0.0.1:28232` | Cookie-auth channel from supervised `zcashd` to Zebra |
+| Zebra user RPC | `127.0.0.1:8232` | Operator JSON-RPC; externally managed `zcashd` can point here |
+| Zebra compat RPC | `127.0.0.1:28232` | Backend channel from supervised `zcashd` to Zebra; cookie auth by default, HTTPS optional |
 | Zebra network P2P | `0.0.0.0:8233` / `:18233` | Zebra syncs from the Zcash network |
 | zcashd network P2P | disabled | Must not bind 8233/18233 in compat mode |
 
@@ -279,14 +280,37 @@ dedicated compat RPC listener automatically.
 
 When Zebra supervises zcashd, it points `-zebra-compat-url` at the dedicated
 compat RPC listener and passes `-zebra-compat-cookiefile` for that listener's
-cookie authentication. Zebra's built-in RPC server currently serves HTTP, not
-TLS, and the supervisor builds an `http://` URL for the child process.
+cookie authentication by default. The supervisor builds an `http://` URL unless
+the dedicated compat listener has TLS enabled; with TLS enabled, it builds an
+`https://` URL and passes `-zebra-compat-tls-ca-file=<tls_ca_file>` so zcashd can
+verify Zebra's server certificate.
 
-zcashd's `https://` Zebra client support is for externally managed deployments
-that place a TLS-terminating proxy or tunnel in front of Zebra. In that topology,
-run zcashd outside Zebra's supervisor and point `-zebra-compat-url` at the proxy.
-`-zebra-compat-no-auth=1` is accepted only for `https://` endpoints and should be
-used only when the proxy or surrounding network provides access control.
+For supervised loopback deployments, enabling or disabling TLS on the same
+`127.0.0.1` or `localhost` compat listener does not invalidate zcashd's trusted
+boundary. The persisted boundary still must match the configured host, port,
+path, network, and genesis. For remote endpoints, changing between `http://` and
+`https://` is treated as a source change and requires the normal endpoint-change
+recovery checks.
+
+The dedicated compat listener is controlled by Zebra's `[zcashd_compat]`
+settings:
+
+```toml
+[zcashd_compat]
+listen_addr = "127.0.0.1:28232"
+enable_cookie_auth = true
+tls_cert_file = "/path/to/zebra.crt"
+tls_key_file = "/path/to/zebra.key"
+tls_ca_file = "/path/to/internal-ca.pem"
+```
+
+`tls_cert_file` and `tls_key_file` must be configured together. Supervised
+zcashd-compat with TLS also requires `tls_ca_file`, which is the CA certificate
+zcashd uses to verify Zebra, not Zebra's private key. `enable_cookie_auth`
+defaults to `true`; setting it to `false` makes supervised zcashd receive
+`-zebra-compat-no-auth=1` instead of a cookie file and is allowed only when TLS
+is enabled. Use no-auth mode only when another layer controls access, such as
+Cloudflare Access, mTLS, IP allowlists, or a private network.
 
 ### Validate P2P is disabled
 
@@ -308,8 +332,8 @@ ss -ltnp 'sport = :8233'    # mainnet
 Recommended single-host topology:
 
 ```text
-Zebra JSON-RPC 127.0.0.1:8232  <---authenticated HTTP---  zcashd -zebra-compat
-Zebra compat RPC 127.0.0.1:28232 <---cookie auth (supervised only)---  zcashd
+Zebra JSON-RPC 127.0.0.1:8232    <---authenticated HTTP/HTTPS---  external zcashd -zebra-compat
+Zebra compat RPC 127.0.0.1:28232 <---cookie auth; optional HTTPS---  supervised zcashd
 Zebra P2P enabled                                      zcashd P2P disabled
 ```
 
@@ -320,12 +344,11 @@ Zebra host on private network  <---authenticated HTTPS or private tunnel---  zca
 ```
 
 Do not expose the Zebra JSON-RPC endpoint as a public unauthenticated backend
-API. Zebra's built-in RPC listener is HTTP; for authenticated HTTPS, Cloudflare
-Access, mTLS, or similar split-host deployments, terminate TLS in a proxy or
-tunnel in front of Zebra and point zcashd at that `https://` endpoint. TLS
-protects the channel and authenticates the proxy endpoint to zcashd; cookie auth
-or an external access-control layer still decides which clients may call the
-endpoint.
+API. For authenticated HTTPS split-host deployments, use Zebra's TLS-enabled
+zcashd-compat listener or terminate TLS in a proxy or tunnel in front of Zebra
+and point zcashd at that `https://` endpoint. TLS protects the channel and
+authenticates the endpoint to zcashd; cookie auth or an external access-control
+layer still decides which clients may call the endpoint.
 
 ## Readiness And Diagnostics
 
@@ -396,6 +419,11 @@ When using `-zebra-compat-cookiefile`, zcashd rereads the cookie during ingest
 polling. Zebra restarts that regenerate the cookie file should recover through
 normal retry/backoff without restarting zcashd, as long as the cookie file path
 and endpoint URL stay the same.
+
+Changing only the URL scheme between `http://` and `https://` on the same
+loopback supervised compat listener is not considered an endpoint change for the
+trusted boundary. Port, host, path, network, genesis, and all remote endpoint
+changes remain strict boundary checks.
 
 Alert if `getzebracompatinfo.sync.detail` remains
 `zebra_authentication_retry` for more than a few minutes. That state is

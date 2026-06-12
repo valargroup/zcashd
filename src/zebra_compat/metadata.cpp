@@ -6,8 +6,12 @@
 
 #include "chainparams.h"
 #include "dbwrapper.h"
+#include "netbase.h"
 #include "sync.h"
 #include "util/system.h"
+#include "zebra_compat/zebra_client.h"
+
+#include <boost/algorithm/string/predicate.hpp>
 
 #include <exception>
 #include <memory>
@@ -28,6 +32,42 @@ std::string g_zebra_compat_metadata_last_error;
 std::pair<char, std::string> TrustedBoundaryKey()
 {
     return std::make_pair(DB_TRUSTED_BLOCK_BOUNDARY, std::string("trusted-block-boundary"));
+}
+
+bool IsLoopbackHost(const std::string& host)
+{
+    if (boost::algorithm::iequals(host, "localhost")) {
+        return true;
+    }
+
+    const CNetAddr address(host, false);
+    if (!address.IsValid()) {
+        return false;
+    }
+
+    if (address.IsIPv4()) {
+        return address.GetByte(3) == 127;
+    }
+
+    return address.IsLocal();
+}
+
+bool SameLoopbackEndpointExceptScheme(const std::string& storedUrl, const std::string& configuredUrl)
+{
+    ZebraEndpoint storedEndpoint;
+    ZebraEndpoint configuredEndpoint;
+    std::string error;
+
+    if (!ParseZebraEndpoint(storedUrl, storedEndpoint, error) ||
+        !ParseZebraEndpoint(configuredUrl, configuredEndpoint, error)) {
+        return false;
+    }
+
+    return storedEndpoint.scheme != configuredEndpoint.scheme &&
+        boost::algorithm::iequals(storedEndpoint.host, configuredEndpoint.host) &&
+        storedEndpoint.port == configuredEndpoint.port &&
+        storedEndpoint.path == configuredEndpoint.path &&
+        IsLoopbackHost(storedEndpoint.host);
 }
 
 bool EnsureZebraCompatMetadataDB()
@@ -165,11 +205,13 @@ TrustedBlockBoundary MakeTrustedBlockBoundary(int nHeight, const uint256& hash, 
 
 bool TrustedBoundaryMatchesConfiguredSource(const TrustedBlockBoundary& boundary, const CChainParams& chainparams)
 {
+    const std::string configuredEndpoint = GetArg("-zebra-compat-url", "");
     return boundary.IsSet() &&
         boundary.network == chainparams.NetworkIDString() &&
         boundary.genesisHash == chainparams.GetConsensus().hashGenesisBlock.GetHex() &&
         !boundary.zebraEndpoint.empty() &&
-        boundary.zebraEndpoint == GetArg("-zebra-compat-url", "");
+        (boundary.zebraEndpoint == configuredEndpoint ||
+            SameLoopbackEndpointExceptScheme(boundary.zebraEndpoint, configuredEndpoint));
 }
 
 } // namespace zebra_compat

@@ -2377,12 +2377,26 @@ BOOST_AUTO_TEST_CASE(zebra_compat_trusted_boundary_is_identity_scoped)
     BOOST_CHECK(zebra_compat::ReadTrustedBlockBoundary(readBoundary));
     BOOST_CHECK(zebra_compat::TrustedBoundaryMatchesConfiguredSource(readBoundary, Params()));
 
+    ApplyZebraCompatArgs("-zebra-compat -zebra-compat-url=https://127.0.0.1:8232");
+    BOOST_CHECK(zebra_compat::TrustedBoundaryMatchesConfiguredSource(readBoundary, Params()));
+
+    zebra_compat::TrustedBlockBoundary localhostBoundary = readBoundary;
+    localhostBoundary.zebraEndpoint = "http://localhost:8232";
+    ApplyZebraCompatArgs("-zebra-compat -zebra-compat-url=https://localhost:8232");
+    BOOST_CHECK(zebra_compat::TrustedBoundaryMatchesConfiguredSource(localhostBoundary, Params()));
+
     ApplyZebraCompatArgs("-zebra-compat -zebra-compat-url=http://127.0.0.1:18232");
     BOOST_CHECK(!zebra_compat::TrustedBoundaryMatchesConfiguredSource(readBoundary, Params()));
 
+    zebra_compat::TrustedBlockBoundary remoteBoundary = readBoundary;
+    remoteBoundary.zebraEndpoint = "http://192.0.2.1:8232";
+    ApplyZebraCompatArgs("-zebra-compat -zebra-compat-url=https://192.0.2.1:8232");
+    BOOST_CHECK(!zebra_compat::TrustedBoundaryMatchesConfiguredSource(remoteBoundary, Params()));
+
     ApplyZebraCompatArgs("-zebra-compat -zebra-compat-url=http://127.0.0.1:8232");
-    readBoundary.network = "wrong-network";
-    BOOST_CHECK(!zebra_compat::TrustedBoundaryMatchesConfiguredSource(readBoundary, Params()));
+    zebra_compat::TrustedBlockBoundary wrongNetworkBoundary = readBoundary;
+    wrongNetworkBoundary.network = "wrong-network";
+    BOOST_CHECK(!zebra_compat::TrustedBoundaryMatchesConfiguredSource(wrongNetworkBoundary, Params()));
 
     zebra_compat::ClearTrustedBlockBoundary();
 }
