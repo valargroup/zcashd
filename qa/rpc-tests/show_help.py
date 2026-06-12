@@ -12,6 +12,7 @@ from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import assert_equal, zcashd_binary
 
 from difflib import SequenceMatcher, unified_diff
+import re
 import subprocess
 import tempfile
 
@@ -47,6 +48,12 @@ Options:
   -blocknotify=<cmd>
        Execute command when the best block changes (%s in cmd is replaced by
        block hash)
+
+  -blocksource=<p2p|zebra>
+       Select the source of blocks for local validation (default: p2p)
+
+  -blockvalidation=<full|trusted-zebra>
+       Select local block validation policy (default: full)
 
 |  -blocksonly
 |       Whether to reject transactions from network peers. Automatic broadcast
@@ -110,6 +117,9 @@ Options:
        (default: 0 = disable pruning blocks, >550 = target size in MiB to use
        for block files)
 
+  -p2p
+       Enable Zcash P2P networking (default: 1)
+
   -reindex-chainstate
        Rebuild chain state from the currently indexed blocks (implies -rescan)
 
@@ -128,6 +138,69 @@ Options:
   -txindex
        Maintain a full transaction index, used by the getrawtransaction rpc
        call (default: 0)
+
+  -zebra-compat
+       Run in zebra-compat mode: use Zebra as the block source, disable local
+       Zcash P2P, and use trusted Zebra block validation
+
+zebra-compat options:
+
+  -zebra-compat-flush-interval=<seconds>
+       Maximum age in seconds of un-flushed chainstate while ingesting trusted
+       blocks from Zebra; bounds the replay window after an unclean shutdown
+       (default: 300, 0 to use the stock flush policy)
+
+  -zebra-compat-poll-interval=<seconds>
+       zebra-compat Zebra polling interval in seconds (default: 5)
+
+  -zebra-compat-prefer-stream
+       Prefer Zebra streaming when available (reserved for a later zebra-compat
+       checkpoint; not active yet)
+
+  -zebra-compat-sync-batch-size=<n>
+       zebra-compat Zebra polling block batch size; also bounds the deepest
+       Zebra reorg zcashd can follow (default: 30)
+
+  -zebra-compat-sync-drive-batches=<n>
+       Number of acquisition batches one forward-sync pass drives before
+       refreshing Zebra's tip; batches within a pass are fetched and applied
+       concurrently (default: 64)
+
+  -zebra-compat-sync-response-budget-mb=<n>
+       Maximum cumulative size in MiB of one Zebra getblock batch response,
+       bounding the effective sync batch size (default: 128). Zebra's
+       max_response_body_size must be at least this large
+
+  -zebra-compat-timeout=<seconds>
+       Timeout during Zebra RPC requests (default: 30)
+
+  -zebra-compat-zebra-rpc-max-response-body-bytes=<n>
+       Zebra's configured RPC max_response_body_size in bytes; when set,
+       zebra-compat validates it can carry the configured sync batch
+
+  -zebra-compat-url=<scheme://host:port>
+       Zebra JSON-RPC endpoint for zebra-compat mode
+
+  -zebra-compat-allow-remote-http
+       Allow zebra-compat to connect to a non-loopback http:// Zebra RPC
+       endpoint, sending Basic authentication credentials in cleartext
+       (dangerous; use only with a trusted tunnel or private network)
+
+  -zebra-compat-cookiefile=<path>
+       Cookie file for Zebra JSON-RPC authentication
+
+  -zebra-compat-no-auth
+       Connect to Zebra JSON-RPC without an Authorization header; requires an
+       https:// endpoint and external access control
+
+  -zebra-compat-rpc-password=<password>
+       Password for Zebra JSON-RPC authentication
+
+  -zebra-compat-rpc-user=<user>
+       Username for Zebra JSON-RPC authentication
+
+  -zebra-compat-tls-ca-file=<path>
+       CA certificate file used to verify an https:// Zebra JSON-RPC endpoint
 
 Connection options:
 
@@ -207,6 +280,9 @@ Connection options:
 |  -enforcenodebloom
 |       Enforce minimum protocol version to limit use of bloom filters (default:
 |       0)
+|
+|  -zebra-compat-trusted-validation-fixture
+|       Allow -blockvalidation=trusted-zebra without -blocksource=zebra in tests
 |
   -port=<port>
        Listen for connections on <port> (default: 8233 or testnet: 18233)
@@ -632,6 +708,11 @@ class ShowHelpTest(BitcoinTestFramework):
             stdout = log_stdout.read().decode('utf-8')
             # Skip the first line which contains version information.
             actual = stdout.split('\n', 1)[1]
+            actual = re.sub(
+                r'(Set the number of script verification threads \()[^,]+',
+                r'\1IGNORE_NONDETERMINISTIC',
+                actual,
+            )
 
             changed = False
 
@@ -643,7 +724,7 @@ class ShowHelpTest(BitcoinTestFramework):
                 if (
                     len(group) == 3 and
                     group[1][0] == 'replace' and
-                    expected[group[1][1]:group[1][2]] == 'IGNORE_NONDETERMINISTIC'
+                    'IGNORE_NONDETERMINISTIC' in expected[group[1][1]:group[1][2]]
                 ):
                     # This is an expected difference, we can ignore it.
                     pass

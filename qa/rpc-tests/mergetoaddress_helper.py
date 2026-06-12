@@ -310,7 +310,7 @@ class MergeToAddressHelper:
         wait_and_assert_operationid_status(test.nodes[0], result['opid'])
 
         assert_equal(2, len(test.nodes[0].z_listunspent()))
-        assert_equal(2, len(test.nodes[0].z_listunspent(0)))
+        assert_equal(3, len(test.nodes[0].z_listunspent(0)))
 
         # Verify maximum number of UTXOs which node 0 can shield can be set by the limit parameter
         result = test.nodes[0].z_mergetoaddress([mytaddr], myzaddr, ZIP_317_FEE, 33, None, None, 'AllowRevealedSenders')
