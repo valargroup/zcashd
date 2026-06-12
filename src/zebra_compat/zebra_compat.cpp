@@ -56,6 +56,13 @@ static const int MAX_ZEBRA_COMPAT_RETRY_BACKOFF_SECONDS = 60;
 // only bounds how often the cheap identity round-trip is amortized, not memory use
 // (at most two batches are ever held in flight).
 static const int DEFAULT_ZEBRA_COMPAT_FORWARD_DRIVE_BATCHES = 64;
+// Maximum age of un-flushed chainstate while ingesting trusted blocks. The stock
+// flush policy writes the coins database only on a 24-hour timer, on cache
+// pressure, or at clean shutdown; zebra-compat can ingest days of chain in
+// minutes, so an unclean shutdown under the stock policy can lose the entire
+// run's chainstate and force an equally long replay. 0 disables the compat
+// flush and restores the stock policy.
+static const int DEFAULT_ZEBRA_COMPAT_FLUSH_INTERVAL_SECONDS = 300;
 
 struct ZebraCompatStatus {
     std::string serviceState = "stopped";
@@ -78,6 +85,11 @@ struct ZebraCompatStatus {
     int64_t readinessDegradedSince = 0;
     bool stickyFault = false;
     bool retryRequested = false;
+    int64_t lastFlushTime = 0;
+    int lastFlushedHeight = -1;
+    std::string lastFlushedHash;
+    std::string lastFlushError;
+    bool progressSinceFlush = false;
 };
 
 struct ZebraSourceView {
@@ -201,6 +213,11 @@ int ZebraCompatPollIntervalSeconds()
 int ZebraCompatForwardDriveBatches()
 {
     return std::max<int64_t>(1, GetArg("-zebra-compat-sync-drive-batches", DEFAULT_ZEBRA_COMPAT_FORWARD_DRIVE_BATCHES));
+}
+
+int64_t ZebraCompatFlushIntervalSeconds()
+{
+    return std::max<int64_t>(0, GetArg("-zebra-compat-flush-interval", DEFAULT_ZEBRA_COMPAT_FLUSH_INTERVAL_SECONDS));
 }
 
 struct LocalTipSnapshot {
@@ -398,8 +415,74 @@ void UpdateSyncStatus(
 void UpdateSyncedTip(const LocalTipSnapshot& snapshot)
 {
     LOCK(cs_zebra_compat_status);
+    // Only an actual tip change counts as flushable progress: the already-synced
+    // poll path republishes an unchanged tip every poll interval, which must not
+    // schedule chainstate flushes on an idle node.
+    if (g_status.lastSyncedHeight != snapshot.height ||
+        g_status.lastSyncedHash != snapshot.hash) {
+        g_status.progressSinceFlush = true;
+    }
     g_status.lastSyncedHeight = snapshot.height;
     g_status.lastSyncedHash = snapshot.hash;
+}
+
+bool ShouldFlushZebraCompatChainstate(
+    int64_t now,
+    int64_t lastFlushTime,
+    int64_t intervalSeconds,
+    bool progressSinceFlush,
+    bool syncedTransition)
+{
+    if (intervalSeconds <= 0 || !progressSinceFlush) {
+        return false;
+    }
+    return syncedTransition || now - lastFlushTime >= intervalSeconds;
+}
+
+// Bounds the chainstate-loss window during trusted ingest. The stock flush
+// policy (see FlushStateToDisk) writes the coins database only on a 24-hour
+// timer, on cache pressure, or at clean shutdown, while zebra-compat ingests
+// blocks far faster than wall-clock; without this, an unclean shutdown loses
+// the whole run's chainstate and forces an equally long replay on restart.
+// `syncedTransition` forces a flush when catch-up completes so steady-state
+// restarts replay almost nothing. Runs on the sync worker with no locks held;
+// FlushChainstateToDisk takes cs_main itself, and the established lock order
+// cs_main -> cs_zebra_compat_status forbids holding the status lock here.
+void MaybeFlushChainstateForZebraCompat(bool syncedTransition)
+{
+    const int64_t intervalSeconds = ZebraCompatFlushIntervalSeconds();
+    const int64_t now = GetTime();
+    {
+        LOCK(cs_zebra_compat_status);
+        if (!ShouldFlushZebraCompatChainstate(
+                now,
+                g_status.lastFlushTime,
+                intervalSeconds,
+                g_status.progressSinceFlush,
+                syncedTransition)) {
+            return;
+        }
+    }
+
+    // Snapshot the tip before flushing: the worker is the only block writer, so
+    // the flushed state is at least this tip and the recorded height never
+    // overstates what is on disk.
+    const LocalTipSnapshot tip = GetLocalTipSnapshot();
+    std::string flushError;
+    const bool flushed = FlushChainstateToDisk(flushError);
+
+    LOCK(cs_zebra_compat_status);
+    if (flushed) {
+        g_status.lastFlushTime = now;
+        g_status.lastFlushedHeight = tip.height;
+        g_status.lastFlushedHash = tip.hash;
+        g_status.progressSinceFlush = false;
+        g_status.lastFlushError.clear();
+        LogPrint("zebra-compat", "zebra-compat flushed chainstate at height %d\n", tip.height);
+    } else {
+        g_status.lastFlushError = flushError;
+        LogPrintf("zebra-compat chainstate flush failed: %s\n", flushError.c_str());
+    }
 }
 
 void UpdateRetryStatus(int consecutiveRetryCount, int backoffSeconds)
@@ -1054,6 +1137,12 @@ SyncOutcome RunForwardSyncPipelined(
         progressedAny = true;
         expectedPrevHash = newTip.hash;
 
+        // Flush between batches, not only between passes: one pipelined pass can
+        // drive thousands of blocks, far more than the flush interval should let
+        // accumulate. The overlapped next-batch fetch only does network I/O, so
+        // flushing here does not stall acquisition.
+        MaybeFlushChainstateForZebraCompat(/*syncedTransition=*/false);
+
         if (newTip.height == zebraBestHeight && newTip.hash == zebraBestHash) {
             UpdateSyncStatus("ready", "synced", "zebra_tip_matched", "", true);
             return {true, false};
@@ -1273,6 +1362,7 @@ void ZebraCompatBlockSourceThread(std::string chainName)
     try {
         const CChainParams& chainparams = Params(chainName);
         bool stickyFault = false;
+        bool wasSyncedLastPass = false;
         int consecutiveRetryCount = 0;
         while (!g_zebra_compat_interrupt.load()) {
             boost::this_thread::interruption_point();
@@ -1307,6 +1397,11 @@ void ZebraCompatBlockSourceThread(std::string chainName)
                 stickyFault = outcome.stickyFault;
                 RecordStickyFault(stickyFault);
                 const bool synced = IsZebraCompatSynced();
+                // Flush once when catch-up first reaches Zebra's tip so a restart
+                // from steady state replays almost nothing, and keep the interval
+                // policy running for paths that bypass the pipelined loop (reorgs).
+                MaybeFlushChainstateForZebraCompat(/*syncedTransition=*/synced && !wasSyncedLastPass);
+                wasSyncedLastPass = synced;
                 if (outcome.progressed || stickyFault || synced || !outcome.transientFailure) {
                     consecutiveRetryCount = 0;
                 }
@@ -1525,6 +1620,12 @@ std::string ValidateParameterInteraction()
         return "-zebra-compat-timeout must be at least 1";
     }
 
+    const int64_t configuredFlushInterval =
+        GetArg("-zebra-compat-flush-interval", DEFAULT_ZEBRA_COMPAT_FLUSH_INTERVAL_SECONDS);
+    if (configuredFlushInterval < 0) {
+        return "-zebra-compat-flush-interval must be at least 0";
+    }
+
     const std::string zebraRpcMaxResponseBodyArg = "-zebra-compat-zebra-rpc-max-response-body-bytes";
     if (IsExplicitlySet(zebraRpcMaxResponseBodyArg)) {
         const int64_t configuredZebraRpcMaxResponseBodySize =
@@ -1733,6 +1834,31 @@ UniValue GetZebraCompatInfo()
         trustedBoundary.pushKV("active", false);
     }
     obj.pushKV("trusted_boundary", trustedBoundary);
+
+    UniValue chainstateFlush(UniValue::VOBJ);
+    chainstateFlush.pushKV("interval_seconds", ZebraCompatFlushIntervalSeconds());
+    if (status.lastFlushTime > 0) {
+        chainstateFlush.pushKV("last_flush_time", status.lastFlushTime);
+    } else {
+        chainstateFlush.pushKV("last_flush_time", NullUniValue);
+    }
+    if (status.lastFlushedHeight >= 0) {
+        chainstateFlush.pushKV("last_flushed_height", status.lastFlushedHeight);
+    } else {
+        chainstateFlush.pushKV("last_flushed_height", NullUniValue);
+    }
+    if (!status.lastFlushedHash.empty()) {
+        chainstateFlush.pushKV("last_flushed_hash", status.lastFlushedHash);
+    } else {
+        chainstateFlush.pushKV("last_flushed_hash", NullUniValue);
+    }
+    chainstateFlush.pushKV("pending_progress", status.progressSinceFlush);
+    if (!status.lastFlushError.empty()) {
+        chainstateFlush.pushKV("last_error", status.lastFlushError);
+    } else {
+        chainstateFlush.pushKV("last_error", NullUniValue);
+    }
+    obj.pushKV("chainstate_flush", chainstateFlush);
 
     obj.pushKV("mempool_mirror", MempoolMirrorStatusToJSON());
     obj.pushKV("tx_forwarding", TxForwardingStatusToJSON());
@@ -2018,6 +2144,37 @@ void TEST_ResetZebraCompatStatusForTesting()
     LOCK(cs_zebra_compat_status);
     g_status = ZebraCompatStatus();
     g_source_view = ZebraSourceView();
+}
+
+bool TEST_ShouldFlushZebraCompatChainstate(
+    int64_t now,
+    int64_t lastFlushTime,
+    int64_t intervalSeconds,
+    bool progressSinceFlush,
+    bool syncedTransition)
+{
+    return ShouldFlushZebraCompatChainstate(
+        now, lastFlushTime, intervalSeconds, progressSinceFlush, syncedTransition);
+}
+
+void TEST_UpdateZebraCompatSyncedTip(int height, const std::string& hash)
+{
+    LocalTipSnapshot snapshot;
+    snapshot.height = height;
+    snapshot.hash = hash;
+    UpdateSyncedTip(snapshot);
+}
+
+bool TEST_GetZebraCompatProgressSinceFlush()
+{
+    LOCK(cs_zebra_compat_status);
+    return g_status.progressSinceFlush;
+}
+
+void TEST_ClearZebraCompatProgressSinceFlush()
+{
+    LOCK(cs_zebra_compat_status);
+    g_status.progressSinceFlush = false;
 }
 
 void TEST_SetZebraCompatStatusForReadiness(

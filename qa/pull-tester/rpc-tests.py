@@ -124,6 +124,7 @@ BASE_SCRIPTS= [
     'decodescript.py',
     'blockchain.py',
     'disablewallet.py',
+    'zebra_compat_flush_recovery.py',
     'zebra_compat_mode.py',
     'zebra_compat_mempool_mirror.py',
     'zebra_compat_polling_sync.py',

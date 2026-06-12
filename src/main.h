@@ -342,6 +342,11 @@ bool GetNodeStateStats(NodeId nodeid, CNodeStateStats &stats);
 void Misbehaving(NodeId nodeid, int howmuch);
 /** Flush all state, indexes and buffers to disk. */
 void FlushStateToDisk();
+/** Unconditionally flush all state to disk, reporting failure to the caller.
+ * Returns false and fills errorOut when the flush could not complete (for
+ * example, out of disk space). Coins-database write failures still abort the
+ * node, matching FlushStateToDisk(). */
+bool FlushChainstateToDisk(std::string& errorOut);
 /** Prune block files and flush state to disk. */
 void PruneAndFlush();
 

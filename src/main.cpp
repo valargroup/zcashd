@@ -4367,6 +4367,19 @@ void FlushStateToDisk() {
     FlushStateToDisk(Params(), state, FLUSH_STATE_ALWAYS);
 }
 
+bool FlushChainstateToDisk(std::string& errorOut) {
+    CValidationState state;
+    if (FlushStateToDisk(Params(), state, FLUSH_STATE_ALWAYS)) {
+        errorOut.clear();
+        return true;
+    }
+    errorOut = state.GetRejectReason();
+    if (errorOut.empty()) {
+        errorOut = "failed to flush chainstate to disk";
+    }
+    return false;
+}
+
 void PruneAndFlush() {
     CValidationState state;
     fCheckForPruning = true;
