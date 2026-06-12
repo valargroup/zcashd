@@ -4,7 +4,13 @@ zebra-compat mode is an explicit `zcashd` operating mode for deployments that ke
 `zcashd` wallet, RPC, block-file, chainstate, index, and notification surfaces
 while replacing local Zcash P2P with a trusted Zebra source.
 
-Use `-zebra-compat` to select the preset:
+This document covers the zcashd side of the integration: flags, trust model,
+sizing, diagnostics, and recovery. For the Zebra side — supervised operation
+(`zebrad start --zcashd-compat`), the `[zcashd_compat]` configuration section,
+hardware preflight, and container images — see
+[zcashd-compat Mode in the Zebra book](https://github.com/valargroup/zebra/blob/ironwood-main/book/src/user/zcashd-compat.md).
+
+The `-zebra-compat` flag selects a preset equivalent to:
 
 ```text
 -blocksource=zebra -p2p=0 -blockvalidation=trusted-zebra
@@ -70,7 +76,7 @@ authentication:
 ```
 
 `-zebra-compat` expands to `-blocksource=zebra -p2p=0 -blockvalidation=trusted-zebra`.
-When `-zebra-compat` is active, `zcashd` also force-disables `-listen=0`,
+When `-zebra-compat` is active, `zcashd` also forces `-listen=0`,
 `-dnsseed=0`, and `-listenonion=0` in memory, even if a legacy `zcash.conf`
 still contains `listen=1` or `p2p=1`. Those values remain on disk but are not
 used. Options such as `bind=`, `connect=`, and `addnode=` are not overridden;
@@ -131,19 +137,6 @@ Confirm `zebra.identity_verified` is `true` and watch `readiness` move from
 `degraded` (syncing) to `ready` once the local tip catches Zebra's best tip.
 `sync.retry_count` and `sync.current_backoff_seconds` surface connectivity
 problems; see **Readiness And Diagnostics** below for the full surface.
-
-## Release Artifacts For Zebra Integration
-
-`zcashd -zebra-compat` is released independently from Zebra. Zebra release CI
-consumes these release artifacts to build `zfnd/zebra-zcashd-compat` images and
-to update managed download metadata.
-
-Each compat release should publish Linux runtime tarballs for:
-
-- `x86_64-pc-linux-gnu` (`linux-x86_64`)
-
-and a consolidated `zcashd-zebra-compat-manifest-<tag>.json` that includes
-artifact URLs and SHA256 values for that target.
 
 ## Trust Model
 
@@ -208,7 +201,7 @@ validation before switching to the `-zebra-compat` trusted-validation preset.
 
 ### Sync batch size, response budget, and reorg depth
 
-Three settings must agree when increasing zebra-compat sync batch size:
+These settings interact when increasing the zebra-compat sync batch size:
 
 - `-zebra-compat-sync-batch-size=<blocks>`: how many raw blocks zcashd asks
   Zebra for in one JSON-RPC batch. It defaults to `30`.
@@ -272,7 +265,7 @@ settings in Zebra's `zcashd_extra_args`; Zebra passes
 `-zebra-compat-zebra-rpc-max-response-body-bytes=<effective limit>`
 automatically.
 
-### Three different endpoints (supervised deployments)
+### Endpoint overview (supervised deployments)
 
 | Endpoint | Typical address | Purpose |
 |---|---|---|
@@ -477,3 +470,16 @@ Wallet behavior, local block files, chainstate, optional indexes, ZMQ
 notifications, and local RPC response semantics continue to come from
 `zcashd`. Zebra replaces only block acquisition, best-chain source data, and
 transaction relay. Retained local validation failures are fail-closed.
+
+## Release Artifacts For Zebra Integration
+
+`zcashd -zebra-compat` is released independently from Zebra. Zebra release CI
+consumes these release artifacts to build `zfnd/zebra-zcashd-compat` images and
+to update managed download metadata.
+
+Each compat release should publish Linux runtime tarballs for:
+
+- `x86_64-pc-linux-gnu` (`linux-x86_64`)
+
+and a consolidated `zcashd-zebra-compat-manifest-<tag>.json` that includes
+artifact URLs and SHA256 values for that target.
