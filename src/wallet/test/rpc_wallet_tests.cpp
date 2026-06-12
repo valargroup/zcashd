@@ -669,6 +669,8 @@ BOOST_AUTO_TEST_CASE(rpc_wallet_z_importwallet)
     std::ofstream file(path);
     file << testWalletDump;
     file << std::flush;
+    file.close();
+    BOOST_REQUIRE(file.good());
 
     // wallet should currently be empty
     std::set<libzcash::SproutPaymentAddress> addrs;

@@ -23,6 +23,7 @@
 #include "txdb.h"
 #include "txmempool.h"
 #include "ui_interface.h"
+#include "zebra_compat/zebra_compat.h"
 #include "rpc/server.h"
 #include "rpc/register.h"
 #include "script/sigcache.h"
@@ -127,6 +128,7 @@ TestingSetup::~TestingSetup()
         UnregisterNodeSignals(GetNodeSignals());
         threadGroup.interrupt_all();
         threadGroup.join_all();
+        zebra_compat::StopZebraCompatNode();
         UnloadBlockIndex();
         delete pcoinsTip;
         delete pcoinsdbview;
