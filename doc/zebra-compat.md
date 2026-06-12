@@ -114,6 +114,13 @@ provided by another layer such as Cloudflare Access, mTLS, IP allowlists, or a
 private network. Cookie or static Basic authentication remains the default and
 recommended mode.
 
+Prefer an IP literal in `-zebra-compat-url` where possible. With a DNS
+hostname, every Zebra RPC connection — including each forwarded
+`sendrawtransaction` — resolves the name again, so a DNS outage fails user
+transaction submission even when the Zebra endpoint itself is healthy. (The
+plain-HTTP loopback policy decision is cached after the first successful
+resolution, but per-connection resolution still applies to the transport.)
+
 ### 4. Verify the connection
 
 ```sh
@@ -312,6 +319,13 @@ defaults to `true`; setting it to `false` makes supervised zcashd receive
 is enabled. Use no-auth mode only when another layer controls access, such as
 Cloudflare Access, mTLS, IP allowlists, or a private network.
 
+The server certificate must include an IP Subject Alternative Name for the
+listener IP (for example `IP:127.0.0.1`). Supervised zcashd connects to the
+raw `listen_addr` IP and verifies the certificate against that IP, so a
+certificate carrying only DNS names fails hostname verification. The same
+applies to externally managed zcashd when `-zebra-compat-url` uses an IP
+literal; URLs with DNS hostnames are verified against the hostname instead.
+
 ### Validate P2P is disabled
 
 ```sh
@@ -399,6 +413,9 @@ For transient Zebra outages:
 2. Restore Zebra availability or authentication. During first boot with a
    co-started Zebra, zcashd also stays in this retry path until Zebra has
    committed genesis and can answer identity RPCs such as `getblockhash(0)`.
+   The `sync.detail` value distinguishes the two cases: `zebra_unreachable`
+   means the endpoint did not answer, while `zebra_rpc_error_retry` means
+   Zebra answered but returned a JSON-RPC error (normal during first boot).
 3. Watch `getzebracompatinfo.sync.retry_count`,
    `getzebracompatinfo.sync.current_backoff_seconds`, and
    `getzebracompatinfo.readiness`.

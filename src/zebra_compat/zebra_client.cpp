@@ -17,6 +17,7 @@
 #include <fstream>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <utility>
 
@@ -46,6 +47,12 @@ namespace zebra_compat {
 namespace {
 
 const char* const ZEBRA_COMPAT_JSONRPC_ID = "zebra-compat";
+// These constants and the batch/budget arithmetic below
+// (ZebraCompatSyncBatchSizeFromMemoryBudget, ZebraRpcMaxResponseBodySize) are
+// mirrored by Zebra's startup validation in zebra/zebrad/src/commands/start.rs
+// (the ZCASHD_COMPAT_* constants). If a constant or formula changes here,
+// update both sides together, or each process will validate configs the other
+// rejects at runtime.
 const size_t ZEBRA_RPC_RESPONSE_BODY_MARGIN = 1024 * 1024;
 // Fits the default 128 MiB response budget while allowing deeper Zebra reorgs.
 const int DEFAULT_ZEBRA_COMPAT_SYNC_BATCH_SIZE = 30;
@@ -423,6 +430,36 @@ bool ZebraEndpointResolvesToLoopbackOnly(const ZebraEndpoint& endpoint, bool& lo
     return true;
 }
 
+// Caches the loopback-only determination per endpoint host. LoadZebraClientConfig
+// runs on every transaction forward and every worker pass, and for hostname URLs
+// the determination needs a DNS lookup; without the cache a transient DNS outage
+// fails user transaction forwarding even though the established connection path
+// may still work. The first successful resolution decides the policy: a later
+// DNS change (or rebinding) cannot silently reclassify a remote host as loopback
+// for the plain-HTTP policy gate. The cache resets on restart, matching the
+// lifetime of the -zebra-compat-url setting it qualifies.
+bool CachedZebraEndpointResolvesToLoopbackOnly(const ZebraEndpoint& endpoint, bool& lookupFailed)
+{
+    static std::mutex cs_loopback_cache;
+    static std::map<std::string, bool> loopbackByHost;
+
+    {
+        std::lock_guard<std::mutex> lock(cs_loopback_cache);
+        auto it = loopbackByHost.find(endpoint.host);
+        if (it != loopbackByHost.end()) {
+            lookupFailed = false;
+            return it->second;
+        }
+    }
+
+    const bool loopbackOnly = ZebraEndpointResolvesToLoopbackOnly(endpoint, lookupFailed);
+    if (!lookupFailed) {
+        std::lock_guard<std::mutex> lock(cs_loopback_cache);
+        loopbackByHost[endpoint.host] = loopbackOnly;
+    }
+    return loopbackOnly;
+}
+
 } // namespace
 
 ZebraRpcError::ZebraRpcError(
@@ -565,7 +602,7 @@ bool LoadZebraClientConfig(ZebraClientConfig& config, std::string& error)
 
     bool endpointLookupFailed = false;
     const bool endpointIsLoopback =
-        ZebraEndpointResolvesToLoopbackOnly(config.endpoint, endpointLookupFailed);
+        CachedZebraEndpointResolvesToLoopbackOnly(config.endpoint, endpointLookupFailed);
     if (endpointLookupFailed) {
         error = strprintf(
             "Zebra RPC endpoint hostname lookup failed for %s",
@@ -1238,7 +1275,10 @@ ZebraIdentity ZebraCompatClient::CheckIdentity(const CChainParams& chainparams)
     } catch (const ZebraRpcError& e) {
         identity.lastError = e.what();
         identity.failure = ClassifyIdentityRpcError(e);
-        identity.reachable = identity.failure != ZebraIdentity::TRANSIENT;
+        // Anything past the transport layer means Zebra answered the HTTP
+        // request: JSON-RPC errors (e.g. first-boot getblockhash(0) before
+        // genesis is committed) must not report the endpoint as unreachable.
+        identity.reachable = e.ErrorKind() != ZebraRpcError::TRANSPORT;
         return identity;
     } catch (const std::exception& e) {
         identity.lastError = e.what();
