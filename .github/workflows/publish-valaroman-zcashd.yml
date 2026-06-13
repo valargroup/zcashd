@@ -1,9 +1,6 @@
 name: Publish valaroman zcashd Docker image
 
 on:
-  push:
-    branches:
-      - feat/unity
   release:
     types:
       - published
@@ -13,7 +10,7 @@ on:
         description: "Git ref to checkout before building. Defaults to the triggering ref."
         required: false
       image_tag:
-        description: "Docker tag to publish. Defaults to commit-<sha> for pushes or the release tag for releases."
+        description: "Docker tag to publish. Defaults to the release tag for releases or commit-<sha> for manual runs."
         required: false
 
 permissions:
