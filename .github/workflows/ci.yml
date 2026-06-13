@@ -37,8 +37,8 @@ jobs:
             - name: Debian-bookworm
               tier: 1
               platform: Debian Bookworm
-              build_os: ${{ vars.UBUNTU_LARGE_RUNNER || 'ubuntu-latest' }}
-              test_os: ubuntu-latest
+              build_os: ${{ vars.UBUNTU_LARGE_RUNNER_2204 || 'ubuntu-22.04' }}
+              test_os: ubuntu-22.04
               container: electriccoinco/debian-helper:bookworm
               host: x86_64-pc-linux-gnu
 
