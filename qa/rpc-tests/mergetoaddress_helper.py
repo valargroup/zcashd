@@ -310,9 +310,8 @@ class MergeToAddressHelper:
         wait_and_assert_operationid_status(test.nodes[0], result['opid'])
 
         assert_equal(2, len(test.nodes[0].z_listunspent()))
-        # UA recipients do not surface the just-created note via z_listunspent(0)
-        # until it is mined, while Sapling z-addrs include it as 0-conf.
-        assert_equal(2 if myzaddr[0] == 'u' else 3, len(test.nodes[0].z_listunspent(0)))
+        # z_listunspent(0) includes the unmined note created by z_mergetoaddress.
+        assert_equal(3, len(test.nodes[0].z_listunspent(0)))
 
         # Verify maximum number of UTXOs which node 0 can shield can be set by the limit parameter
         result = test.nodes[0].z_mergetoaddress([mytaddr], myzaddr, ZIP_317_FEE, 33, None, None, 'AllowRevealedSenders')
