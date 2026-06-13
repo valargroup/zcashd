@@ -7,10 +7,10 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Git ref to checkout before building. Defaults to the triggering ref."
+        description: "Git ref to checkout before building. If this is a release tag and image_tag is unset, it is also used as the Docker tag."
         required: false
       image_tag:
-        description: "Docker tag to publish. Defaults to the release tag for releases or commit-<sha> for manual runs."
+        description: "Docker tag to publish. Defaults to the release tag for releases, a supplied release ref for manual runs, or commit-<sha>."
         required: false
 
 permissions:
@@ -37,6 +37,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_REF: ${{ inputs.ref }}
           INPUT_IMAGE_TAG: ${{ inputs.image_tag }}
         run: |
           set -euo pipefail
@@ -54,7 +55,13 @@ jobs:
               tags+=("valaroman/zcashd:${RELEASE_TAG#v}")
             fi
           else
-            tags=("valaroman/zcashd:commit-${GITHUB_SHA}")
+            REF_TAG="${INPUT_REF#refs/tags/}"
+            if [[ -n "$INPUT_REF" && "$REF_TAG" == v* ]]; then
+              tags=("valaroman/zcashd:${REF_TAG}")
+              tags+=("valaroman/zcashd:${REF_TAG#v}")
+            else
+              tags=("valaroman/zcashd:commit-${GITHUB_SHA}")
+            fi
           fi
 
           {

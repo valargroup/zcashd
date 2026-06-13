@@ -98,7 +98,7 @@ jobs:
           file: ./contrib/docker/source-runtime.Dockerfile
           platforms: linux/amd64
           push: true
-          tags: valargroup/zcashd:zcashd-compat-${{ steps.release-tag.outputs.value }}
+          tags: valargroup/zcashd:${{ steps.release-tag.outputs.value }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
