@@ -165,6 +165,9 @@ void TEST_ResetReadinessHysteresis();
 // reporting state after other tests mutate sync details.
 void TEST_ResetZebraCompatStatusForTesting();
 
+// Clears the worker interrupt latch for unit tests that call sync seams directly.
+void TEST_ResetZebraCompatInterruptForTesting();
+
 // Test seam for the trusted-ingest chainstate flush decision.
 bool TEST_ShouldFlushZebraCompatChainstate(
     int64_t now,
