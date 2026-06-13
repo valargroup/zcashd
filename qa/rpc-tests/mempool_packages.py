@@ -191,13 +191,19 @@ class MempoolPackagesTest(BitcoinTestFramework):
         # Tx1 and Tx7, and add to node1's mempool, then disconnect the
         # last block.
 
-        # Create tx0 with 2 outputs
-        utxo = self.nodes[0].listunspent()
-        txid = utxo[0]['txid']
-        value = utxo[0]['amount']
-        vout = utxo[0]['vout']
-
         fee = conventional_fee(8)
+        min_value = fee * 20
+
+        # Create tx0 with 2 outputs
+        spendable_utxos = [
+            output for output in self.nodes[0].listunspent()
+            if output.get('spendable', True) and output['amount'] > min_value
+        ]
+        assert spendable_utxos
+        utxo = max(spendable_utxos, key=lambda output: output['amount'])
+        txid = utxo['txid']
+        value = utxo['amount']
+        vout = utxo['vout']
         send_value = satoshi_round((value - fee)/2)
         inputs = [ {'txid' : txid, 'vout' : vout} ]
         outputs = {}
