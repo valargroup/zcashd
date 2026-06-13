@@ -2146,6 +2146,11 @@ void TEST_ResetZebraCompatStatusForTesting()
     g_source_view = ZebraSourceView();
 }
 
+void TEST_ResetZebraCompatInterruptForTesting()
+{
+    g_zebra_compat_interrupt = false;
+}
+
 bool TEST_ShouldFlushZebraCompatChainstate(
     int64_t now,
     int64_t lastFlushTime,

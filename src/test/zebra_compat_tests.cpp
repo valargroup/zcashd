@@ -2895,6 +2895,8 @@ BOOST_AUTO_TEST_CASE(zebra_compat_forward_chunk_parent_break_is_retryable)
 {
     ArgsSnapshot snapshot;
     ApplyZebraCompatArgs("-zebra-compat -zebra-compat-url=http://127.0.0.1:8232 -zebra-compat-sync-batch-size=1");
+    zebra_compat::TEST_ResetZebraCompatStatusForTesting();
+    zebra_compat::TEST_ResetZebraCompatInterruptForTesting();
     zebra_compat::ClearTrustedBlockBoundary();
 
     int localTipHeight = -1;
