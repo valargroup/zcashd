@@ -120,7 +120,9 @@ impl Orchard {
 
     fn append_inner(
         &mut self,
-        bundle: Option<&orchard::Bundle<orchard::bundle::Authorized, zcash_protocol::value::ZatBalance>>,
+        bundle: Option<
+            &orchard::Bundle<orchard::bundle::Authorized, zcash_protocol::value::ZatBalance>,
+        >,
     ) -> Result<ffi::OrchardAppendResult, &'static str> {
         if let Some(bundle) = bundle {
             // A single bundle can't contain 2^TRACKED_SUBTREE_HEIGHT actions, so we'll never cross

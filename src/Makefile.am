@@ -532,6 +532,7 @@ libbitcoin_script_a_SOURCES = \
   hash.cpp \
   hash.h \
   prevector.h \
+  primitives/ironwood.h \
   primitives/orchard.h \
   primitives/sapling.h \
   primitives/transaction.cpp \

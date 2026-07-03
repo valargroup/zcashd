@@ -3366,7 +3366,7 @@ end = "2027-06-03"
 
 [[trusted.halo2_gadgets]]
 criteria = ["safe-to-deploy", "crypto-reviewed"]
-user-id = 1244
+user-id = 1244 # Sean Bowe (ebfull)
 start = "2022-05-10"
 end = "2024-09-21"
 
@@ -3396,13 +3396,13 @@ end = "2026-07-16"
 
 [[trusted.halo2_proofs]]
 criteria = ["safe-to-deploy", "crypto-reviewed"]
-user-id = 1244
+user-id = 1244 # Sean Bowe (ebfull)
 start = "2022-05-10"
 end = "2024-09-21"
 
 [[trusted.incrementalmerkletree]]
 criteria = "safe-to-deploy"
-user-id = 1244
+user-id = 1244 # Sean Bowe (ebfull)
 start = "2021-06-24"
 end = "2024-09-21"
 
@@ -3426,7 +3426,7 @@ end = "2025-10-02"
 
 [[trusted.orchard]]
 criteria = "safe-to-deploy"
-user-id = 1244
+user-id = 1244 # Sean Bowe (ebfull)
 start = "2022-10-19"
 end = "2027-05-31"
 
@@ -3438,7 +3438,7 @@ end = "2027-06-03"
 
 [[trusted.orchard]]
 criteria = ["safe-to-deploy", "crypto-reviewed", "license-reviewed"]
-user-id = 1244
+user-id = 1244 # Sean Bowe (ebfull)
 start = "2022-10-19"
 end = "2024-09-21"
 
@@ -3540,7 +3540,7 @@ end = "2025-07-19"
 
 [[trusted.zcash_address]]
 criteria = "safe-to-deploy"
-user-id = 1244
+user-id = 1244 # Sean Bowe (ebfull)
 start = "2022-10-19"
 end = "2024-09-21"
 
@@ -3558,7 +3558,7 @@ end = "2026-10-03"
 
 [[trusted.zcash_encoding]]
 criteria = "safe-to-deploy"
-user-id = 1244
+user-id = 1244 # Sean Bowe (ebfull)
 start = "2022-10-19"
 end = "2024-09-21"
 
@@ -3576,7 +3576,7 @@ end = "2026-06-04"
 
 [[trusted.zcash_history]]
 criteria = "safe-to-deploy"
-user-id = 1244
+user-id = 1244 # Sean Bowe (ebfull)
 start = "2020-03-04"
 end = "2024-09-21"
 
@@ -3585,6 +3585,12 @@ criteria = "safe-to-deploy"
 user-id = 6289 # Jack Grigg (str4d)
 start = "2024-03-01"
 end = "2025-03-18"
+
+[[trusted.zcash_history]]
+criteria = "safe-to-deploy"
+user-id = 169181 # Kris Nuttycombe (nuttycom)
+start = "2026-07-01"
+end = "2027-07-03"
 
 [[trusted.zcash_note_encryption]]
 criteria = ["safe-to-deploy", "crypto-reviewed"]
@@ -3606,7 +3612,7 @@ end = "2027-06-03"
 
 [[trusted.zcash_primitives]]
 criteria = ["safe-to-deploy", "crypto-reviewed", "license-reviewed"]
-user-id = 1244
+user-id = 1244 # Sean Bowe (ebfull)
 start = "2019-10-08"
 end = "2024-09-21"
 
@@ -3638,7 +3644,7 @@ end = "2024-09-21"
 criteria = "safe-to-deploy"
 user-id = 169181 # Kris Nuttycombe (nuttycom)
 start = "2024-01-27"
-end = "2026-06-05"
+end = "2027-07-03"
 
 [[trusted.zcash_script]]
 criteria = "safe-to-deploy"
