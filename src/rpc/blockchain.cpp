@@ -273,6 +273,7 @@ UniValue blockToJSON(const CBlock& block, const CBlockIndex* blockindex, bool tx
     valuePools.push_back(ValuePoolDesc("sprout", blockindex->nChainSproutValue, blockindex->nSproutValue));
     valuePools.push_back(ValuePoolDesc("sapling", blockindex->nChainSaplingValue, blockindex->nSaplingValue));
     valuePools.push_back(ValuePoolDesc("orchard", blockindex->nChainOrchardValue, blockindex->nOrchardValue));
+    valuePools.push_back(ValuePoolDesc("ironwood", blockindex->nChainIronwoodValue, blockindex->nIronwoodValue));
     valuePools.push_back(ValuePoolDesc("lockbox", blockindex->nChainLockboxValue, blockindex->nLockboxValue));
     result.pushKV("valuePools", valuePools);
 
@@ -291,6 +292,13 @@ UniValue blockToJSON(const CBlock& block, const CBlockIndex* blockindex, bool tx
             UniValue orchard(UniValue::VOBJ);
             orchard.pushKV("size", (uint64_t)orchardTree.size());
             trees.pushKV("orchard", orchard);
+        }
+
+        IronwoodMerkleFrontier ironwoodTree;
+        if (pcoinsTip != nullptr && pcoinsTip->GetIronwoodAnchorAt(blockindex->hashFinalIronwoodRoot, ironwoodTree)) {
+            UniValue ironwood(UniValue::VOBJ);
+            ironwood.pushKV("size", (uint64_t)ironwoodTree.size());
+            trees.pushKV("ironwood", ironwood);
         }
 
         result.pushKV("trees", trees);
@@ -1156,6 +1164,7 @@ UniValue getblockchaininfo(const UniValue& params, bool fHelp)
     valuePools.push_back(ValuePoolDesc("sprout", tip->nChainSproutValue, std::nullopt));
     valuePools.push_back(ValuePoolDesc("sapling", tip->nChainSaplingValue, std::nullopt));
     valuePools.push_back(ValuePoolDesc("orchard", tip->nChainOrchardValue, std::nullopt));
+    valuePools.push_back(ValuePoolDesc("ironwood", tip->nChainIronwoodValue, std::nullopt));
     valuePools.push_back(ValuePoolDesc("lockbox", tip->nChainLockboxValue, std::nullopt));
     obj.pushKV("valuePools",            valuePools);
 
@@ -1451,6 +1460,36 @@ UniValue z_gettreestate(const UniValue& params, bool fHelp)
         res.pushKV("orchard", orchard_result);
     }
 
+    // ironwood
+    auto nu6_3_activation_height = Params().GetConsensus().GetActivationHeight(Consensus::UPGRADE_NU6_3);
+    if (nu6_3_activation_height.has_value()) {
+        UniValue ironwood_result(UniValue::VOBJ);
+        UniValue ironwood_commitments(UniValue::VOBJ);
+        auto finalIronwoodRootBytes = pindex->hashFinalIronwoodRoot;
+        ironwood_commitments.pushKV("finalRoot", HexStr(finalIronwoodRootBytes.begin(), finalIronwoodRootBytes.end()));
+        bool need_skiphash = false;
+        IronwoodMerkleFrontier tree;
+        if (pcoinsTip->GetIronwoodAnchorAt(pindex->hashFinalIronwoodRoot, tree)) {
+            CDataStream s(SER_NETWORK, PROTOCOL_VERSION);
+            s << OrchardMerkleFrontierLegacySer(tree);
+            ironwood_commitments.pushKV("finalState", HexStr(s.begin(), s.end()));
+        } else {
+            // Set skipHash to the most recent block that has a finalState.
+            const CBlockIndex* pindex_skip = pindex->pprev;
+            auto ironwoodActive = [&](const CBlockIndex* pindex_cur) -> bool {
+                return pindex_cur && pindex_cur->nHeight >= nu6_3_activation_height.value();
+            };
+            while (ironwoodActive(pindex_skip) && !pcoinsTip->GetIronwoodAnchorAt(pindex_skip->hashFinalIronwoodRoot, tree)) {
+                pindex_skip = pindex_skip->pprev;
+            }
+            if (ironwoodActive(pindex_skip)) {
+                ironwood_result.pushKV("skipHash", pindex_skip->GetBlockHash().GetHex());
+            }
+        }
+        ironwood_result.pushKV("commitments", ironwood_commitments);
+        res.pushKV("ironwood", ironwood_result);
+    }
+
     return res;
 }
 
@@ -1468,7 +1507,7 @@ UniValue z_getsubtreesbyindex(const UniValue& params, bool fHelp)
             "in the `subtrees` field is the Merkle root of a subtree containing 2^"+strHeight+" leaves.\n"
             + disabledMsg +
             "\nArguments:\n"
-            "1. \"pool\"        (string, required) The pool from which subtrees should be returned. Either \"sapling\" or \"orchard\".\n"
+            "1. \"pool\"        (string, required) The pool from which subtrees should be returned. One of \"sapling\", \"orchard\", or \"ironwood\".\n"
             "2. start_index   (numeric, required) The index of the first 2^"+strHeight+"-leaf subtree to return.\n"
             "2. limit         (numeric, optional) The maximum number of subtree values to return.\n"
             "\nResult:\n"
@@ -1499,8 +1538,10 @@ UniValue z_getsubtreesbyindex(const UniValue& params, bool fHelp)
         pool = SAPLING;
     } else if (strPool == "orchard") {
         pool = ORCHARD;
+    } else if (strPool == "ironwood") {
+        pool = IRONWOOD;
     } else {
-        throw JSONRPCError(RPC_INVALID_PARAMETER, "Requested pool must be \"sapling\" or \"orchard\"");
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "Requested pool must be \"sapling\", \"orchard\" or \"ironwood\"");
     }
 
     libzcash::SubtreeIndex startIndex = params[1].get_int();

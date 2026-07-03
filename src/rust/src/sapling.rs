@@ -28,7 +28,7 @@ use zcash_primitives::{
     transaction::{
         components::sapling as sapling_serialization,
         txid::{BlockTxCommitmentDigester, TxIdDigester},
-        Authorized, Transaction, TransactionDigest,
+        Authorized, Transaction, TransactionDigest, TxVersion,
     },
 };
 use zcash_protocol::{memo::MemoBytes, value::ZatBalance};
@@ -246,7 +246,10 @@ impl Bundle {
     }
 
     fn commitment<D: TransactionDigest<Authorized>>(&self, digester: D) -> D::SaplingDigest {
-        digester.digest_sapling(self.inner())
+        // The digest is used only as a bundle validity cache key, so we always compute it in
+        // the v5 domain: it is defined for every Sapling bundle and uniquely identifies the
+        // bundle's contents (the v5/v6 difference is only where the anchor is committed).
+        digester.digest_sapling(TxVersion::V5, self.inner())
     }
 }
 

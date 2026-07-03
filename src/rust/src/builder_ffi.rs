@@ -28,17 +28,22 @@ use crate::{
     ORCHARD_PK, ORCHARD_PK_INSECURE,
 };
 
+use orchard::bundle::BundleVersion;
 use orchard::circuit::OrchardCircuitVersion;
 
-// Maps the caller's "use the fixed circuit?" decision (C++ `CChainParams::UseFixedCircuitForProving`) to
-// an Orchard circuit version. `true` selects the fixed (NU6.2-onward) circuit; `false` selects
-// the historical insecure circuit, which the caller only chooses pre-NU6.2 on regtest, so that
-// tests can reconstruct pre-NU6.2 Orchard history.
-fn circuit_version_for(use_fixed_circuit_for_proving: bool) -> OrchardCircuitVersion {
+// Maps the caller's "use the fixed circuit?" decision (C++ `CChainParams::UseFixedCircuitForProving`)
+// to an Orchard-pool bundle version. `true` selects the NU6.2 (fixed-circuit) version; `false`
+// selects the historical insecure version, which the caller only chooses pre-NU6.2 on regtest,
+// so that tests can reconstruct pre-NU6.2 Orchard history.
+//
+// Note that this builder does not construct post-NU6.3 (cross-address-restricted) Orchard-pool
+// bundles: from NU6.3, the Orchard pool no longer accepts new value, and wallet flows are
+// expected to move to the Ironwood pool.
+fn bundle_version_for(use_fixed_circuit_for_proving: bool) -> BundleVersion {
     if use_fixed_circuit_for_proving {
-        OrchardCircuitVersion::FixedPostNu6_2
+        BundleVersion::orchard_v2()
     } else {
-        OrchardCircuitVersion::InsecurePreNu6_2
+        BundleVersion::orchard_insecure_v1()
     }
 }
 
@@ -79,13 +84,21 @@ pub extern "C" fn orchard_builder_new(
     let anchor = unsafe { anchor.as_ref() }
         .map(|a| orchard::Anchor::from_bytes(*a).unwrap())
         .unwrap_or_else(|| MerkleHashOrchard::empty_root(32.into()).into());
-    // The builder stamps this circuit version onto each action's circuit; the proving key
-    // passed to `orchard_unauthorized_bundle_prove_and_sign` must match.
-    Box::into_raw(Box::new(Builder::new_for_version(
-        bundle_type,
-        anchor,
-        circuit_version_for(use_fixed_circuit_for_proving),
-    )))
+    // The builder stamps this bundle version (and hence circuit version) onto the bundle; the
+    // proving key passed to `orchard_unauthorized_bundle_prove_and_sign` must match.
+    let bundle_version = bundle_version_for(use_fixed_circuit_for_proving);
+    let flags = if coinbase {
+        orchard::bundle::Flags::SPENDS_DISABLED
+    } else {
+        orchard::bundle::Flags::ENABLED
+    };
+    match Builder::new(bundle_type, bundle_version, flags, anchor) {
+        Ok(builder) => Box::into_raw(Box::new(builder)),
+        Err(e) => {
+            error!("Failed to construct Orchard builder: {}", e);
+            std::ptr::null_mut()
+        }
+    }
 }
 
 #[no_mangle]
@@ -216,6 +229,9 @@ pub extern "C" fn orchard_unauthorized_bundle_prove_and_sign(
         ),
         OrchardCircuitVersion::InsecurePreNu6_2 => {
             bundle.create_proof(&ORCHARD_PK_INSECURE, &mut rng)
+        }
+        OrchardCircuitVersion::PostNu6_3 => {
+            bundle.create_proof(&crate::ORCHARD_PK_POST_NU6_3, &mut rng)
         }
     };
     let res = proof.and_then(|b| b.apply_signatures(rng, *sighash, &signing_keys));

@@ -1,9 +1,9 @@
-// Copyright (c) 2021-2023 The Zcash developers
+// Copyright (c) 2026 The Zcash developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php .
 
-#ifndef ZCASH_PRIMITIVES_ORCHARD_H
-#define ZCASH_PRIMITIVES_ORCHARD_H
+#ifndef ZCASH_PRIMITIVES_IRONWOOD_H
+#define ZCASH_PRIMITIVES_IRONWOOD_H
 
 #include "streams.h"
 #include "streams_rust.h"
@@ -11,37 +11,33 @@
 #include <amount.h>
 
 #include <rust/bridge.h>
-#include <rust/orchard/wallet.h>
-#include "zcash/address/orchard.hpp"
 
 class OrchardMerkleFrontier;
-class OrchardWallet;
-namespace orchard { class UnauthorizedBundle; }
 
 /**
- * The Orchard component of an authorized transaction.
+ * The Ironwood component of an authorized transaction (ZIP 229).
+ *
+ * The Ironwood pool uses the Orchard protocol, but is a separate pool with its own
+ * note commitment tree, nullifier set, anchors, and chain value pool. Ironwood
+ * bundles exist only in v6 transactions.
  */
-class OrchardBundle
+class IronwoodBundle
 {
 private:
-    /// An optional Orchard bundle.
+    /// An optional Ironwood bundle.
     /// Memory is allocated by Rust.
-    rust::Box<orchard_bundle::Bundle> inner;
-
-    OrchardBundle(OrchardBundlePtr* bundle) : inner(orchard_bundle::from_raw_box(bundle)) {}
+    rust::Box<ironwood_bundle::Bundle> inner;
 
     friend class OrchardMerkleFrontier;
-    friend class OrchardWallet;
-    friend class orchard::UnauthorizedBundle;
 public:
-    OrchardBundle() : inner(orchard_bundle::none()) {}
+    IronwoodBundle() : inner(ironwood_bundle::none()) {}
 
-    OrchardBundle(OrchardBundle&& bundle) : inner(std::move(bundle.inner)) {}
+    IronwoodBundle(IronwoodBundle&& bundle) : inner(std::move(bundle.inner)) {}
 
-    OrchardBundle(const OrchardBundle& bundle) :
+    IronwoodBundle(const IronwoodBundle& bundle) :
         inner(bundle.inner->box_clone()) {}
 
-    OrchardBundle& operator=(OrchardBundle&& bundle)
+    IronwoodBundle& operator=(IronwoodBundle&& bundle)
     {
         if (this != &bundle) {
             inner = std::move(bundle.inner);
@@ -49,7 +45,7 @@ public:
         return *this;
     }
 
-    OrchardBundle& operator=(const OrchardBundle& bundle)
+    IronwoodBundle& operator=(const IronwoodBundle& bundle)
     {
         if (this != &bundle) {
             inner = bundle.inner->box_clone();
@@ -57,7 +53,7 @@ public:
         return *this;
     }
 
-    const rust::Box<orchard_bundle::Bundle>& GetDetails() const {
+    const rust::Box<ironwood_bundle::Bundle>& GetDetails() const {
         return inner;
     }
 
@@ -74,35 +70,20 @@ public:
         }
     }
 
-    /// Parses an Orchard bundle in the v5 transaction format, as of the given consensus
-    /// branch id (the one carried by the enclosing v5 transaction). The branch id selects
-    /// the epoch's bundle version, which determines proof-size enforcement (NU6.2 onward)
-    /// and the cross-address restriction on proof instances (NU6.3 onward).
     template<typename Stream>
-    void UnserializeV5(Stream& s, uint32_t consensusBranchId) {
+    void Unserialize(Stream& s) {
         try {
-            inner = orchard_bundle::parse(*ToRustStream(s), consensusBranchId);
+            inner = ironwood_bundle::parse(*ToRustStream(s));
         } catch (const std::exception& e) {
             throw std::ios_base::failure(e.what());
         }
     }
 
-    /// Parses an Orchard bundle in the v6 transaction format (always the
-    /// cross-address-restricted post-NU6.3 bundle version).
-    template<typename Stream>
-    void UnserializeV6(Stream& s) {
-        try {
-            inner = orchard_bundle::parse_v6(*ToRustStream(s));
-        } catch (const std::exception& e) {
-            throw std::ios_base::failure(e.what());
-        }
-    }
-
-    /// Returns true if this contains an Orchard bundle, or false if there is no
-    /// Orchard component.
+    /// Returns true if this contains an Ironwood bundle, or false if there is no
+    /// Ironwood component.
     bool IsPresent() const { return inner->is_present(); }
 
-    /// Returns the net value entering or exiting the Orchard pool as a result of this
+    /// Returns the net value entering or exiting the Ironwood pool as a result of this
     /// bundle.
     CAmount GetValueBalance() const {
         return inner->value_balance_zat();
@@ -111,10 +92,13 @@ public:
     /// Queues this bundle's authorization for validation.
     ///
     /// `sighash` must be for the transaction this bundle is within.
+    ///
+    /// Ironwood bundles use the post-NU6.3 Orchard circuit, so the batch must have been
+    /// constructed for the NU6.3 (or later) epoch.
     void QueueAuthValidation(
         orchard::BatchValidator& batch, const uint256& sighash) const
     {
-        batch.add_bundle(inner->box_clone(), sighash.GetRawBytes());
+        batch.add_ironwood_bundle(inner->box_clone(), sighash.GetRawBytes());
     }
 
     const size_t GetNumActions() const {
@@ -147,6 +131,13 @@ public:
         return inner->enable_spends();
     }
 
+    /// Returns whether the bundle is present and its `enableCrossAddress` flag bit is set.
+    /// Unlike the Orchard pool (for which this bit is reserved and MUST be 0 from NU6.3),
+    /// the Ironwood pool may set this bit freely.
+    bool CrossAddressEnabled() const {
+        return inner->enable_cross_address();
+    }
+
     /// Validates bundle fields that are not checked during proof verification but
     /// could cause crashes if malformed or violate consensus rules not enforced
     /// by the proof circuit. Returns true if all checks pass.
@@ -159,4 +150,4 @@ public:
     }
 };
 
-#endif // ZCASH_PRIMITIVES_ORCHARD_H
+#endif // ZCASH_PRIMITIVES_IRONWOOD_H

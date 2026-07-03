@@ -27,7 +27,8 @@ size_t CalculateLogicalActionCount(
         unsigned int joinSplitCount,
         unsigned int saplingSpendCount,
         unsigned int saplingOutputCount,
-        unsigned int orchardActionCount) {
+        unsigned int orchardActionCount,
+        unsigned int ironwoodActionCount) {
     const size_t tx_in_total_size = GetTxIOFieldSize(vin);
     const size_t tx_out_total_size = GetTxIOFieldSize(vout);
 
@@ -35,5 +36,6 @@ size_t CalculateLogicalActionCount(
                     ceil_div(tx_out_total_size, P2PKH_STANDARD_OUTPUT_SIZE)) +
            2 * joinSplitCount +
            std::max(saplingSpendCount, saplingOutputCount) +
-           orchardActionCount;
+           orchardActionCount +
+           ironwoodActionCount;
 }

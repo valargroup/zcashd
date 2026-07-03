@@ -1,4 +1,4 @@
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryFrom;
 use std::io::Cursor;
 use std::{ptr, slice};
 
@@ -8,8 +8,9 @@ use tracing::error;
 use transparent::{address::Script, sighash::TransparentAuthorizingContext};
 use zcash_encoding::Vector;
 use zcash_primitives::transaction::{
-    sighash::SignableInput, sighash_v5::v5_signature_hash, txid::TxIdDigester, Authorization,
-    Transaction, TransactionData, TxDigests, TxVersion,
+    sighash::{signature_hash, SignableInput},
+    txid::TxIdDigester,
+    Authorization, Transaction, TransactionData, TxDigests, TxVersion,
 };
 use zcash_protocol::{consensus::BranchId, value::Zatoshis};
 
@@ -319,13 +320,17 @@ pub extern "C" fn zcash_transaction_zip244_signature_digest(
         }
     };
 
-    let sighash = v5_signature_hash(
+    // `signature_hash` dispatches on the transaction version: v5 uses the ZIP 244
+    // digest, and v6 uses the ZIP 244 digest as amended by ZIP 229 (which adds the
+    // Ironwood digest and moves the shielded anchors into the authorizing digest).
+    // The transparent signature digest (S.2) is identical for v5 and v6.
+    let sighash = signature_hash(
         &precomputed_tx.tx,
         &signable_input,
         &precomputed_tx.txid_parts,
     );
 
-    // `v5_signature_hash` output is always 32 bytes.
-    *unsafe { &mut *sighash_ret } = sighash.as_ref().try_into().unwrap();
+    // `signature_hash` output is always 32 bytes.
+    *unsafe { &mut *sighash_ret } = *sighash.as_ref();
     true
 }

@@ -12,7 +12,8 @@
 #include "librustzcash.h"
 
 #define NODE_V1_SERIALIZED_LENGTH 171
-#define NODE_SERIALIZED_LENGTH 244
+#define NODE_V2_SERIALIZED_LENGTH 244
+#define NODE_SERIALIZED_LENGTH 317
 #define ENTRY_SERIALIZED_LENGTH (NODE_SERIALIZED_LENGTH + 9)
 
 typedef std::array<unsigned char, NODE_SERIALIZED_LENGTH> HistoryNode;
@@ -72,6 +73,22 @@ HistoryNode NewV2Leaf(
     uint64_t orchardTxCount
 );
 
+// New V3 history node with metadata based on block state (ZIP 221 as amended by ZIP 229;
+// adds the Ironwood fields from NU6.3).
+HistoryNode NewV3Leaf(
+    uint256 commitment,
+    uint32_t time,
+    uint32_t target,
+    uint256 saplingRoot,
+    uint256 orchardRoot,
+    uint256 ironwoodRoot,
+    uint256 totalWork,
+    uint64_t height,
+    uint64_t saplingTxCount,
+    uint64_t orchardTxCount,
+    uint64_t ironwoodTxCount
+);
+
 // Convert history node to tree node (with children references)
 HistoryEntry NodeToEntry(const HistoryNode node, uint32_t left, uint32_t right);
 
@@ -80,6 +97,9 @@ HistoryEntry LeafToEntry(const HistoryNode node);
 
 // Returns true if this epoch used the V1 history tree format.
 bool IsV1HistoryTree(uint32_t epochId);
+
+// Returns true if this epoch used the V2 history tree format (NU5 through NU6.2).
+bool IsV2HistoryTree(uint32_t epochId);
 
 }
 

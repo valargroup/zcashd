@@ -49,11 +49,14 @@ HistoryNode NewNode(
         uint256 endSaplingRoot,
         std::optional<uint256> startOrchardRoot,
         std::optional<uint256> endOrchardRoot,
+        std::optional<uint256> startIronwoodRoot,
+        std::optional<uint256> endIronwoodRoot,
         uint256 subtreeTotalWork,
         uint64_t startHeight,
         uint64_t endHeight,
         uint64_t saplingTxCount,
-        std::optional<uint64_t> orchardTxCount
+        std::optional<uint64_t> orchardTxCount,
+        std::optional<uint64_t> ironwoodTxCount
     )
 {
     CDataStream buf(SER_DISK, 0);
@@ -75,6 +78,13 @@ HistoryNode NewNode(
         buf << startOrchardRoot.value();
         buf << endOrchardRoot.value();
         buf << COMPACTSIZE(orchardTxCount.value());
+    }
+    if (startIronwoodRoot) {
+        // If startIronwoodRoot is provided, assume all V3 fields are.
+        assert(startOrchardRoot.has_value());
+        buf << startIronwoodRoot.value();
+        buf << endIronwoodRoot.value();
+        buf << COMPACTSIZE(ironwoodTxCount.value());
     }
 
     assert(buf.size() <= NODE_SERIALIZED_LENGTH);
@@ -101,10 +111,13 @@ HistoryNode NewV1Leaf(
         saplingRoot,
         std::nullopt,
         std::nullopt,
+        std::nullopt,
+        std::nullopt,
         totalWork,
         height,
         height,
         saplingTxCount,
+        std::nullopt,
         std::nullopt
     );
 }
@@ -130,11 +143,48 @@ HistoryNode NewV2Leaf(
         saplingRoot,
         orchardRoot,
         orchardRoot,
+        std::nullopt,
+        std::nullopt,
         totalWork,
         height,
         height,
         saplingTxCount,
-        orchardTxCount
+        orchardTxCount,
+        std::nullopt
+    );
+}
+
+HistoryNode NewV3Leaf(
+    uint256 commitment,
+    uint32_t time,
+    uint32_t target,
+    uint256 saplingRoot,
+    uint256 orchardRoot,
+    uint256 ironwoodRoot,
+    uint256 totalWork,
+    uint64_t height,
+    uint64_t saplingTxCount,
+    uint64_t orchardTxCount,
+    uint64_t ironwoodTxCount
+) {
+    return NewNode(
+        commitment,
+        time,
+        time,
+        target,
+        target,
+        saplingRoot,
+        saplingRoot,
+        orchardRoot,
+        orchardRoot,
+        ironwoodRoot,
+        ironwoodRoot,
+        totalWork,
+        height,
+        height,
+        saplingTxCount,
+        orchardTxCount,
+        ironwoodTxCount
     );
 }
 
@@ -176,6 +226,15 @@ bool IsV1HistoryTree(uint32_t epochId) {
         epochId == NetworkUpgradeInfo[Consensus::UPGRADE_BLOSSOM].nBranchId ||
         epochId == NetworkUpgradeInfo[Consensus::UPGRADE_HEARTWOOD].nBranchId ||
         epochId == NetworkUpgradeInfo[Consensus::UPGRADE_CANOPY].nBranchId
+    );
+}
+
+bool IsV2HistoryTree(uint32_t epochId) {
+    return (
+        epochId == NetworkUpgradeInfo[Consensus::UPGRADE_NU5].nBranchId ||
+        epochId == NetworkUpgradeInfo[Consensus::UPGRADE_NU6].nBranchId ||
+        epochId == NetworkUpgradeInfo[Consensus::UPGRADE_NU6_1].nBranchId ||
+        epochId == NetworkUpgradeInfo[Consensus::UPGRADE_NU6_2].nBranchId
     );
 }
 

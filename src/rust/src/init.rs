@@ -7,7 +7,8 @@ use sapling::circuit::{OutputParameters, SpendParameters};
 use tracing::info;
 
 use crate::{
-    ORCHARD_PK, ORCHARD_VK_FIXED, ORCHARD_VK_INSECURE, SAPLING_OUTPUT_PARAMS, SAPLING_OUTPUT_VK,
+    ORCHARD_PK, ORCHARD_VK_FIXED, ORCHARD_VK_INSECURE, ORCHARD_VK_POST_NU6_3,
+    SAPLING_OUTPUT_PARAMS, SAPLING_OUTPUT_VK,
     SAPLING_SPEND_PARAMS, SAPLING_SPEND_VK, SPROUT_GROTH16_PARAMS_PATH, SPROUT_GROTH16_VK,
 };
 
@@ -69,8 +70,13 @@ fn zksnark_params(sprout_path: String, load_proving_keys: bool) {
     // Generate Orchard parameters.
     info!(target: "main", "Loading Orchard parameters");
     if load_proving_keys {
-        ORCHARD_PK.get_or_init(orchard::circuit::ProvingKey::build);
+        ORCHARD_PK.get_or_init(|| {
+            orchard::circuit::ProvingKey::build(
+                orchard::circuit::OrchardCircuitVersion::FixedPostNu6_2,
+            )
+        });
     }
     LazyLock::force(&ORCHARD_VK_INSECURE);
     LazyLock::force(&ORCHARD_VK_FIXED);
+    LazyLock::force(&ORCHARD_VK_POST_NU6_3);
 }

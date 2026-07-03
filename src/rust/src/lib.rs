@@ -47,6 +47,7 @@ mod incremental_merkle_tree;
 mod init;
 mod merkle_frontier;
 mod note_encryption;
+mod ironwood_bundle;
 mod orchard_bundle;
 mod orchard_ffi;
 mod orchard_keys_ffi;
@@ -79,22 +80,31 @@ static ORCHARD_PK: OnceLock<orchard::circuit::ProvingKey> = OnceLock::new();
 // Orchard is soft-fork-disabled before NU6.2; this exists so that tests can construct pre-NU6.2
 // chain history. Built lazily, so it costs nothing unless such a proof is actually created.
 static ORCHARD_PK_INSECURE: LazyLock<orchard::circuit::ProvingKey> = LazyLock::new(|| {
-    orchard::circuit::ProvingKey::build_for_version(
-        orchard::circuit::OrchardCircuitVersion::InsecurePreNu6_2,
-    )
+    orchard::circuit::ProvingKey::build(orchard::circuit::OrchardCircuitVersion::InsecurePreNu6_2)
+});
+
+// The NU6.3-onward proving key: the fixed circuit plus the cross-address restriction
+// constraints. Used to prove post-NU6.3 Orchard-pool (restricted) bundles and Ironwood
+// bundles. Built lazily so nodes that never build such transactions don't pay for it.
+static ORCHARD_PK_POST_NU6_3: LazyLock<orchard::circuit::ProvingKey> = LazyLock::new(|| {
+    orchard::circuit::ProvingKey::build(orchard::circuit::OrchardCircuitVersion::PostNu6_3)
 });
 
 // The Orchard circuit was changed in NU6.2 to fix the variable-base scalar multiplication
 // gadget, which changes the verifying key. Pre-NU6.2 proofs verify only under the historical
 // (insecure) verifying key, and NU6.2-onward proofs only under the fixed one, so a node that
-// validates both historical and new blocks needs both.
+// validates both historical and new blocks needs both. NU6.3 changed the circuit again (adding
+// the DISABLE_CROSS_ADDRESS public input and constraints), adding a third verifying key for
+// post-NU6.3 Orchard-pool and Ironwood bundles.
 static ORCHARD_VK_INSECURE: LazyLock<orchard::circuit::VerifyingKey> = LazyLock::new(|| {
-    orchard::circuit::VerifyingKey::build_for_version(
-        orchard::circuit::OrchardCircuitVersion::InsecurePreNu6_2,
-    )
+    orchard::circuit::VerifyingKey::build(orchard::circuit::OrchardCircuitVersion::InsecurePreNu6_2)
 });
-static ORCHARD_VK_FIXED: LazyLock<orchard::circuit::VerifyingKey> =
-    LazyLock::new(orchard::circuit::VerifyingKey::build);
+static ORCHARD_VK_FIXED: LazyLock<orchard::circuit::VerifyingKey> = LazyLock::new(|| {
+    orchard::circuit::VerifyingKey::build(orchard::circuit::OrchardCircuitVersion::FixedPostNu6_2)
+});
+static ORCHARD_VK_POST_NU6_3: LazyLock<orchard::circuit::VerifyingKey> = LazyLock::new(|| {
+    orchard::circuit::VerifyingKey::build(orchard::circuit::OrchardCircuitVersion::PostNu6_3)
+});
 
 /// Converts CtOption<t> into Option<T>
 fn de_ct<T>(ct: CtOption<T>) -> Option<T> {

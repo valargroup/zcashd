@@ -339,8 +339,10 @@ class OrchardMerkleFrontierLegacySer;
 
 class OrchardMerkleFrontier
 {
-private:
+protected:
     /// An incremental Sinsemilla tree. Memory is allocated by Rust.
+    /// This is protected (rather than private) so that IronwoodMerkleFrontier
+    /// can share the underlying tree implementation.
     rust::Box<merkle_frontier::Orchard> inner;
 
     friend class OrchardWallet;
@@ -425,6 +427,29 @@ public:
             throw std::ios_base::failure(e.what());
         }
     }
+};
+
+class IronwoodBundle;
+
+/**
+ * The Ironwood pool's note commitment tree frontier.
+ *
+ * The Ironwood pool uses the Orchard protocol, including its note commitment tree
+ * structure (an incremental Sinsemilla tree of the same depth and hashing domain), so
+ * this shares the Orchard frontier's implementation. It is a distinct C++ type so that
+ * the two pools' trees, anchors, and caches cannot be confused: the pools have separate,
+ * independent note commitment trees (ZIP 229).
+ */
+class IronwoodMerkleFrontier : public OrchardMerkleFrontier
+{
+public:
+    IronwoodMerkleFrontier() : OrchardMerkleFrontier() {}
+
+    /// Appends the note commitments of an Ironwood bundle to this frontier.
+    ///
+    /// Defined in zcash/IncrementalMerkleTree.cpp so that this header does not
+    /// need to depend on primitives/ironwood.h.
+    merkle_frontier::OrchardAppendResult AppendBundle(const IronwoodBundle& bundle);
 };
 
 #endif /* ZC_INCREMENTALMERKLETREE_H_ */

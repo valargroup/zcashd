@@ -17,6 +17,7 @@
 
 #include <stdexcept>
 
+#include "consensus/upgrades.h"
 #include "util/strencodings.h"
 #include "version.h"
 #include "serialize.h"
@@ -305,7 +306,9 @@ TEST(orchardMerkleTree, appendBundle) {
     for (int i = 0; i < 10; i++) {
         CDataStream ssBundleData(merkle_roots_orchard[i].bundle, SER_NETWORK, PROTOCOL_VERSION);
         OrchardBundle b;
-        ssBundleData >> b;
+        // These are historical (NU5-era) test vectors, so parse them as of the
+        // NU5 consensus branch id.
+        b.UnserializeV5(ssBundleData, NetworkUpgradeInfo[Consensus::UPGRADE_NU5].nBranchId);
         newTree.AppendBundle(b);
 
         uint256 anchor(merkle_roots_orchard[i].anchor);

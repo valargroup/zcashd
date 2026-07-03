@@ -103,7 +103,26 @@ impl Orchard {
         &mut self,
         bundle: &orchard_bundle::Bundle,
     ) -> Result<ffi::OrchardAppendResult, &'static str> {
-        if let Some(bundle) = bundle.inner() {
+        self.append_inner(bundle.inner())
+    }
+
+    /// Appends the note commitments in the given Ironwood bundle to this frontier.
+    ///
+    /// The Ironwood pool uses the Orchard protocol, including its note commitment tree
+    /// structure; the pools' trees are separate *instances* of the same tree type, so the
+    /// caller must invoke this on the Ironwood tree's frontier.
+    pub(crate) fn append_ironwood_bundle(
+        &mut self,
+        bundle: &crate::ironwood_bundle::Bundle,
+    ) -> Result<ffi::OrchardAppendResult, &'static str> {
+        self.append_inner(bundle.inner())
+    }
+
+    fn append_inner(
+        &mut self,
+        bundle: Option<&orchard::Bundle<orchard::bundle::Authorized, zcash_protocol::value::ZatBalance>>,
+    ) -> Result<ffi::OrchardAppendResult, &'static str> {
+        if let Some(bundle) = bundle {
             // A single bundle can't contain 2^TRACKED_SUBTREE_HEIGHT actions, so we'll never cross
             // more than one subtree boundary while processing that bundle. This means we only need
             // to find a single subtree root while processing an individual bundle, so `Option` is

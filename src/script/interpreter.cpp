@@ -1190,7 +1190,10 @@ void PrecomputedTransactionData::SetPrecomputed(
 SigVersion SignatureHashVersion(const CTransaction& txTo)
 {
     if (txTo.fOverwintered) {
-        if (txTo.nVersionGroupId == ZIP225_VERSION_GROUP_ID) {
+        if (txTo.nVersionGroupId == ZIP225_VERSION_GROUP_ID ||
+            txTo.nVersionGroupId == ZIP229_VERSION_GROUP_ID) {
+            // v6 signature hashing is ZIP 244 as amended by ZIP 229; the
+            // version-specific digest computation happens on the Rust side.
             return SIGVERSION_ZIP244;
         } else if (txTo.nVersionGroupId == SAPLING_VERSION_GROUP_ID) {
             return SIGVERSION_SAPLING;

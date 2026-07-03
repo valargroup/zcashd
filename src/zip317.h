@@ -41,6 +41,7 @@ size_t CalculateLogicalActionCount(
         unsigned int joinSplitCount,
         unsigned int saplingSpendCount,
         unsigned int saplingOutputCount,
-        unsigned int orchardActionCount);
+        unsigned int orchardActionCount,
+        unsigned int ironwoodActionCount = 0);
 
 #endif // ZCASH_ZIP317_H

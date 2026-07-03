@@ -19,6 +19,11 @@ ifneq ($(build_os),darwin)
 $(package)_config_opts_darwin=--disable-atomicsupport
 endif
 $(package)_config_opts_aarch64=--disable-atomicsupport
+# On arm64 macOS, BDB's default (hybrid test-and-set) mutexes fail at runtime
+# with "BDB2015 Unable to acquire/release a mutex"; force POSIX mutexes.
+ifneq (,$(findstring aarch64,$(host)))
+$(package)_config_opts_darwin+=--enable-posixmutexes
+endif
 $(package)_cxxflags+=-std=c++17
 $(package)_cflags+=-Wno-deprecated-non-prototype
 

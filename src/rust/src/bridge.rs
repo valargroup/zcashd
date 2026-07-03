@@ -10,12 +10,17 @@
 use crate::{
     builder_ffi::shielded_signature_digest,
     bundlecache::init as bundlecache_init,
+    ironwood_bundle::{
+        none_ironwood_bundle, parse_ironwood_bundle, Action as IronwoodAction,
+        Bundle as IronwoodBundle,
+    },
     merkle_frontier::{new_orchard, orchard_empty_root, parse_orchard, Orchard, OrchardWallet},
     note_encryption::{
         try_sapling_note_decryption, try_sapling_output_recovery, DecryptedSaplingOutput,
     },
     orchard_bundle::{
-        none_orchard_bundle, orchard_bundle_from_raw_box, parse_orchard_bundle, Action, Bundle,
+        none_orchard_bundle, orchard_bundle_from_raw_box, parse_orchard_bundle,
+        parse_orchard_bundle_v6, Action, Bundle,
     },
     orchard_ffi::{orchard_batch_validation_init, BatchValidator as OrchardBatchValidator},
     params::{network, Network},
@@ -82,6 +87,7 @@ pub(crate) mod ffi {
             nu6: i32,
             nu6_1: i32,
             nu6_2: i32,
+            nu6_3: i32,
         ) -> Result<Box<Network>>;
     }
 
@@ -288,7 +294,9 @@ pub(crate) mod ffi {
         unsafe fn from_raw_box(bundle: *mut OrchardBundlePtr) -> Box<Bundle>;
         fn box_clone(self: &Bundle) -> Box<Bundle>;
         #[rust_name = "parse_orchard_bundle"]
-        fn parse(stream: &mut CppStream<'_>) -> Result<Box<Bundle>>;
+        fn parse(stream: &mut CppStream<'_>, consensus_branch_id: u32) -> Result<Box<Bundle>>;
+        #[rust_name = "parse_orchard_bundle_v6"]
+        fn parse_v6(stream: &mut CppStream<'_>) -> Result<Box<Bundle>>;
         fn serialize(self: &Bundle, stream: &mut CppStream<'_>) -> Result<()>;
         fn as_ptr(self: &Bundle) -> *const OrchardBundlePtr;
         fn recursive_dynamic_usage(self: &Bundle) -> usize;
@@ -305,6 +313,43 @@ pub(crate) mod ffi {
         fn coinbase_outputs_are_valid(self: &Bundle) -> bool;
     }
 
+    #[namespace = "ironwood_bundle"]
+    extern "Rust" {
+        #[cxx_name = "Action"]
+        type IronwoodAction;
+        #[cxx_name = "Bundle"]
+        type IronwoodBundle;
+
+        fn cv(self: &IronwoodAction) -> [u8; 32];
+        fn nullifier(self: &IronwoodAction) -> [u8; 32];
+        fn rk(self: &IronwoodAction) -> [u8; 32];
+        fn cmx(self: &IronwoodAction) -> [u8; 32];
+        fn ephemeral_key(self: &IronwoodAction) -> [u8; 32];
+        fn enc_ciphertext(self: &IronwoodAction) -> [u8; 580];
+        fn out_ciphertext(self: &IronwoodAction) -> [u8; 80];
+        fn spend_auth_sig(self: &IronwoodAction) -> [u8; 64];
+
+        #[rust_name = "none_ironwood_bundle"]
+        fn none() -> Box<IronwoodBundle>;
+        fn box_clone(self: &IronwoodBundle) -> Box<IronwoodBundle>;
+        #[rust_name = "parse_ironwood_bundle"]
+        fn parse(stream: &mut CppStream<'_>) -> Result<Box<IronwoodBundle>>;
+        fn serialize(self: &IronwoodBundle, stream: &mut CppStream<'_>) -> Result<()>;
+        fn recursive_dynamic_usage(self: &IronwoodBundle) -> usize;
+        fn is_present(self: &IronwoodBundle) -> bool;
+        fn actions(self: &IronwoodBundle) -> Vec<IronwoodAction>;
+        fn num_actions(self: &IronwoodBundle) -> usize;
+        fn enable_spends(self: &IronwoodBundle) -> bool;
+        fn enable_outputs(self: &IronwoodBundle) -> bool;
+        fn enable_cross_address(self: &IronwoodBundle) -> bool;
+        fn value_balance_zat(self: &IronwoodBundle) -> i64;
+        fn anchor(self: &IronwoodBundle) -> [u8; 32];
+        fn proof(self: &IronwoodBundle) -> Vec<u8>;
+        fn binding_sig(self: &IronwoodBundle) -> [u8; 64];
+        fn validate_action_encodings(self: &IronwoodBundle) -> bool;
+        fn coinbase_outputs_are_valid(self: &IronwoodBundle) -> bool;
+    }
+
     #[namespace = "orchard"]
     extern "Rust" {
         #[cxx_name = "BatchValidator"]
@@ -313,8 +358,14 @@ pub(crate) mod ffi {
         fn orchard_batch_validation_init(
             cache_store: bool,
             nu6_2_active: bool,
+            nu6_3_active: bool,
         ) -> Box<OrchardBatchValidator>;
         fn add_bundle(self: &mut OrchardBatchValidator, bundle: Box<Bundle>, sighash: [u8; 32]);
+        fn add_ironwood_bundle(
+            self: &mut OrchardBatchValidator,
+            bundle: Box<IronwoodBundle>,
+            sighash: [u8; 32],
+        );
         fn validate(self: &mut OrchardBatchValidator) -> bool;
     }
 
@@ -339,6 +390,10 @@ pub(crate) mod ffi {
         fn root(self: &Orchard) -> [u8; 32];
         fn size(self: &Orchard) -> u64;
         fn append_bundle(self: &mut Orchard, bundle: &Bundle) -> Result<OrchardAppendResult>;
+        fn append_ironwood_bundle(
+            self: &mut Orchard,
+            bundle: &IronwoodBundle,
+        ) -> Result<OrchardAppendResult>;
         unsafe fn init_wallet(self: &Orchard, wallet: *mut OrchardWallet) -> bool;
     }
 

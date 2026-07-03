@@ -923,7 +923,10 @@ AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[
 )
 
 AC_MSG_CHECKING(for weak getauxval support in the compiler)
-AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[
+dnl This must be a link check, not a compile check: Mach-O linkers reject an
+dnl undefined weak external symbol (unlike ELF, which resolves it to null), so
+dnl on macOS the weak declaration compiles but the final link of crc32c fails.
+AC_LINK_IFELSE([AC_LANG_PROGRAM([[
     unsigned long getauxval(unsigned long type) __attribute__((weak));
     #define AT_HWCAP 16
   ]], [[

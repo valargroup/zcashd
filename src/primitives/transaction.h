@@ -26,6 +26,7 @@
 #include <rust/ed25519.h>
 #include <primitives/sapling.h>
 #include <primitives/orchard.h>
+#include <primitives/ironwood.h>
 
 // Overwinter transaction version group id
 static constexpr uint32_t OVERWINTER_VERSION_GROUP_ID = 0x03C48270;
@@ -60,6 +61,18 @@ static_assert(ZIP225_TX_VERSION >= ZIP225_MIN_TX_VERSION,
     "ZIP225 tx version must not be lower than minimum");
 static_assert(ZIP225_TX_VERSION <= ZIP225_MAX_TX_VERSION,
     "ZIP225 tx version must not be higher than maximum");
+
+// ZIP229 (v6 / NU6.3 Ironwood) transaction version group id
+// (defined in ZIP 258)
+static constexpr uint32_t ZIP229_VERSION_GROUP_ID = 0xD884B698;
+static_assert(ZIP229_VERSION_GROUP_ID != 0, "version group id must be non-zero as specified in ZIP 202");
+
+// ZIP229 transaction version
+static const int32_t ZIP229_TX_VERSION = 6;
+static_assert(ZIP229_TX_VERSION >= ZIP229_MIN_TX_VERSION,
+    "ZIP229 tx version must not be lower than minimum");
+static_assert(ZIP229_TX_VERSION <= ZIP229_MAX_TX_VERSION,
+    "ZIP229 tx version must not be higher than maximum");
 
 // Future transaction version group id
 static constexpr uint32_t ZFUTURE_VERSION_GROUP_ID = 0xFFFFFFFF;
@@ -459,6 +472,7 @@ private:
     std::optional<uint32_t> nConsensusBranchId;
     SaplingBundle saplingBundle;
     OrchardBundle orchardBundle;
+    IronwoodBundle ironwoodBundle;
 
     /** Memory only. */
     const WTxId wtxid;
@@ -482,6 +496,8 @@ public:
     static const int32_t SAPLING_MAX_CURRENT_VERSION = 4;
     static const int32_t NU5_MIN_CURRENT_VERSION = 4;
     static const int32_t NU5_MAX_CURRENT_VERSION = 5;
+    static const int32_t NU6_3_MIN_CURRENT_VERSION = 4;
+    static const int32_t NU6_3_MAX_CURRENT_VERSION = 6;
 
     static_assert(SPROUT_MIN_CURRENT_VERSION >= SPROUT_MIN_TX_VERSION,
                   "standard rule for tx version should be consistent with network rule");
@@ -505,6 +521,13 @@ public:
 
     static_assert( (NU5_MAX_CURRENT_VERSION <= ZIP225_MAX_TX_VERSION &&
                     NU5_MAX_CURRENT_VERSION >= NU5_MIN_CURRENT_VERSION),
+                  "standard rule for tx version should be consistent with network rule");
+
+    static_assert(NU6_3_MIN_CURRENT_VERSION >= SAPLING_MIN_TX_VERSION,
+                  "standard rule for tx version should be consistent with network rule");
+
+    static_assert( (NU6_3_MAX_CURRENT_VERSION <= ZIP229_MAX_TX_VERSION &&
+                    NU6_3_MAX_CURRENT_VERSION >= NU6_3_MIN_CURRENT_VERSION),
                   "standard rule for tx version should be consistent with network rule");
 
     // The local variables are made const to prevent unintended modification
@@ -565,6 +588,11 @@ public:
             nVersionGroupId == ZIP225_VERSION_GROUP_ID &&
             nVersion == ZIP225_TX_VERSION;
 
+        bool isZip229V6 =
+            fOverwintered &&
+            nVersionGroupId == ZIP229_VERSION_GROUP_ID &&
+            nVersion == ZIP229_TX_VERSION;
+
         // It is not possible to make the transaction's serialized form vary on
         // a per-enabled-feature basis. The approach here is that all
         // serialization rules for not-yet-released features must be
@@ -575,11 +603,11 @@ public:
             nVersionGroupId == ZFUTURE_VERSION_GROUP_ID &&
             nVersion == ZFUTURE_TX_VERSION;
 
-        if (fOverwintered && !(isOverwinterV3 || isSaplingV4 || isZip225V5 || isFuture)) {
+        if (fOverwintered && !(isOverwinterV3 || isSaplingV4 || isZip225V5 || isZip229V6 || isFuture)) {
             throw std::ios_base::failure("Unknown transaction format");
         }
 
-        if (isZip225V5) {
+        if (isZip225V5 || isZip229V6) {
             // Common Transaction Fields (plus version bytes above)
             if (ser_action.ForRead()) {
                 uint32_t consensusBranchId;
@@ -596,11 +624,25 @@ public:
             READWRITE(*const_cast<std::vector<CTxIn>*>(&vin));
             READWRITE(*const_cast<std::vector<CTxOut>*>(&vout));
 
-            // Sapling Transaction Fields
+            // Sapling Transaction Fields (the v6 Sapling component has the same wire
+            // format as v5; ZIP 229 changes only affect digest computation)
             READWRITE(saplingBundle);
 
             // Orchard Transaction Fields
-            READWRITE(orchardBundle);
+            if (ser_action.ForRead()) {
+                if (isZip229V6) {
+                    orchardBundle.UnserializeV6(s);
+                } else {
+                    orchardBundle.UnserializeV5(s, nConsensusBranchId.value());
+                }
+            } else {
+                orchardBundle.Serialize(s);
+            }
+
+            // Ironwood Transaction Fields (v6 only)
+            if (isZip229V6) {
+                READWRITE(ironwoodBundle);
+            }
         } else {
             // Legacy transaction formats
             READWRITE(*const_cast<std::vector<CTxIn>*>(&vin));
@@ -718,6 +760,13 @@ public:
         return orchardBundle;
     }
 
+    /**
+     * Returns the Ironwood bundle for the transaction.
+     */
+    const IronwoodBundle& GetIronwoodBundle() const {
+        return ironwoodBundle;
+    }
+
     /*
      * Context for the two methods below:
      * As at most one of vpub_new and vpub_old is non-zero in every JoinSplit,
@@ -778,6 +827,7 @@ struct CMutableTransaction
     uint32_t nExpiryHeight{0};
     SaplingBundle saplingBundle;
     OrchardBundle orchardBundle;
+    IronwoodBundle ironwoodBundle;
     std::vector<JSDescription> vJoinSplit;
     ed25519::VerificationKey joinSplitPubKey;
     ed25519::Signature joinSplitSig;
@@ -820,15 +870,19 @@ struct CMutableTransaction
             fOverwintered &&
             nVersionGroupId == ZIP225_VERSION_GROUP_ID &&
             nVersion == ZIP225_TX_VERSION;
+        bool isZip229V6 =
+            fOverwintered &&
+            nVersionGroupId == ZIP229_VERSION_GROUP_ID &&
+            nVersion == ZIP229_TX_VERSION;
         bool isFuture =
             fOverwintered &&
             nVersionGroupId == ZFUTURE_VERSION_GROUP_ID &&
             nVersion == ZFUTURE_TX_VERSION;
-        if (fOverwintered && !(isOverwinterV3 || isSaplingV4 || isZip225V5 || isFuture)) {
+        if (fOverwintered && !(isOverwinterV3 || isSaplingV4 || isZip225V5 || isZip229V6 || isFuture)) {
             throw std::ios_base::failure("Unknown transaction format");
         }
 
-        if (isZip225V5) {
+        if (isZip225V5 || isZip229V6) {
             // Common Transaction Fields (plus version bytes above)
             if (ser_action.ForRead()) {
                 uint32_t consensusBranchId;
@@ -845,11 +899,25 @@ struct CMutableTransaction
             READWRITE(vin);
             READWRITE(vout);
 
-            // Sapling Transaction Fields
+            // Sapling Transaction Fields (the v6 Sapling component has the same wire
+            // format as v5; ZIP 229 changes only affect digest computation)
             READWRITE(saplingBundle);
 
             // Orchard Transaction Fields
-            READWRITE(orchardBundle);
+            if (ser_action.ForRead()) {
+                if (isZip229V6) {
+                    orchardBundle.UnserializeV6(s);
+                } else {
+                    orchardBundle.UnserializeV5(s, nConsensusBranchId.value());
+                }
+            } else {
+                orchardBundle.Serialize(s);
+            }
+
+            // Ironwood Transaction Fields (v6 only)
+            if (isZip229V6) {
+                READWRITE(ironwoodBundle);
+            }
         } else {
             // Legacy transaction formats
             READWRITE(vin);

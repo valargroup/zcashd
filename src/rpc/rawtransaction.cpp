@@ -224,6 +224,62 @@ UniValue TxOrchardBundleToJSON(const CTransaction& tx, UniValue& entry)
     return obj;
 }
 
+UniValue TxIronwoodActionsToJSON(const rust::Vec<ironwood_bundle::Action>& actions)
+{
+    UniValue arr(UniValue::VARR);
+    for (const auto& action : actions) {
+        UniValue obj(UniValue::VOBJ);
+        auto cv = action.cv();
+        obj.pushKV("cv", HexStr(cv.begin(), cv.end()));
+        auto nullifier = action.nullifier();
+        obj.pushKV("nullifier", HexStr(nullifier.begin(), nullifier.end()));
+        auto rk = action.rk();
+        obj.pushKV("rk", HexStr(rk.begin(), rk.end()));
+        auto cmx = action.cmx();
+        obj.pushKV("cmx", HexStr(cmx.begin(), cmx.end()));
+        auto ephemeralKey = action.ephemeral_key();
+        obj.pushKV("ephemeralKey", HexStr(ephemeralKey.begin(), ephemeralKey.end()));
+        auto encCiphertext = action.enc_ciphertext();
+        obj.pushKV("encCiphertext", HexStr(encCiphertext.begin(), encCiphertext.end()));
+        auto outCiphertext = action.out_ciphertext();
+        obj.pushKV("outCiphertext", HexStr(outCiphertext.begin(), outCiphertext.end()));
+        auto spendAuthSig = action.spend_auth_sig();
+        obj.pushKV("spendAuthSig", HexStr(spendAuthSig.begin(), spendAuthSig.end()));
+        arr.push_back(obj);
+    }
+    return arr;
+}
+
+// See https://zips.z.cash/zip-0229
+UniValue TxIronwoodBundleToJSON(const CTransaction& tx, UniValue& entry)
+{
+    const auto& bundle = tx.GetIronwoodBundle().GetDetails();
+
+    UniValue obj(UniValue::VOBJ);
+    auto actions = bundle->actions();
+    obj.pushKV("actions", TxIronwoodActionsToJSON(actions));
+    auto valueBalanceZat = bundle->value_balance_zat();
+    obj.pushKV("valueBalance", ValueFromAmount(valueBalanceZat));
+    obj.pushKV("valueBalanceZat", valueBalanceZat);
+    // If this tx has no actions, then flags, anchor, etc. are not present.
+    if (!actions.empty()) {
+        {
+            UniValue obj_flags{UniValue::VOBJ};
+            obj_flags.pushKV("enableSpends", bundle->enable_spends());
+            obj_flags.pushKV("enableOutputs", bundle->enable_outputs());
+            obj_flags.pushKV("enableCrossAddress", bundle->enable_cross_address());
+            obj.pushKV("flags", obj_flags);
+        }
+        auto anchor = bundle->anchor();
+        obj.pushKV("anchor", HexStr(anchor.begin(), anchor.end()));
+        auto proof = bundle->proof();
+        obj.pushKV("proof", HexStr(proof.begin(), proof.end()));
+        auto bindingSig = bundle->binding_sig();
+        obj.pushKV("bindingSig", HexStr(bindingSig.begin(), bindingSig.end()));
+    }
+    return obj;
+}
+
 void TxToJSON(const CTransaction& tx, const uint256 hashBlock, UniValue& entry)
 {
     const uint256 txid = tx.GetHash();
@@ -318,6 +374,10 @@ void TxToJSON(const CTransaction& tx, const uint256 hashBlock, UniValue& entry)
         if (tx.nVersion >= ZIP225_TX_VERSION) {
             UniValue orchard = TxOrchardBundleToJSON(tx, entry);
             entry.pushKV("orchard", orchard);
+        }
+        if (tx.nVersion >= ZIP229_TX_VERSION) {
+            UniValue ironwood = TxIronwoodBundleToJSON(tx, entry);
+            entry.pushKV("ironwood", ironwood);
         }
     }
 

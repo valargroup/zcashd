@@ -212,7 +212,17 @@ public:
 
     // Create Orchard output
     void operator()(const libzcash::OrchardRawAddress &to) const {
-        std::array<uint8_t, 32> saplingAnchor;
+        // ZIP 258: from NU6.3, a coinbase transaction's Orchard component must be
+        // empty, so we can no longer pay the miner to an Orchard address. Paying
+        // shielded coinbase to the Ironwood pool requires v6 transaction
+        // construction, which this builder does not yet support.
+        if (chainparams.GetConsensus().NetworkUpgradeActive(nHeight, Consensus::UPGRADE_NU6_3)) {
+            throw std::runtime_error(
+                "From NU6.3 (Ironwood), coinbase transactions may not contain Orchard outputs (ZIP 258); "
+                "configure -mineraddress with a transparent or Sapling address");
+        }
+
+        std::array<uint8_t, 32> saplingAnchor = {};
         auto saplingBuilder = sapling::new_builder(*chainparams.RustNetwork(), nHeight, saplingAnchor, true);
 
         // `enableSpends` must be set to `false` for coinbase transactions. This
@@ -251,7 +261,7 @@ public:
 
     // Create Sapling output
     void operator()(const libzcash::SaplingPaymentAddress &pa) const {
-        std::array<uint8_t, 32> saplingAnchor;
+        std::array<uint8_t, 32> saplingAnchor = {};
         auto saplingBuilder = sapling::new_builder(*chainparams.RustNetwork(), nHeight, saplingAnchor, true);
 
         auto miner_reward = SetFoundersRewardAndGetMinerValue(*saplingBuilder);
@@ -268,7 +278,7 @@ public:
     // Create transparent output
     void operator()(const boost::shared_ptr<CReserveScript> &coinbaseScript) const {
         // Add the FR output and fetch the miner's output value.
-        std::array<uint8_t, 32> saplingAnchor;
+        std::array<uint8_t, 32> saplingAnchor = {};
         auto saplingBuilder = sapling::new_builder(*chainparams.RustNetwork(), nHeight, saplingAnchor, true);
 
         // Miner output will be vout[0]; Founders' Reward & funding stream outputs
@@ -340,6 +350,7 @@ void BlockAssembler::resetBlock(const MinerAddress& minerAddress)
     sproutValue = 0;
     saplingValue = 0;
     orchardValue = 0;
+    ironwoodValue = 0;
 
     lastFewTxs = 0;
     blockFinished = false;
@@ -410,9 +421,11 @@ CBlockTemplate* BlockAssembler::CreateNewBlock(
         assert(pindexPrev->nChainSproutValue.has_value());
         assert(pindexPrev->nChainSaplingValue.has_value());
         assert(pindexPrev->nChainOrchardValue.has_value());
+        assert(pindexPrev->nChainIronwoodValue.has_value());
         sproutValue = pindexPrev->nChainSproutValue.value();
         saplingValue = pindexPrev->nChainSaplingValue.value();
         orchardValue = pindexPrev->nChainOrchardValue.value();
+        ironwoodValue = pindexPrev->nChainIronwoodValue.value();
     }
 
     constructZIP317BlockTemplate();
@@ -563,9 +576,11 @@ bool BlockAssembler::TestForBlock(CTxMemPool::txiter iter)
         CAmount sproutValueDummy = sproutValue;
         CAmount saplingValueDummy = saplingValue;
         CAmount orchardValueDummy = orchardValue;
+        CAmount ironwoodValueDummy = ironwoodValue;
 
         saplingValueDummy += -iter->GetTx().GetValueBalanceSapling();
         orchardValueDummy += -iter->GetTx().GetOrchardBundle().GetValueBalance();
+        ironwoodValueDummy += -iter->GetTx().GetIronwoodBundle().GetValueBalance();
 
         for (auto js : iter->GetTx().vJoinSplit) {
             sproutValueDummy += js.vpub_old;
@@ -587,6 +602,11 @@ bool BlockAssembler::TestForBlock(CTxMemPool::txiter iter)
                       iter->GetTx().GetHash().GetHex());
             return false;
         }
+        if (ironwoodValueDummy < 0) {
+            LogPrintf("CreateNewBlock: tx %s appears to violate Ironwood turnstile\n",
+                      iter->GetTx().GetHash().GetHex());
+            return false;
+        }
 
         // We update this here instead of in AddToBlock to avoid recalculating
         // the deltas, because there are no more checks and we know that the
@@ -594,6 +614,7 @@ bool BlockAssembler::TestForBlock(CTxMemPool::txiter iter)
         sproutValue = sproutValueDummy;
         saplingValue = saplingValueDummy;
         orchardValue = orchardValueDummy;
+        ironwoodValue = ironwoodValueDummy;
     }
 
     return true;

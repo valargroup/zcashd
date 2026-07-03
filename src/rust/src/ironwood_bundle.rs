@@ -1,20 +1,23 @@
-use std::{mem, ptr};
+use std::mem;
 
-use group::{Group as _, GroupEncoding as _};
 use memuse::DynamicUsage;
 use orchard::{
     bundle::{Authorized, BundleVersion},
     keys::OutgoingViewingKey,
-    note_encryption::OrchardDomain,
+    note_encryption::IronwoodDomain,
     primitives::redpallas::{Signature, SpendAuth},
 };
+use pasta_curves::group::{Group as _, GroupEncoding as _};
 use pasta_curves::pallas;
 use zcash_note_encryption::try_output_recovery_with_ovk;
 use zcash_primitives::transaction::components::orchard as orchard_serialization;
 use zcash_protocol::value::ZatBalance;
 
-use crate::{bridge::ffi, streams::CppStream};
+use crate::streams::CppStream;
 
+/// An Ironwood-pool Action. The Ironwood pool uses the Orchard protocol, so this wraps the
+/// same underlying type as `orchard_bundle::Action`; it is a distinct FFI type because the
+/// two pools have separate note commitment trees, nullifier sets, and note plaintext formats.
 pub struct Action(orchard::Action<Signature<SpendAuth>>);
 
 impl Action {
@@ -51,118 +54,40 @@ impl Action {
     }
 }
 
+/// The Ironwood component of an authorized transaction (`None` if absent). The inner bundle
+/// always carries `BundleVersion::ironwood_v3()`.
 #[derive(Clone)]
 pub struct Bundle(Option<orchard::Bundle<Authorized, ZatBalance>>);
 
-pub(crate) fn none_orchard_bundle() -> Box<Bundle> {
+pub(crate) fn none_ironwood_bundle() -> Box<Bundle> {
     Box::new(Bundle(None))
 }
 
-pub(crate) unsafe fn orchard_bundle_from_raw_box(
-    bundle: *mut ffi::OrchardBundlePtr,
-) -> Box<Bundle> {
-    Bundle::from_raw_box(bundle)
-}
-
-/// Parses an authorized Orchard bundle from the given stream, in the v5 transaction
-/// format, as of the given consensus branch id.
-pub(crate) fn parse_orchard_bundle(
-    reader: &mut CppStream<'_>,
-    consensus_branch_id: u32,
-) -> Result<Box<Bundle>, String> {
-    Bundle::parse(reader, consensus_branch_id)
-}
-
-/// Parses an authorized Orchard-pool bundle from the given stream, in the v6 transaction
-/// format.
-///
-/// v6 transactions exist only from NU6.3, so the Orchard slot always uses the
-/// cross-address-restricted `orchard_v3` bundle version (this matches the whole-transaction
-/// parser in `zcash_primitives`).
-pub(crate) fn parse_orchard_bundle_v6(reader: &mut CppStream<'_>) -> Result<Box<Bundle>, String> {
-    match orchard_serialization::read_v6_bundle(reader, BundleVersion::orchard_v3()) {
+/// Parses an authorized Ironwood bundle from the given stream, in the v6 transaction format.
+pub(crate) fn parse_ironwood_bundle(reader: &mut CppStream<'_>) -> Result<Box<Bundle>, String> {
+    match orchard_serialization::read_v6_bundle(reader, BundleVersion::ironwood_v3()) {
         Ok(parsed) => Ok(Box::new(Bundle(parsed))),
-        Err(e) => Err(format!("Failed to parse Orchard bundle: {}", e)),
-    }
-}
-
-/// Maps a v5 transaction's consensus branch id to the Orchard-pool bundle version in force
-/// for that epoch. This must match the selection made by `zcash_primitives`'s whole-transaction
-/// parser (`Transaction::read`), which is the consensus-critical parse reached from
-/// `CTransaction::UpdateHash`:
-/// - branch ids before NU6.2 use the historical circuit and unenforced proof size;
-/// - NU6.2 fixed the circuit and made the canonical proof size a consensus rule;
-/// - NU6.3 mandates the cross-address restriction for the Orchard pool, which changes the
-///   proof instance encoding (and hence which verifying key the bundle validates under).
-///
-/// Unknown branch ids fall back to the most lenient (historical) version; such a transaction
-/// can never validate contextually, and the whole-transaction parse in `UpdateHash` is
-/// unaffected by this choice.
-fn v5_bundle_version_for_branch(consensus_branch_id: u32) -> BundleVersion {
-    use std::convert::TryFrom;
-    use zcash_protocol::consensus::BranchId;
-    match BranchId::try_from(consensus_branch_id) {
-        Ok(BranchId::Nu6_3) => BundleVersion::orchard_v3(),
-        Ok(BranchId::Nu6_2) => BundleVersion::orchard_v2(),
-        _ => BundleVersion::orchard_insecure_v1(),
+        Err(e) => Err(format!("Failed to parse Ironwood bundle: {}", e)),
     }
 }
 
 impl Bundle {
-    pub(crate) unsafe fn from_raw_box(bundle: *mut ffi::OrchardBundlePtr) -> Box<Self> {
-        Box::new(Bundle(if bundle.is_null() {
-            None
-        } else {
-            let bundle: *mut orchard::Bundle<Authorized, ZatBalance> = bundle.cast();
-            Some(*Box::from_raw(bundle))
-        }))
-    }
-
     /// Returns a copy of the value.
     pub(crate) fn box_clone(&self) -> Box<Self> {
         Box::new(self.clone())
     }
 
-    /// Parses an authorized Orchard bundle from the given stream, as of the given consensus
-    /// branch id (the one carried by the enclosing v5 transaction).
+    /// Serializes an authorized Ironwood bundle to the given stream, in the v6 transaction
+    /// format.
     ///
-    /// The branch id selects the bundle version exactly as the whole-transaction parser in
-    /// `zcash_primitives` does (see [`v5_bundle_version_for_branch`]). This is
-    /// consensus-relevant in two ways: the canonical proof size is enforced for NU6.2-onward
-    /// bundle versions, and from NU6.3 the Orchard-pool bundle version stamps the
-    /// cross-address restriction into the proof instances used by batch validation.
-    pub(crate) fn parse(
-        reader: &mut CppStream<'_>,
-        consensus_branch_id: u32,
-    ) -> Result<Box<Self>, String> {
-        match orchard_serialization::read_v5_bundle(
-            reader,
-            v5_bundle_version_for_branch(consensus_branch_id),
-        ) {
-            Ok(parsed) => Ok(Box::new(Bundle(parsed))),
-            Err(e) => Err(format!("Failed to parse Orchard bundle: {}", e)),
-        }
-    }
-
-    /// Serializes an authorized Orchard bundle to the given stream.
-    ///
-    /// If `bundle == None`, this serializes `nActionsOrchard = 0`.
+    /// If `bundle == None`, this serializes `nActionsIronwood = 0`.
     pub(crate) fn serialize(&self, writer: &mut CppStream<'_>) -> Result<(), String> {
-        orchard_serialization::write_v5_bundle(self.inner(), writer)
-            .map_err(|e| format!("Failed to serialize Orchard bundle: {}", e))
+        orchard_serialization::write_v6_bundle(self.inner(), writer)
+            .map_err(|e| format!("Failed to serialize Ironwood bundle: {}", e))
     }
 
     pub(crate) fn inner(&self) -> Option<&orchard::Bundle<Authorized, ZatBalance>> {
         self.0.as_ref()
-    }
-
-    pub(crate) fn as_ptr(&self) -> *const ffi::OrchardBundlePtr {
-        if let Some(bundle) = self.inner() {
-            let ret: *const orchard::Bundle<Authorized, ZatBalance> = bundle;
-            ret.cast()
-        } else {
-            ptr::null()
-        }
     }
 
     /// Returns the amount of dynamically-allocated memory used by this bundle.
@@ -171,11 +96,11 @@ impl Bundle {
             // Bundles are boxed on the heap, so we count their own size as well as the size
             // of `Vec`s they allocate.
             .map(|bundle| mem::size_of_val(bundle) + bundle.dynamic_usage())
-            // If the transaction has no Orchard component, nothing is allocated for it.
+            // If the transaction has no Ironwood component, nothing is allocated for it.
             .unwrap_or(0)
     }
 
-    /// Returns whether the Orchard bundle is present.
+    /// Returns whether the Ironwood bundle is present.
     pub(crate) fn is_present(&self) -> bool {
         self.0.is_some()
     }
@@ -193,29 +118,33 @@ impl Bundle {
         self.inner().map(|b| b.actions().len()).unwrap_or(0)
     }
 
-    /// Returns whether the Orchard bundle is present and spends are enabled.
+    /// Returns whether the Ironwood bundle is present and spends are enabled.
     pub(crate) fn enable_spends(&self) -> bool {
         self.inner()
             .map(|b| b.flags().spends_enabled())
             .unwrap_or(false)
     }
 
-    /// Returns whether the Orchard bundle is present and outputs are enabled.
+    /// Returns whether the Ironwood bundle is present and outputs are enabled.
     pub(crate) fn enable_outputs(&self) -> bool {
         self.inner()
             .map(|b| b.flags().outputs_enabled())
             .unwrap_or(false)
     }
 
-    /// Returns the value balance for this Orchard bundle.
-    ///
-    /// A transaction with no Orchard component has a value balance of zero.
-    pub(crate) fn value_balance_zat(&self) -> i64 {
+    /// Returns whether the Ironwood bundle is present and cross-address transfers are
+    /// enabled (the `enableCrossAddress` flag bit, which the Ironwood pool may set freely).
+    pub(crate) fn enable_cross_address(&self) -> bool {
         self.inner()
-            .map(|b| b.value_balance().into())
-            // From section 7.1 of the Zcash prototol spec:
-            // If valueBalanceOrchard is not present, then v^balanceOrchard is defined to be 0.
-            .unwrap_or(0)
+            .map(|b| b.flags().cross_address_enabled())
+            .unwrap_or(false)
+    }
+
+    /// Returns the value balance for this Ironwood bundle.
+    ///
+    /// A transaction with no Ironwood component has a value balance of zero.
+    pub(crate) fn value_balance_zat(&self) -> i64 {
+        self.inner().map(|b| b.value_balance().into()).unwrap_or(0)
     }
 
     /// Returns the anchor for the bundle.
@@ -282,18 +211,19 @@ impl Bundle {
         true
     }
 
-    /// Returns whether all actions contained in the Orchard bundle can be decrypted with
+    /// Returns whether all actions contained in the Ironwood bundle can be decrypted with
     /// the all-zeros OVK.
     ///
-    /// Returns `true` if no Orchard actions are present.
+    /// Returns `true` if no Ironwood actions are present.
     ///
-    /// This should only be called on an Orchard bundle that is an element of a coinbase
-    /// transaction.
+    /// This should only be called on an Ironwood bundle that is an element of a coinbase
+    /// transaction. Ironwood-pool notes use the quantum-recoverable note plaintext format
+    /// (ZIP 2005, lead byte 0x03), so decryption uses the Ironwood note encryption domain.
     pub(crate) fn coinbase_outputs_are_valid(&self) -> bool {
         if let Some(bundle) = self.inner() {
             for act in bundle.actions() {
                 if try_output_recovery_with_ovk(
-                    &OrchardDomain::for_action(act),
+                    &IronwoodDomain::for_action(act),
                     &OutgoingViewingKey::from([0u8; 32]),
                     act,
                     act.cv_net(),
@@ -306,7 +236,7 @@ impl Bundle {
             }
         }
 
-        // Either there are no Orchard actions, or all of the outputs
+        // Either there are no Ironwood actions, or all of the outputs
         // are decryptable with the all-zeros OVK.
         true
     }

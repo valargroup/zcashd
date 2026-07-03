@@ -3,6 +3,7 @@
 
 #include "zcash/IncrementalMerkleTree.hpp"
 #include "crypto/sha256.h"
+#include "primitives/ironwood.h"
 #include "zcash/util.h"
 
 #include <rust/sapling/spec.h>
@@ -1173,3 +1174,7 @@ template class IncrementalWitness<SAPLING_INCREMENTAL_MERKLE_TREE_DEPTH, Pederse
 template class IncrementalWitness<INCREMENTAL_MERKLE_TREE_DEPTH_TESTING, PedersenHash>;
 
 } // end namespace `libzcash`
+
+merkle_frontier::OrchardAppendResult IronwoodMerkleFrontier::AppendBundle(const IronwoodBundle& bundle) {
+    return inner->append_ironwood_bundle(*bundle.GetDetails());
+}

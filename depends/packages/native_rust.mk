@@ -9,6 +9,12 @@ $(package)_file_name_linux=rust-$($(package)_version)-x86_64-unknown-linux-gnu.t
 $(package)_sha256_hash_linux=c1130e4f7976f230766ab062b105b1fb050d6a78177db2246a5878fd6a589680
 $(package)_file_name_darwin=rust-$($(package)_version)-x86_64-apple-darwin.tar.gz
 $(package)_sha256_hash_darwin=ddaf6a98ccc500891a74bcb95807a04c89a0d1ad7b9c58bd7116620ff6f903a8
+# On arm64 macOS build machines, use the native aarch64 toolchain so the
+# compiler can emit code for the aarch64-apple-darwin host target.
+ifneq (,$(findstring aarch64,$(build)))
+$(package)_file_name_darwin=rust-$($(package)_version)-aarch64-apple-darwin.tar.gz
+$(package)_sha256_hash_darwin=d97daf14c5c346c2d5a3271880d5a06d9885ec9af7e1fd2f072986e338526f8c
+endif
 $(package)_file_name_freebsd=rust-$($(package)_version)-x86_64-unknown-freebsd.tar.gz
 $(package)_sha256_hash_freebsd=5457c15df17ff963b582b95c55fae3bc3736468e4df765182c75c19b1b6e8e74
 $(package)_file_name_aarch64_linux=rust-$($(package)_version)-aarch64-unknown-linux-gnu.tar.gz
@@ -16,7 +22,8 @@ $(package)_sha256_hash_aarch64_linux=20d5ebe3916fe489891fc577574e47fc679cdf62080
 
 # Mapping from GCC canonical hosts to Rust targets
 # If a mapping is not present, we assume they are identical, unless $host_os is
-# "darwin", in which case we assume x86_64-apple-darwin.
+# "darwin", in which case we assume x86_64-apple-darwin (or aarch64-apple-darwin
+# for arm64 hosts).
 $(package)_rust_target_x86_64-pc-linux-gnu=x86_64-unknown-linux-gnu
 $(package)_rust_target_x86_64-w64-mingw32=x86_64-pc-windows-gnullvm
 
@@ -27,7 +34,7 @@ $(package)_rust_std_sha256_hash_x86_64-pc-windows-gnullvm=78ae4f2281bce577dcbc8a
 $(package)_rust_std_sha256_hash_x86_64-unknown-freebsd=90979e87d60185944eef415230b904253abdcd36a4ea603479a3991ffb185807
 
 define rust_target
-$(if $($(1)_rust_target_$(2)),$($(1)_rust_target_$(2)),$(if $(findstring darwin,$(3)),x86_64-apple-darwin,$(if $(findstring freebsd,$(3)),x86_64-unknown-freebsd,$(2))))
+$(if $($(1)_rust_target_$(2)),$($(1)_rust_target_$(2)),$(if $(findstring darwin,$(3)),$(if $(findstring aarch64,$(2)),aarch64-apple-darwin,x86_64-apple-darwin),$(if $(findstring freebsd,$(3)),x86_64-unknown-freebsd,$(2))))
 endef
 
 define $(package)_set_vars
