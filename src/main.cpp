@@ -27,6 +27,7 @@
 #include "policy/policy.h"
 #include "pow.h"
 #include "reverse_iterator.h"
+#include "rust/bridge.h"
 #include "time.h"
 #include "txmempool.h"
 #include "ui_interface.h"
@@ -895,6 +896,7 @@ bool ContextualCheckTransaction(
     bool nu6Active = consensus.NetworkUpgradeActive(nHeight, Consensus::UPGRADE_NU6);
     bool nu6point1Active = consensus.NetworkUpgradeActive(nHeight, Consensus::UPGRADE_NU6_1);
     bool nu6point2Active = consensus.NetworkUpgradeActive(nHeight, Consensus::UPGRADE_NU6_2);
+    bool nu6point3Active = consensus.NetworkUpgradeActive(nHeight, Consensus::UPGRADE_NU6_3);
     bool futureActive = consensus.NetworkUpgradeActive(nHeight, Consensus::UPGRADE_ZFUTURE);
 
     assert(!saplingActive || overwinterActive); // Sapling cannot be active unless Overwinter is
@@ -904,7 +906,8 @@ bool ContextualCheckTransaction(
     assert(!nu6Active || nu5Active);            // NU6 cannot be active unless NU5 is
     assert(!nu6point1Active || nu6Active);      // NU6.1 cannot be active unless NU6 is
     assert(!nu6point2Active || nu6point1Active); // NU6.2 cannot be active unless NU6.1 is
-    assert(!futureActive || nu6point2Active);   // ZFUTURE must include consensus rules for all supported network upgrades.
+    assert(!nu6point3Active || nu6point2Active); // NU6.3 cannot be active unless NU6.2 is
+    assert(!futureActive || nu6point3Active);   // ZFUTURE must include consensus rules for all supported network upgrades.
 
     auto& orchard_bundle = tx.GetOrchardBundle();
 
@@ -1134,7 +1137,9 @@ bool ContextualCheckTransaction(
     if (nu5Active) {
         // Reject transactions with invalid version group id
         if (!futureActive) {
-            if (!(tx.nVersionGroupId == SAPLING_VERSION_GROUP_ID || tx.nVersionGroupId == ZIP225_VERSION_GROUP_ID)) {
+            if (!(tx.nVersionGroupId == SAPLING_VERSION_GROUP_ID ||
+                  tx.nVersionGroupId == ZIP225_VERSION_GROUP_ID ||
+                  (nu6point3Active && tx.nVersionGroupId == ZIP248_VERSION_GROUP_ID))) {
                 return state.DoS(
                     dosLevelPotentiallyRelaxing,
                     error("ContextualCheckTransaction(): invalid NU5 tx version"),
@@ -1198,6 +1203,52 @@ bool ContextualCheckTransaction(
                 return state.DoS(
                     dosLevelPotentiallyRelaxing,
                     error("ContextualCheckTransaction(): Sprout JoinSplits not allowed in ZIP225 transactions"),
+                    REJECT_INVALID, "bad-tx-has-joinsplits");
+            }
+        }
+
+        // Reject transactions with invalid version
+        if (tx.nVersionGroupId == ZIP248_VERSION_GROUP_ID) {
+            if (tx.nVersion < ZIP248_MIN_TX_VERSION) {
+                return state.DoS(
+                    dosLevelConstricting,
+                    error("ContextualCheckTransaction(): ZIP248 version too low"),
+                    REJECT_INVALID, "bad-tx-zip248-version-too-low");
+            }
+
+            if (tx.nVersion > ZIP248_MAX_TX_VERSION) {
+                return state.DoS(
+                    dosLevelPotentiallyRelaxing,
+                    error("ContextualCheckTransaction(): ZIP248 version too high"),
+                    REJECT_INVALID, "bad-tx-zip248-version-too-high");
+            }
+
+            if (!tx.GetConsensusBranchId().has_value()) {
+                // NOTE: This is an internal zcashd consistency
+                // check; it does not correspond to a consensus rule in the
+                // protocol specification, but is instead an artifact of the
+                // internal zcashd transaction representation.
+                return state.DoS(
+                    dosLevelPotentiallyRelaxing,
+                    error("ContextualCheckTransaction(): transaction does not have consensus branch id field set"),
+                    REJECT_INVALID, "bad-tx-consensus-branch-id-missing");
+            }
+
+            // tx.nConsensusBranchId must match the current consensus branch id
+            if (tx.GetConsensusBranchId().value() != consensusBranchId) {
+                return state.DoS(
+                    dosLevelPotentiallyRelaxing,
+                    error(
+                        "ContextualCheckTransaction(): transaction's consensus branch id (%08x) does not match the current consensus branch (%08x)",
+                        tx.GetConsensusBranchId().value(), consensusBranchId),
+                    REJECT_INVALID, "bad-tx-consensus-branch-id-mismatch");
+            }
+
+            // v6 transactions must have empty joinSplits
+            if (!(tx.vJoinSplit.empty())) {
+                return state.DoS(
+                    dosLevelPotentiallyRelaxing,
+                    error("ContextualCheckTransaction(): Sprout JoinSplits not allowed in ZIP248 transactions"),
                     REJECT_INVALID, "bad-tx-has-joinsplits");
             }
         }
@@ -1302,6 +1353,61 @@ bool ContextualCheckTransaction(
         }
     }
 
+    // Rules that apply to NU6.3 or later:
+    if (nu6point3Active) {
+        if (tx.IsCoinBase()) {
+            // From NU6.3 the Orchard pool prohibits cross-address transfers, which
+            // makes Orchard coinbase actions unconstructible: a coinbase action spends
+            // a dummy note, and the restricted circuit constrains its output to the
+            // dummy's own receiver. Shielded coinbase moves to the Ironwood pool. See
+            // the Orchard `ProtocolVersion::V3` documentation.
+            if (orchard_bundle.IsPresent()) {
+                return state.DoS(
+                    DOS_LEVEL_BLOCK,
+                    error("ContextualCheckTransaction(): NU6.3 coinbase has Orchard actions"),
+                    REJECT_INVALID, "bad-cb-has-orchard-actions");
+            }
+
+            // As with Sapling and Orchard shielded coinbase (ZIP 213), Ironwood
+            // coinbase outputs must be recoverable with the all-zeroes outgoing
+            // viewing key. Recovery dispatches on the bundle's pool, so Ironwood
+            // notes are checked as V3 (ZIP 2005) note plaintexts.
+            if (!tx.GetIronwoodBundle().CoinbaseOutputsAreValid()) {
+                return state.DoS(
+                    DOS_LEVEL_BLOCK,
+                    error("ContextualCheckTransaction(): Ironwood coinbase action has invalid ciphertext"),
+                    REJECT_INVALID, "bad-cb-action-invalid-ciphertext");
+            }
+        }
+
+        // [NU6.3 onward] valueBalanceOrchard MUST be nonnegative (ZIP 258).
+        // The Orchard pool is closed to new inflows: a negative
+        // valueBalanceOrchard moves value from the transparent value pool into
+        // the Orchard pool. Unshielding (positive) and zero balances remain
+        // legal. This applies to both v5 and v6 transactions.
+        if (orchard_bundle.GetValueBalance() < 0) {
+            return state.DoS(
+                dosLevelConstricting,
+                error("ContextualCheckTransaction(): NU6.3 transaction has negative Orchard value balance"),
+                REJECT_INVALID, "bad-tx-orchard-negative-valuebalance");
+        }
+    } else {
+        // Rules that apply generally before NU6.3.
+
+        // Check that Ironwood transaction components are not present prior to
+        // NU6.3. NOTE: This is an internal zcashd consistency check; it does not
+        // correspond to a consensus rule in the protocol specification (only v6
+        // transactions carry an Ironwood slot, and the v6 format is already rejected
+        // above before NU6.3 activation), but is instead an artifact of the internal
+        // zcashd transaction representation.
+        if (tx.GetIronwoodBundle().IsPresent()) {
+            return state.DoS(
+                dosLevelPotentiallyRelaxing,
+                error("ContextualCheckTransaction(): pre-NU6.3 transaction has Ironwood actions"),
+                REJECT_INVALID, "bad-tx-has-ironwood-actions");
+        }
+    }
+
     // Rules that apply to the future epoch
     if (futureActive) {
         switch (tx.nVersionGroupId) {
@@ -1326,6 +1432,9 @@ bool ContextualCheckTransaction(
                 break;
             case ZIP225_VERSION_GROUP_ID:
                 // Allow V5 transactions while futureActive
+                break;
+            case ZIP248_VERSION_GROUP_ID:
+                // Allow V6 transactions while futureActive
                 break;
             default:
                 return state.DoS(
@@ -1506,12 +1615,15 @@ bool CheckTransactionWithoutProofVerification(const CTransaction& tx, CValidatio
         if (tx.nVersionGroupId != OVERWINTER_VERSION_GROUP_ID &&
                 tx.nVersionGroupId != SAPLING_VERSION_GROUP_ID &&
                 tx.nVersionGroupId != ZIP225_VERSION_GROUP_ID &&
+                tx.nVersionGroupId != ZIP248_VERSION_GROUP_ID &&
                 tx.nVersionGroupId != ZFUTURE_VERSION_GROUP_ID) {
             return state.DoS(100, error("CheckTransaction(): unknown tx version group id"),
                     REJECT_INVALID, "bad-tx-version-group-id");
         }
     }
     auto orchard_bundle = tx.GetOrchardBundle();
+    // The Ironwood checks in this function are mirrored from Orchard's.
+    const auto& ironwood_bundle = tx.GetIronwoodBundle();
 
     // Check Orchard action fields that are not validated by the proof circuit:
     // - rk must not be the identity (causes a crash in proof verification)
@@ -1524,6 +1636,12 @@ bool CheckTransactionWithoutProofVerification(const CTransaction& tx, CValidatio
                          REJECT_INVALID, "bad-orchard-action-identity-point");
     }
 
+    // The same action-field encoding rules apply to the Ironwood bundle.
+    if (!ironwood_bundle.ValidateWithoutProofVerification()) {
+        return state.DoS(100, error("CheckTransaction(): invalid Ironwood action field encoding"),
+                         REJECT_INVALID, "bad-ironwood-action-identity-point");
+    }
+
     // Transactions must contain some potential source of funds. This rejects
     // obviously-invalid transaction constructions early, but cannot prevent
     // e.g. a pure Sapling transaction with only dummy spends (which is
@@ -1534,7 +1652,8 @@ bool CheckTransactionWithoutProofVerification(const CTransaction& tx, CValidatio
     if (tx.vin.empty() &&
         tx.vJoinSplit.empty() &&
         tx.GetSaplingSpendsCount() == 0 &&
-        !orchard_bundle.SpendsEnabled())
+        !orchard_bundle.SpendsEnabled() &&
+        !ironwood_bundle.SpendsEnabled())
     {
         return state.DoS(10, false, REJECT_INVALID, "bad-txns-no-source-of-funds");
     }
@@ -1549,7 +1668,8 @@ bool CheckTransactionWithoutProofVerification(const CTransaction& tx, CValidatio
     if (tx.vout.empty() &&
         tx.vJoinSplit.empty() &&
         tx.GetSaplingOutputsCount() == 0 &&
-        !orchard_bundle.OutputsEnabled())
+        !orchard_bundle.OutputsEnabled() &&
+        !ironwood_bundle.OutputsEnabled())
     {
         return state.DoS(10, false, REJECT_INVALID, "bad-txns-no-sink-of-funds");
     }
@@ -1596,7 +1716,7 @@ bool CheckTransactionWithoutProofVerification(const CTransaction& tx, CValidatio
         }
     }
 
-    // nSpendsSapling, nOutputsSapling, and nActionsOrchard MUST all be less than 2^16
+    // nSpendsSapling, nOutputsSapling, nActionsOrchard, and nActionsIronwood MUST all be less than 2^16
     size_t max_elements = (1 << 16) - 1;
     if (tx.GetSaplingSpendsCount() > max_elements) {
         return state.DoS(
@@ -1616,6 +1736,12 @@ bool CheckTransactionWithoutProofVerification(const CTransaction& tx, CValidatio
             error("CheckTransaction(): 2^16 or more Orchard actions"),
             REJECT_INVALID, "bad-tx-too-many-orchard-actions");
     }
+    if (ironwood_bundle.GetNumActions() > max_elements) {
+        return state.DoS(
+            100,
+            error("CheckTransaction(): 2^16 or more Ironwood actions"),
+            REJECT_INVALID, "bad-tx-too-many-ironwood-actions");
+    }
 
     // Check that if neither Orchard spends nor outputs are enabled, the transaction contains
     // no Orchard actions. This subsumes the check that valueBalanceOrchard must equal zero
@@ -1625,6 +1751,14 @@ bool CheckTransactionWithoutProofVerification(const CTransaction& tx, CValidatio
             100,
             error("CheckTransaction(): Orchard actions are present, but flags do not permit Orchard spends or outputs"),
             REJECT_INVALID, "bad-tx-orchard-flags-disable-actions");
+    }
+
+    // The same flags rule applies to the Ironwood bundle.
+    if (ironwood_bundle.GetNumActions() > 0 && !ironwood_bundle.OutputsEnabled() && !ironwood_bundle.SpendsEnabled()) {
+        return state.DoS(
+            100,
+            error("CheckTransaction(): Ironwood actions are present, but flags do not permit Ironwood spends or outputs"),
+            REJECT_INVALID, "bad-tx-ironwood-flags-disable-actions");
     }
 
     auto valueBalanceOrchard = orchard_bundle.GetValueBalance();
@@ -1638,6 +1772,24 @@ bool CheckTransactionWithoutProofVerification(const CTransaction& tx, CValidatio
     if (valueBalanceOrchard <= 0) {
         // NB: negative valueBalanceOrchard "takes" money from the transparent value pool just as outputs do
         nValueOut += -valueBalanceOrchard;
+
+        if (!MoneyRange(nValueOut)) {
+            return state.DoS(100, error("CheckTransaction(): txout total out of range"),
+                             REJECT_INVALID, "bad-txns-txouttotal-toolarge");
+        }
+    }
+
+    auto valueBalanceIronwood = ironwood_bundle.GetValueBalance();
+
+    // Check for overflow valueBalanceIronwood
+    if (valueBalanceIronwood > MAX_MONEY || valueBalanceIronwood < -MAX_MONEY) {
+        return state.DoS(100, error("CheckTransaction(): abs(tx.valueBalanceIronwood) too large"),
+                         REJECT_INVALID, "bad-txns-valuebalance-toolarge");
+    }
+
+    if (valueBalanceIronwood <= 0) {
+        // NB: negative valueBalanceIronwood "takes" money from the transparent value pool just as outputs do
+        nValueOut += -valueBalanceIronwood;
 
         if (!MoneyRange(nValueOut)) {
             return state.DoS(100, error("CheckTransaction(): txout total out of range"),
@@ -1717,6 +1869,17 @@ bool CheckTransactionWithoutProofVerification(const CTransaction& tx, CValidatio
                                     REJECT_INVALID, "bad-txns-txintotal-toolarge");
             }
         }
+
+        // Also check for Ironwood
+        if (valueBalanceIronwood >= 0) {
+            // NB: positive valueBalanceIronwood "adds" money to the transparent value pool, just as inputs do
+            nValueIn += valueBalanceIronwood;
+
+            if (!MoneyRange(nValueIn)) {
+                return state.DoS(100, error("CheckTransaction(): txin total out of range"),
+                                    REJECT_INVALID, "bad-txns-txintotal-toolarge");
+            }
+        }
     }
 
     // Check for duplicate inputs
@@ -1770,6 +1933,21 @@ bool CheckTransactionWithoutProofVerification(const CTransaction& tx, CValidatio
         }
     }
 
+    // Check for duplicate ironwood nullifiers in this transaction. The Ironwood
+    // pool has its own nullifier set, so duplicates are only checked within the
+    // bundle, not across the Orchard and Ironwood bundles.
+    {
+        std::set<uint256> vIronwoodNullifiers;
+        for (const uint256& nf : ironwood_bundle.GetNullifiers())
+        {
+            if (vIronwoodNullifiers.count(nf))
+                return state.DoS(100, error("CheckTransaction(): duplicate nullifiers"),
+                            REJECT_INVALID, "bad-ironwood-nullifiers-duplicate");
+
+            vIronwoodNullifiers.insert(nf);
+        }
+    }
+
     if (tx.IsCoinBase())
     {
         // There should be no joinsplits in a coinbase transaction
@@ -1785,6 +1963,9 @@ bool CheckTransactionWithoutProofVerification(const CTransaction& tx, CValidatio
         if (orchard_bundle.SpendsEnabled())
             return state.DoS(100, error("CheckTransaction(): coinbase has enableSpendsOrchard set"),
                              REJECT_INVALID, "bad-cb-has-orchard-spend");
+        if (ironwood_bundle.SpendsEnabled())
+            return state.DoS(100, error("CheckTransaction(): coinbase has enableSpendsIronwood set"),
+                             REJECT_INVALID, "bad-cb-has-ironwood-spend");
 
         // A coinbase transaction has no Sapling spends or spend-enabled Orchard
         // actions (rejected above), so its shielded value balance is the negation
@@ -1801,6 +1982,9 @@ bool CheckTransactionWithoutProofVerification(const CTransaction& tx, CValidatio
         if (orchard_bundle.GetValueBalance() > 0)
             return state.DoS(100, error("CheckTransaction(): coinbase has positive Orchard value balance"),
                              REJECT_INVALID, "bad-cb-positive-orchard-valuebalance");
+        if (ironwood_bundle.GetValueBalance() > 0)
+            return state.DoS(100, error("CheckTransaction(): coinbase has positive Ironwood value balance"),
+                             REJECT_INVALID, "bad-cb-positive-ironwood-valuebalance");
 
         if (tx.vin[0].scriptSig.size() < 2 || tx.vin[0].scriptSig.size() > 100)
             return state.DoS(100, false, REJECT_INVALID, "bad-cb-length");
@@ -1823,6 +2007,18 @@ std::string FormatStateMessage(const CValidationState &state)
         state.GetDebugMessage().empty() ? "" : ", "+state.GetDebugMessage(),
         state.GetRejectCode());
 }
+
+::orchard::OrchardCircuitVersion OrchardCircuitVersionFromHeight(const Consensus::Params& consensusParams, int height) {
+    auto orchard_circuit_version = orchard::OrchardCircuitVersion::InsecurePreNu6_2;
+    if (consensusParams.NetworkUpgradeActive(height, Consensus::UPGRADE_NU6_3)) {
+        orchard_circuit_version = orchard::OrchardCircuitVersion::PostNu6_3;
+    } else if (consensusParams.NetworkUpgradeActive(height, Consensus::UPGRADE_NU6_2)) {
+        orchard_circuit_version = orchard::OrchardCircuitVersion::FixedPostNu6_2;
+    }
+
+    return orchard_circuit_version;
+}
+
 
 bool AcceptToMemoryPool(
         const CChainParams& chainparams,
@@ -2082,7 +2278,7 @@ bool AcceptToMemoryPool(
         // verifying key.
         std::optional<rust::Box<orchard::BatchValidator>> orchardAuth = orchard::init_batch_validator(
             true,
-            chainparams.GetConsensus().NetworkUpgradeActive(nextBlockHeight, Consensus::UPGRADE_NU6_2));
+            OrchardCircuitVersionFromHeight(chainparams.GetConsensus(), nextBlockHeight));
 
         // Check shielded input signatures.
         if (!ContextualCheckShieldedInputs(
@@ -3305,12 +3501,11 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
     // Disable Sapling and Orchard batch validation if possible.
     std::optional<rust::Box<sapling::BatchValidator>> saplingAuth = fExpensiveChecks ?
         std::optional(sapling::init_batch_validator(fCacheResults)) : std::nullopt;
+
     // The batch is typed to the Orchard circuit in force at this block's height: NU6.2 changed
     // the circuit and thus the verifying key.
-    std::optional<rust::Box<orchard::BatchValidator>> orchardAuth = fExpensiveChecks ?
-        std::optional(orchard::init_batch_validator(
-            fCacheResults,
-            consensusParams.NetworkUpgradeActive(pindex->nHeight, Consensus::UPGRADE_NU6_2)))
+    std::optional<rust::Box<orchard::BatchValidator>> orchardAuth = fExpensiveChecks
+        ? std::optional(orchard::init_batch_validator(fCacheResults, OrchardCircuitVersionFromHeight(consensusParams, pindex->nHeight)))
         : std::nullopt;
 
     // If in initial block download, and this block is an ancestor of a checkpoint,
