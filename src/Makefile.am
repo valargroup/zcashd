@@ -88,7 +88,7 @@ CXXBRIDGE_CPP = \
 
 # We add a rust/cxx.h include to indicate that we provide this (via the rustcxx depends
 # package), so that cxxbridge doesn't include it within the generated headers and code.
-CXXBRIDGE_OPTS = -i rust/cxx.h
+CXXBRIDGE_OPTS = -i rust/cxx.h --cfg test=false
 
 $(CXXBRIDGE_RS): ;
 $(CXXBRIDGE_H) $(CXXBRIDGE_CPP): $(CXXBRIDGE_RS)

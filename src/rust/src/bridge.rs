@@ -86,6 +86,7 @@ pub(crate) mod ffi {
         ) -> Result<Box<Network>>;
     }
 
+    #[cfg(not(test))]
     #[namespace = "libzcash"]
     unsafe extern "C++" {
         include!("zcash/cache.h");

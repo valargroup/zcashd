@@ -1484,7 +1484,8 @@ bool ContextualCheckShieldedInputs(
     // Create signature hashes for shielded components.
     if (!tx.vJoinSplit.empty() ||
         tx.GetSaplingBundle().IsPresent() ||
-        tx.GetOrchardBundle().IsPresent())
+        tx.GetOrchardBundle().IsPresent() ||
+        tx.GetIronwoodBundle().IsPresent())
     {
         // Empty output script.
         CScript scriptCode;
@@ -1536,6 +1537,7 @@ bool ContextualCheckShieldedInputs(
     // Queue Orchard bundle to be batch-validated.
     if (orchardAuth.has_value()) {
         tx.GetOrchardBundle().QueueAuthValidation(*orchardAuth.value(), dataToBeSigned);
+        tx.GetIronwoodBundle().QueueAuthValidation(*orchardAuth.value(), dataToBeSigned);
     }
 
     return true;
@@ -2296,7 +2298,7 @@ bool AcceptToMemoryPool(
             return false;
         }
 
-        // Check Sapling and Orchard bundle authorizations.
+        // Check Sapling, Orchard, and Ironwood bundle authorizations.
         // `saplingAuth` and `orchardAuth` are known here to be non-null.
         if (!saplingAuth.value()->validate()) {
             return state.DoS(100, false, REJECT_INVALID, "bad-sapling-bundle-authorization");
@@ -8676,7 +8678,8 @@ bool static ProcessMessage(const CChainParams& chainparams, CNode* pfrom, string
         else if (fMissingInputs &&
                  tx.vJoinSplit.empty() &&
                  !tx.GetSaplingBundle().IsPresent() &&
-                 !tx.GetOrchardBundle().IsPresent())
+                 !tx.GetOrchardBundle().IsPresent() &&
+                 !tx.GetIronwoodBundle().IsPresent())
         {
             bool fRejectedParents = false; // It may be the case that the orphan's parents have all been rejected
             for (const CTxIn& txin : tx.vin) {

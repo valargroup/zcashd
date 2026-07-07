@@ -12,6 +12,7 @@ struct BatchValidatorInner {
     // The lifetime here applies to a reference to a static VerifyingKey
     validator: orchard::bundle::BatchValidator<'static>,
     queued_entries: CacheEntries,
+    valid: bool,
 }
 
 pub(crate) struct BatchValidator(Option<BatchValidatorInner>);
@@ -47,7 +48,50 @@ pub(crate) fn orchard_batch_validation_init(
     Box::new(BatchValidator(Some(BatchValidatorInner {
         validator: orchard::bundle::BatchValidator::new(vk),
         queued_entries: CacheEntries::new(cache_store),
+        valid: true,
     })))
+}
+
+impl BatchValidatorInner {
+    fn poison(&mut self, error_msg: &str) {
+        error!("{}", error_msg);
+        self.valid = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::orchard_bundle::none_orchard_bundle;
+
+    fn batch_validator(valid: bool) -> BatchValidator {
+        BatchValidator(Some(BatchValidatorInner {
+            validator: orchard::bundle::BatchValidator::new(&crate::ORCHARD_VK_INSECURE),
+            queued_entries: CacheEntries::new(false),
+            valid,
+        }))
+    }
+
+    #[test]
+    fn absent_bundle_does_not_poison_batch() {
+        let mut batch = batch_validator(true);
+
+        batch.add_bundle(none_orchard_bundle(), [0; 32]);
+
+        assert!(batch.0.as_ref().unwrap().valid);
+    }
+
+    #[test]
+    fn poisoned_batch_validation_fails_without_using_cache() {
+        let mut batch = batch_validator(true);
+        batch.0.as_mut().unwrap().poison("test poison");
+
+        // The bundle cache is intentionally not initialized in this test. If a
+        // poisoned batch tried to populate the cache, validation would panic.
+        assert!(!batch.validate());
+        assert!(batch.0.is_none());
+    }
 }
 
 impl BatchValidator {
@@ -67,31 +111,48 @@ impl BatchValidator {
 
                 // Compute the cache entry for this bundle.
                 let cache_entry = {
-                    let bundle_commitment = bundle
-                        .commitment(tx_version)
-                        .expect("bundle commitment must be computable for its transaction version");
-                    let bundle_authorizing_commitment = bundle
+                    let bundle_commitment = match bundle.commitment(tx_version) {
+                        Ok(bundle_commitment) => bundle_commitment,
+                        Err(e) => {
+                            batch.poison(&format!(
+                                "bundle commitment must be computable for its transaction version: {}",
+                                e
+                            ));
+                            return;
+                        }
+                    };
+                    let bundle_authorizing_commitment = match bundle
                         .authorizing_commitment(tx_version)
-                        .expect("bundle commitment must be computable for its transaction version");
-                    cache.compute_entry(
-                        bundle_commitment.0.as_bytes().try_into().unwrap(),
-                        bundle_authorizing_commitment
-                            .0
-                            .as_bytes()
-                            .try_into()
-                            .unwrap(),
-                        &sighash,
-                    )
+                    {
+                        Ok(bundle_authorizing_commitment) => bundle_authorizing_commitment,
+                        Err(e) => {
+                            batch.poison(&format!(
+                                "bundle authorizing commitment must be computable for its transaction version: {}",
+                                e
+                            ));
+                            return;
+                        }
+                    };
+                    let Ok(bundle_commitment) = bundle_commitment.0.as_bytes().try_into() else {
+                        batch.poison("bundle commitment has invalid length");
+                        return;
+                    };
+                    let Ok(bundle_authorizing_commitment) =
+                        bundle_authorizing_commitment.0.as_bytes().try_into()
+                    else {
+                        batch.poison("bundle authorizing commitment has invalid length");
+                        return;
+                    };
+                    cache.compute_entry(bundle_commitment, bundle_authorizing_commitment, &sighash)
                 };
 
                 // Check if this bundle's validation result exists in the cache.
                 if !cache.contains(cache_entry, &mut batch.queued_entries) {
                     // The bundle has been added to `inner.queued_entries` because it was not
                     // in the cache. We now add its authorization to the validation batch.
-                    batch
-                        .validator
-                        .add_bundle(bundle, sighash)
-                        .expect("invalid bundle");
+                    if batch.validator.add_bundle(bundle, sighash).is_err() {
+                        batch.poison("invalid bundle");
+                    }
                 }
             }
             (Some(_), None) => debug!("Tx has no Orchard component"),
@@ -117,6 +178,10 @@ impl BatchValidator {
     /// - `bindingSigOrchard` validity is enforced here.
     pub(crate) fn validate(&mut self) -> bool {
         if let Some(inner) = self.0.take() {
+            if !inner.valid {
+                return false;
+            }
+
             // The verifying key for this batch's circuit was fixed at construction
             // (`orchard_batch_validation_init`).
             if inner.validator.validate(OsRng) {
