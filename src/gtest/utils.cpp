@@ -115,3 +115,17 @@ template<> void AppendRandomLeaf(OrchardMerkleFrontier &tree) {
     auto bundle = builder.Build().value().ProveAndSign({}, dataToBeSigned).value();
     tree.AppendBundle(bundle);
 }
+
+template<> void AppendRandomLeaf(IronwoodMerkleFrontier &tree) {
+    RawHDSeed seed(32, 0);
+    auto to = libzcash::OrchardSpendingKey::ForAccount(seed, 133, 0)
+        .ToFullViewingKey()
+        .GetChangeAddress();
+    uint256 ironwoodAnchor;
+    uint256 dataToBeSigned;
+    auto builder = orchard::Builder(
+        false, {orchard::OrchardValuePool::Ironwood, orchard::ProtocolVersion::V3}, ironwoodAnchor);
+    builder.AddOutput(std::nullopt, to, 0, std::nullopt);
+    auto bundle = builder.Build().value().ProveAndSign({}, dataToBeSigned).value();
+    tree.AppendBundle(bundle);
+}
