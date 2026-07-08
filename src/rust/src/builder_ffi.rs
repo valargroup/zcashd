@@ -99,12 +99,6 @@ pub extern "C" fn orchard_builder_new(
             .expect("failed to build Orchard bundle"),
     ))
 }
-// orchard_builder_new_nu6_3(
-//     coinbase: bool,
-//     anchor: *const [u8; 32],
-// ) -> *mut Builder {
-//     orchard_builder_new(coinbase, anchor, orchard::BundleProtocol::)
-// }
 
 #[no_mangle]
 pub extern "C" fn orchard_builder_add_spend(

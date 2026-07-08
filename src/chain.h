@@ -638,6 +638,9 @@ public:
     template <typename Stream, typename Operation>
     inline void SerializationOp(Stream& s, Operation ser_action) {
         int nVersion = s.GetVersion();
+        if (!ser_action.ForRead() && nVersion < IRONWOOD_DATA_VERSION) {
+            nVersion = IRONWOOD_DATA_VERSION;
+        }
         if (!(s.GetType() & SER_GETHASH))
             READWRITE(VARINT(nVersion));
         nClientVersion = nVersion;

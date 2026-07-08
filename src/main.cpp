@@ -3654,11 +3654,18 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
                       pindex->nHeight, pindex->nChainSproutValue.value(), sapling_supply, orchard_supply, ironwood_supply, lockbox_supply),
                 REJECT_INVALID, "turnstile-violation-orchard");
         }
-        if (!MoneyDeltaRange(ironwood_supply)) {
+        // Ironwood
+        //
+        // Like the other shielded pools, the Ironwood chain value pool balance
+        // MUST be nonnegative: the pool is tracked purely from
+        // valueBalanceIronwood, so a negative balance means more value left the
+        // pool than ever entered it (counterfeiting). Zebra enforces the same
+        // rule; using a looser range here would split consensus.
+        if (!MoneyRange(ironwood_supply)) {
             return state.DoS(100,
-                error("%s: Ironwood shielded value pool out of range at height %d (sprout=%d, sapling=%d, orchard=%d, ironwood=%d, lockbox=%d)", __func__,
+                error("%s: turnstile violation in Ironwood shielded value pool at height %d (sprout=%d, sapling=%d, orchard=%d, ironwood=%d, lockbox=%d)", __func__,
                       pindex->nHeight, pindex->nChainSproutValue.value(), sapling_supply, orchard_supply, ironwood_supply, lockbox_supply),
-                REJECT_INVALID, "ironwood-shielded-pool-out-of-range");
+                REJECT_INVALID, "turnstile-violation-ironwood");
         }
     }
 
@@ -4177,7 +4184,7 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
             assert(MoneyRange(sprout_supply));
             assert(MoneyRange(sapling_supply));
             assert(MoneyRange(orchard_supply));
-            assert(MoneyDeltaRange(ironwood_supply));
+            assert(MoneyRange(ironwood_supply));
             assert(MoneyRange(lockbox_supply));
 
             // `nChainTotalSupply` and `nChainTransparentValue` may be unpopulated
@@ -4387,6 +4394,10 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
 
     if (fJustCheck)
         return true;
+
+    if (consensusParams.NetworkUpgradeActive(pindex->nHeight, Consensus::UPGRADE_NU6_3)) {
+        setDirtyBlockIndex.insert(pindex);
+    }
 
     // Write undo information to disk
     if (pindex->GetUndoPos().IsNull() || !pindex->IsValid(BLOCK_VALID_CONSENSUS))
@@ -5716,14 +5727,10 @@ static bool AccumulateChainPoolValues(CBlockIndex *pindex)
     // Ironwood
     if (pindex->pprev->nChainIronwoodValue.has_value()) {
         CAmount chainIronwoodValue = pindex->pprev->nChainIronwoodValue.value();
-        if (!MoneyDeltaRange(chainIronwoodValue) || !MoneyDeltaRange(pindex->nIronwoodValue)) {
+        if (!MoneyRange(chainIronwoodValue) || !MoneyDeltaRange(pindex->nIronwoodValue)) {
             return error("%s: ironwood pool value out of range at height %d", __func__, pindex->nHeight);
         }
-        CAmount newChainIronwoodValue = chainIronwoodValue + pindex->nIronwoodValue;
-        if (!MoneyDeltaRange(newChainIronwoodValue)) {
-            return error("%s: ironwood pool value out of range at height %d", __func__, pindex->nHeight);
-        }
-        pindex->nChainIronwoodValue = newChainIronwoodValue;
+        pindex->nChainIronwoodValue = chainIronwoodValue + pindex->nIronwoodValue;
     } else {
         pindex->nChainIronwoodValue = std::nullopt;
     }
