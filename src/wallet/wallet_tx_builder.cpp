@@ -11,7 +11,7 @@
 
 using namespace libzcash;
 
-static const std::string IRONWOOD_WALLET_UNSUPPORTED =
+const std::string IRONWOOD_WALLET_UNSUPPORTED =
     "zcashd does not support the Ironwood pool, and Orchard payments (including spends of "
     "existing Orchard notes) are unsupported from NU6.3. Use transparent or Sapling funds "
     "with zcashd, or a Z3-stack wallet for shielded payments.";
@@ -454,19 +454,46 @@ WalletTxBuilder::PrepareTransaction(
                     });
             },
         });
-    return selected.map([&](const InputSelection& resolvedSelection) {
-        auto ovks = SelectOVKs(wallet, selector, spendable);
+    if (!selected.has_value()) {
+        return tl::make_unexpected(selected.error());
+    }
+    const auto& resolvedSelection = selected.value();
 
-        return TransactionEffects(
-                anchorConfirmations,
-                resolvedSelection.GetInputs(),
-                resolvedSelection.GetPayments(),
-                resolvedSelection.GetChangeAddress(),
-                resolvedSelection.GetFee(),
-                ovks.first,
-                ovks.second,
-                anchorHeight);
-    });
+    // zcashd has permanently descoped Ironwood wallet support, and from NU6.3 the
+    // Orchard pool rejects the third-party outputs wallet transactions require, so
+    // reject any Orchard involvement (spends, payments, or change) at preparation
+    // time rather than during proving. Orchard change is normally visible via
+    // HasOrchardRecipient (change is resolved as an internal payment), but the
+    // change address is checked directly so this gate does not depend on that
+    // modeling detail.
+    if (consensus.NetworkUpgradeActive(chain.Height() + 1, Consensus::UPGRADE_NU6_3)) {
+        bool orchardChange =
+            resolvedSelection.GetChangeAddress().has_value() &&
+            examine(resolvedSelection.GetChangeAddress().value(), match {
+                [](const RecipientAddress& addr) {
+                    return std::holds_alternative<OrchardRawAddress>(addr);
+                },
+                [](const SproutPaymentAddress&) { return false; },
+            });
+        if (resolvedSelection.GetInputs().GetOrchardTotal() > 0
+            || resolvedSelection.GetPayments().HasOrchardRecipient()
+            || orchardChange)
+        {
+            return tl::make_unexpected(IronwoodUnsupportedError());
+        }
+    }
+
+    auto ovks = SelectOVKs(wallet, selector, spendable);
+
+    return TransactionEffects(
+            anchorConfirmations,
+            resolvedSelection.GetInputs(),
+            resolvedSelection.GetPayments(),
+            resolvedSelection.GetChangeAddress(),
+            resolvedSelection.GetFee(),
+            ovks.first,
+            ovks.second,
+            anchorHeight);
 }
 
 const SpendableInputs& InputSelection::GetInputs() const {
