@@ -336,6 +336,7 @@ typedef libzcash::IncrementalWitness<INCREMENTAL_MERKLE_TREE_DEPTH_TESTING, libz
 
 class OrchardWallet;
 class OrchardMerkleFrontierLegacySer;
+class IronwoodMerkleFrontierLegacySer;
 
 class OrchardMerkleFrontier
 {
@@ -433,6 +434,7 @@ private:
     /// An incremental Sinsemilla tree. Memory is allocated by Rust.
     rust::Box<merkle_frontier::Orchard> inner;
 
+    friend class IronwoodMerkleFrontierLegacySer;
 public:
     IronwoodMerkleFrontier() : inner(merkle_frontier::new_orchard()) {}
 
@@ -496,6 +498,22 @@ public:
 
     libzcash::SubtreeIndex current_subtree_index() const {
         return (inner->size() >> libzcash::TRACKED_SUBTREE_HEIGHT);
+    }
+};
+
+class IronwoodMerkleFrontierLegacySer {
+private:
+    const IronwoodMerkleFrontier& frontier;
+public:
+    IronwoodMerkleFrontierLegacySer(const IronwoodMerkleFrontier& frontier): frontier(frontier) {}
+
+    template<typename Stream>
+    void Serialize(Stream& s) const {
+        try {
+            frontier.inner->serialize_legacy(*ToRustStream(s));
+        } catch (const std::exception& e) {
+            throw std::ios_base::failure(e.what());
+        }
     }
 };
 
