@@ -58,9 +58,8 @@ Builder::Builder(
     // The cross-address flag-byte bit exists only for (Ironwood, V3) bundles; earlier
     // protocol versions permit cross-address transfers unconditionally, and the FFI
     // masks the bit for them.
-    // NOTE: an Ironwood *coinbase* bundle will also need cross-address enabled (its
-    // outputs pay real recipients from dummy spends); revisit when shielded coinbase
-    // moves to the Ironwood pool post-NU6.3.
+    // zcashd does not construct Ironwood coinbase bundles; post-NU6.3 shielded
+    // coinbase mining is handled by Zebra.
     flags.cross_address_enabled = !coinbase &&
         bundle_version.value_pool == orchard::OrchardValuePool::Ironwood &&
         bundle_version.protocol_version == orchard::ProtocolVersion::V3;
@@ -102,7 +101,7 @@ bool Builder::AddSpend(orchard::SpendInfo spendInfo)
     }
 }
 
-void Builder::AddOutput(
+bool Builder::AddOutput(
     const std::optional<uint256>& ovk,
     const libzcash::OrchardRawAddress& to,
     CAmount value,
@@ -112,14 +111,18 @@ void Builder::AddOutput(
         throw std::logic_error("orchard::Builder has already been used");
     }
 
-    orchard_builder_add_recipient(
+    if (orchard_builder_add_recipient(
         inner.get(),
         ovk.has_value() ? ovk->begin() : nullptr,
         to.inner.get(),
         value,
-        memo.has_value() ? memo.value().ToBytes().data() : nullptr);
-
-    hasActions = true;
+        memo.has_value() ? memo.value().ToBytes().data() : nullptr))
+    {
+        hasActions = true;
+        return true;
+    } else {
+        return false;
+    }
 }
 
 std::optional<UnauthorizedBundle> Builder::Build() {
@@ -321,7 +324,7 @@ bool TransactionBuilder::AddOrchardSpend(
     return res;
 }
 
-void TransactionBuilder::AddOrchardOutput(
+bool TransactionBuilder::AddOrchardOutput(
     const std::optional<uint256>& ovk,
     const libzcash::OrchardRawAddress& to,
     CAmount value,
@@ -338,8 +341,11 @@ void TransactionBuilder::AddOrchardOutput(
         }
     }
 
-    orchardBuilder.value().AddOutput(ovk, to, value, memo);
-    valueBalanceOrchard -= value;
+    auto res = orchardBuilder.value().AddOutput(ovk, to, value, memo);
+    if (res) {
+        valueBalanceOrchard -= value;
+    }
+    return res;
 }
 
 void TransactionBuilder::AddSaplingSpend(
@@ -515,7 +521,9 @@ TransactionBuilderResult TransactionBuilder::Build()
         // if any; otherwise the first Sprout address given as input.
         // (A t-address can only be used as the change address if explicitly set.)
         if (orchardChangeAddr) {
-            AddOrchardOutput(orchardChangeAddr->first, orchardChangeAddr->second, change, std::nullopt);
+            if (!AddOrchardOutput(orchardChangeAddr->first, orchardChangeAddr->second, change, std::nullopt)) {
+                return TransactionBuilderResult("Failed to add Orchard change output to transaction");
+            }
         } else if (saplingChangeAddr) {
             AddSaplingOutput(saplingChangeAddr->first, saplingChangeAddr->second, change, std::nullopt);
         } else if (sproutChangeAddr) {
@@ -525,7 +533,9 @@ TransactionBuilderResult TransactionBuilder::Build()
             AddTransparentOutput(tChangeAddr.value(), change);
         } else if (firstOrchardSpendAddr.has_value()) {
             auto ovk = orchardSpendingKeys[0].ToFullViewingKey().ToInternalOutgoingViewingKey();
-            AddOrchardOutput(ovk, firstOrchardSpendAddr.value(), change, std::nullopt);
+            if (!AddOrchardOutput(ovk, firstOrchardSpendAddr.value(), change, std::nullopt)) {
+                return TransactionBuilderResult("Failed to add Orchard change output to transaction");
+            }
         } else if (firstSaplingSpendAddr.has_value()) {
             uint256 ovk;
             libzcash::SaplingPaymentAddress changeAddr;

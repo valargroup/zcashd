@@ -100,11 +100,12 @@ public:
     // Builder should never be copied
     Builder(const Builder&) = delete;
     Builder& operator=(const Builder&) = delete;
-    Builder(Builder&& builder) : inner(std::move(builder.inner)) {}
+    Builder(Builder&& builder) : inner(std::move(builder.inner)), hasActions(std::move(builder.hasActions)) {}
     Builder& operator=(Builder&& builder)
     {
         if (this != &builder) {
             inner = std::move(builder.inner);
+            hasActions = std::move(builder.hasActions);
         }
         return *this;
     }
@@ -116,7 +117,9 @@ public:
     bool AddSpend(orchard::SpendInfo spendInfo);
 
     /// Adds an address which will receive funds in this bundle.
-    void AddOutput(
+    ///
+    /// Returns `false` if the recipient is not valid for this builder's bundle version.
+    bool AddOutput(
         const std::optional<uint256>& ovk,
         const libzcash::OrchardRawAddress& to,
         CAmount value,
@@ -357,7 +360,7 @@ public:
         libzcash::OrchardSpendingKey sk,
         orchard::SpendInfo spendInfo);
 
-    void AddOrchardOutput(
+    bool AddOrchardOutput(
         const std::optional<uint256>& ovk,
         const libzcash::OrchardRawAddress& to,
         CAmount value,

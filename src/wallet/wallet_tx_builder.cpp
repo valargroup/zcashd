@@ -11,6 +11,11 @@
 
 using namespace libzcash;
 
+static const std::string IRONWOOD_WALLET_UNSUPPORTED =
+    "zcashd does not support the Ironwood pool, and Orchard payments (including spends of "
+    "existing Orchard notes) are unsupported from NU6.3. Use transparent or Sapling funds "
+    "with zcashd, or a Z3-stack wallet for shielded payments.";
+
 int GetAnchorHeight(const CChain& chain, uint32_t anchorConfirmations)
 {
     int nextBlockHeight = chain.Height() + 1;
@@ -925,6 +930,11 @@ TransactionBuilderResult TransactionEffects::ApproveAndBuild(
     }
 
     int nextBlockHeight = chain.Height() + 1;
+    if (InvolvesOrchard() &&
+        params.GetConsensus().NetworkUpgradeActive(nextBlockHeight, Consensus::UPGRADE_NU6_3))
+    {
+        return TransactionBuilderResult(IRONWOOD_WALLET_UNSUPPORTED);
+    }
 
     // Allow Orchard recipients by setting an Orchard anchor.
     std::optional<uint256> orchardAnchor;
@@ -1055,11 +1065,14 @@ TransactionBuilderResult TransactionEffects::ApproveAndBuild(
                         r.memo);
             },
             [&](const libzcash::OrchardRawAddress& addr) {
-                builder.AddOrchardOutput(
+                if (!builder.AddOrchardOutput(
                         r.isInternal ? internalOVK : externalOVK,
                         addr,
                         r.amount,
-                        r.memo);
+                        r.memo))
+                {
+                    result = TransactionBuilderResult(IRONWOOD_WALLET_UNSUPPORTED);
+                }
             },
         });
         if (result.has_value()) {

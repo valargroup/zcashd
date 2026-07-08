@@ -3366,7 +3366,9 @@ static DisconnectResult DisconnectBlock(const CBlock& block, CValidationState& s
     // block was not on or after the NU6.3 activation height, this
     // will be set to `null`. For logical consistency, in this case we
     // set the last anchor to the empty root.
-    if (chainparams.GetConsensus().NetworkUpgradeActive(pindex->pprev->nHeight, Consensus::UPGRADE_NU6_3)) {
+    if (chainparams.GetConsensus().NetworkUpgradeActive(pindex->pprev->nHeight, Consensus::UPGRADE_NU6_3) &&
+        !pindex->pprev->hashFinalIronwoodRoot.IsNull())
+    {
         view.PopAnchor(pindex->pprev->hashFinalIronwoodRoot, IRONWOOD);
     } else {
         view.PopAnchor(IronwoodMerkleFrontier::empty_root(), IRONWOOD);
@@ -3754,16 +3756,18 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
     }
 
     IronwoodMerkleFrontier ironwood_tree;
-    if (pindex->pprev && consensusParams.NetworkUpgradeActive(pindex->pprev->nHeight, Consensus::UPGRADE_NU6_3)) {
+    if (pindex->pprev &&
+        consensusParams.NetworkUpgradeActive(pindex->pprev->nHeight, Consensus::UPGRADE_NU6_3) &&
+        !pindex->pprev->hashFinalIronwoodRoot.IsNull())
+    {
         // Verify that the view's current state corresponds to the previous block.
         assert(pindex->pprev->hashFinalIronwoodRoot == view.GetBestAnchor(IRONWOOD));
         // We only call ConnectBlock on top of the active chain's tip.
-        assert(!pindex->pprev->hashFinalIronwoodRoot.IsNull());
-
         assert(view.GetIronwoodAnchorAt(pindex->pprev->hashFinalIronwoodRoot, ironwood_tree));
     } else {
         if (pindex->pprev) {
-            assert(pindex->pprev->hashFinalIronwoodRoot.IsNull());
+            assert(pindex->pprev->hashFinalIronwoodRoot.IsNull() ||
+                   !consensusParams.NetworkUpgradeActive(pindex->pprev->nHeight, Consensus::UPGRADE_NU6_3));
         }
         assert(view.GetIronwoodAnchorAt(IronwoodMerkleFrontier::empty_root(), ironwood_tree));
     }
