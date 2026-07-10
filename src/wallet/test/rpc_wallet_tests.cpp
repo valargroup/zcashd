@@ -641,13 +641,10 @@ BOOST_AUTO_TEST_CASE(rpc_wallet_z_importwallet)
     BOOST_CHECK_THROW(CallRPC("z_importwallet toomany args"), runtime_error);
 
     KeyIO keyIO(Params());
-    // create a random key locally
-    auto testSpendingKey = libzcash::SproutSpendingKey::random();
-    auto testPaymentAddress = testSpendingKey.address();
-    std::string testAddr = keyIO.EncodePaymentAddress(testPaymentAddress);
-    std::string testKey = keyIO.EncodeSpendingKey(testSpendingKey);
+    const std::string testKey = "SKxoWv77WGwFnUJitQKNEcD636bL4X5Gd6wWmgaA4Q9x8jZBPJXT";
+    const std::string testAddr = "zcWsmqT4X2V4jgxbgiCzyrAfRT1vi1F4sn7M5Pkh66izzw8Uk7LBGAH3DtcSMJeUb2pi3W4SQF8LMKkU2cUuVP68yAGcomL";
 
-    // create test data using the random key
+    // create test data using a known Sprout key
     std::string format_str = "# Wallet dump created by Zcash v0.11.2.0.z8-9155cc6-dirty (2016-08-11 11:37:00 -0700)\n"
             "# * Created on 2016-08-12T21:55:36Z\n"
             "# * Best block at time of backup was 0 (0de0a3851fef2d433b9b4f51d4342bdd24c5ddd793eb8fba57189f07e9235d52),\n"
