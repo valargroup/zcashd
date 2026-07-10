@@ -16,10 +16,5 @@ git = "https://github.com/zcash/librustzcash.git"
 rev = "67e6a774fd41a2ed55174bd9c413c023c5b67cc8"
 replace-with = "vendored-sources"
 
-[source."https://github.com/zcash/orchard.git"]
-git = "https://github.com/zcash/orchard.git"
-rev = "e06af24ad2b4a84d3c9dc2d8a4d895e3eca9e80d"
-replace-with = "vendored-sources"
-
 [source.vendored-sources]
 # The directory for this source is set to RUST_VENDORED_SOURCES by src/Makefile.am
