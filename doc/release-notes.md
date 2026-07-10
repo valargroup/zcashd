@@ -13,7 +13,7 @@ peer is configured, never opens a P2P listener, and rejects `-addnode`,
 `-seednode`, `-bind`, and `-whitebind`. The `addnode` RPC is not registered and
 returns `Method not found`.
 
-This makes the sidecar's P2P isolation a binary guarantee: zcashd can only dial
+This makes the sidecar's P2P isolation a binary guarantee. Zcashd can only dial
 the single Zakura peer supplied at startup, and no public peer can connect
 inbound to zcashd.
 
