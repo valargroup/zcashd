@@ -20,9 +20,6 @@ inbound to zcashd.
 After publishing this sidecar release, update Zakura's pinned compatibility
 manifest and installer checksums to this build.
 
-The legacy Python RPC regression tests are disabled for this build because
-their harness starts standalone multi-node topologies and uses `addnode`, both
-of which are intentionally unsupported by the sidecar hard-lock.
 
 NU6.3 (Ironwood) consensus support; no wallet support, ever
 -----------------------------------------------------------
