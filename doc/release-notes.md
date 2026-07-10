@@ -4,23 +4,6 @@ release-notes at release time)
 Notable changes
 ===============
 
-P2P sidecar hard-lock
----------------------
-
-This compatibility build is intended to run as a wallet/RPC sidecar behind
-Zakura. It now refuses to start unless exactly one `-connect=<zakura-address>`
-peer is configured, never opens a P2P listener, and rejects `-addnode`,
-`-seednode`, `-bind`, and `-whitebind`. The `addnode` RPC is not registered and
-returns `Method not found`.
-
-This makes the sidecar's P2P isolation a binary guarantee. Zcashd can only dial
-the single Zakura peer supplied at startup, and no public peer can connect
-inbound to zcashd.
-
-After publishing this sidecar release, update Zakura's pinned compatibility
-manifest and installer checksums to this build.
-
-
 NU6.3 (Ironwood) consensus support; no wallet support, ever
 -----------------------------------------------------------
 
@@ -66,4 +49,20 @@ would spend or receive Orchard funds, including unshielding. This means:
 Wallet operations that would involve Orchard or Ironwood at NU6.3 heights
 (`z_sendmany`, `z_shieldcoinbase`, `z_mergetoaddress`) fail at preparation
 time with a clear error explaining these alternatives.
+
+P2P sidecar hard-lock
+---------------------
+
+This compatibility build is intended to run as a wallet/RPC sidecar behind
+Zakura. It now refuses to start unless exactly one `-connect=<zakura-address>`
+peer is configured, never opens a P2P listener, and rejects `-addnode`,
+`-seednode`, `-bind`, and `-whitebind`. The `addnode` RPC is not registered and
+returns `Method not found`.
+
+This makes the sidecar's P2P isolation a binary guarantee. Zcashd can only dial
+the single Zakura peer supplied at startup, and no public peer can connect
+inbound to zcashd.
+
+After publishing this sidecar release, update Zakura's pinned compatibility
+manifest and installer checksums to this build.
 
