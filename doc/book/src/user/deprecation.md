@@ -3,8 +3,7 @@ Deprecated Features
 
 > **Note:** Upstream `zcashd` is [deprecated](end-of-life.md). This Valargroup
 > compatibility build uses block height 3470000, estimated for September 4th 2026, as its
-> End-of-Support marker. Its automatic halt is disabled because it runs as a P2P sidecar
-> behind Zebra.
+> End-of-Support marker.
 
 In order to support the continuous improvement of `zcashd`, features are
 periodically deprecated and removed when they have been superseded or are no
