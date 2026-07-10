@@ -754,7 +754,13 @@ if TARGET_WINDOWS
 # Windows script library static while still exercising --with-libs.
 libzcash_script_la_LDFLAGS += -static -Wl,--allow-multiple-definition
 endif
+if TARGET_WINDOWS
+# Avoid merging Rust's staticlib into the Windows script archive; libtool trips
+# over duplicate object names inside librustzcash.a when producing the .a.
+libzcash_script_la_LIBADD = $(LIBSECP256K1)
+else
 libzcash_script_la_LIBADD = $(LIBRUSTZCASH) $(LIBSECP256K1)
+endif
 libzcash_script_la_CPPFLAGS = $(AM_CPPFLAGS) -I$(builddir)/obj -I$(srcdir)/rust/include -I$(srcdir)/rust/gen/include -I$(srcdir)/secp256k1/include -DBUILD_BITCOIN_INTERNAL
 libzcash_script_la_CXXFLAGS = $(AM_CXXFLAGS) $(PIE_FLAGS)
 
