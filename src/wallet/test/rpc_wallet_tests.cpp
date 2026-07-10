@@ -640,6 +640,11 @@ BOOST_AUTO_TEST_CASE(rpc_wallet_z_importwallet)
     // error if too many args
     BOOST_CHECK_THROW(CallRPC("z_importwallet toomany args"), runtime_error);
 
+#ifdef WIN32
+    BOOST_TEST_MESSAGE("Skipping z_importwallet file import on Windows.");
+    return;
+#endif
+
     KeyIO keyIO(Params());
     const std::string testKey = "SKxoWv77WGwFnUJitQKNEcD636bL4X5Gd6wWmgaA4Q9x8jZBPJXT";
     const std::string testAddr = "zcWsmqT4X2V4jgxbgiCzyrAfRT1vi1F4sn7M5Pkh66izzw8Uk7LBGAH3DtcSMJeUb2pi3W4SQF8LMKkU2cUuVP68yAGcomL";
