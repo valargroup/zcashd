@@ -5,8 +5,7 @@ Zcash v1.0.0-compat
 > ## ⚠️ Upstream `zcashd` is reaching its End of Life
 >
 > This Valargroup compatibility build uses block height 3470000, estimated for September
-> 4th 2026, as its End-of-Support marker. Its automatic halt is disabled because it runs
-> as a P2P sidecar behind Zebra. Upstream `zcashd` remains deprecated; see the
+> 4th 2026, as its End-of-Support marker. Its automatic halt is disabled; see the
 > [End of Life](https://zcash.github.io/zcash/user/end-of-life.html) page for migration
 > guidance.
 
