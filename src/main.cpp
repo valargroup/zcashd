@@ -363,6 +363,10 @@ struct CNodeState {
     std::optional<GetHeadersRequest> pendingGetHeaders;
     //! The most recent inv-triggered getheaders request deferred while another request is pending.
     std::optional<uint256> deferredGetHeadersStop;
+    //! When we last received a headers message from this peer, in microseconds.
+    int64_t nLastHeadersActivity;
+    //! Whether the first IBD headers poll has been logged for this connection.
+    bool fLoggedIbdPoll;
     //! Since when we're stalling block download progress (in microseconds), or 0.
     int64_t nStallingSince;
     list<QueuedBlock> vBlocksInFlight;
@@ -379,6 +383,8 @@ struct CNodeState {
         hashLastUnknownBlock.SetNull();
         pindexLastCommonBlock = NULL;
         fSyncStarted = false;
+        nLastHeadersActivity = GetTimeMicros();
+        fLoggedIbdPoll = false;
         nStallingSince = 0;
         nBlocksInFlight = 0;
         nBlocksInFlightValidHeaders = 0;
@@ -9039,6 +9045,7 @@ bool static ProcessMessage(const CChainParams& chainparams, CNode* pfrom, string
         LOCK(cs_main);
         CNodeState *nodestate = State(pfrom->GetId());
         assert(nodestate != NULL);
+        nodestate->nLastHeadersActivity = GetTimeMicros();
 
         if (nCount == 0) {
             // Nothing interesting. Stop asking this peer for more headers.
@@ -9790,6 +9797,24 @@ bool SendMessages(const Consensus::Params& params, CNode* pto)
                           pto->id, MAX_HEADERS_SYNC_RETRIES);
                 pto->fDisconnect = true;
             }
+        }
+        if (!pto->fDisconnect &&
+            state.fSyncStarted &&
+            !state.pendingGetHeaders &&
+            IsInitialBlockDownload(params) &&
+            pindexBestHeader != NULL &&
+            state.nLastHeadersActivity < nNow - 1000000 * (int64_t)HEADERS_IBD_POLL_INTERVAL) {
+            const CBlockIndex *pindexStart = pindexBestHeader;
+            if (pindexStart->pprev)
+                pindexStart = pindexStart->pprev;
+            if (!state.fLoggedIbdPoll) {
+                LogPrintf("Peer=%d reached its tip during IBD and is not announcing; polling getheaders every %ds\n",
+                          pto->id, HEADERS_IBD_POLL_INTERVAL);
+                state.fLoggedIbdPoll = true;
+            } else {
+                LogPrint("net", "polling getheaders during IBD from peer=%d\n", pto->id);
+            }
+            PushTrackedGetHeaders(pto, state, chainActive.GetLocator(pindexStart), uint256());
         }
         if (!pto->fDisconnect && state.nStallingSince && state.nStallingSince < nNow - 1000000 * BLOCK_STALLING_TIMEOUT) {
             // Stalling only triggers when the block download window cannot move. During normal steady state,

@@ -44,6 +44,19 @@ struct MockTimeGuard {
     {
         FixedClock::Instance()->Set(std::chrono::seconds(GetTime() + HEADERS_RESPONSE_TIMEOUT + 1));
     }
+
+    void AdvanceSeconds(int64_t seconds)
+    {
+        FixedClock::Instance()->Set(std::chrono::seconds(GetTime() + seconds));
+    }
+};
+
+struct InitialBlockDownloadGuard {
+    InitialBlockDownloadGuard() : previous(TestSetIBD(true)) {}
+    ~InitialBlockDownloadGuard() { TestSetIBD(previous); }
+
+private:
+    bool previous;
 };
 
 struct GetHeadersPayload {
@@ -223,6 +236,106 @@ BOOST_AUTO_TEST_CASE(inv_request_is_tracked_and_replayed)
     messages = GetHeadersMessages(*peer);
     BOOST_REQUIRE_EQUAL(messages.size(), 3);
     CheckSameGetHeaders(messages[1], messages[2]);
+}
+
+BOOST_AUTO_TEST_CASE(ibd_poll_fires_after_headers_inactivity)
+{
+    MockTimeGuard time;
+    InitialBlockDownloadGuard ibd;
+    auto peer = MakePeer();
+    StartInitialGetHeaders(*peer);
+    ReceiveHeaders(*peer, {});
+    BOOST_REQUIRE(ProcessMessages(Params(), peer.get()));
+
+    time.AdvanceSeconds(HEADERS_IBD_POLL_INTERVAL + 1);
+    BOOST_REQUIRE(SendMessages(Params().GetConsensus(), peer.get()));
+
+    std::vector<GetHeadersPayload> messages = GetHeadersMessages(*peer);
+    BOOST_REQUIRE_EQUAL(messages.size(), 2);
+    BOOST_CHECK(messages.back().hashStop.IsNull());
+}
+
+BOOST_AUTO_TEST_CASE(ibd_poll_does_not_overlap_pending_request)
+{
+    MockTimeGuard time;
+    InitialBlockDownloadGuard ibd;
+    auto peer = MakePeer();
+    StartInitialGetHeaders(*peer);
+    const GetHeadersPayload initial = GetHeadersMessages(*peer).front();
+
+    time.AdvanceSeconds(HEADERS_IBD_POLL_INTERVAL + 1);
+    BOOST_REQUIRE(SendMessages(Params().GetConsensus(), peer.get()));
+
+    std::vector<GetHeadersPayload> messages = GetHeadersMessages(*peer);
+    BOOST_REQUIRE_EQUAL(messages.size(), 2);
+    CheckSameGetHeaders(initial, messages.back());
+}
+
+BOOST_AUTO_TEST_CASE(headers_activity_refreshes_ibd_poll_timer)
+{
+    MockTimeGuard time;
+    InitialBlockDownloadGuard ibd;
+    auto peer = MakePeer();
+    StartInitialGetHeaders(*peer);
+    ReceiveHeaders(*peer, {});
+    BOOST_REQUIRE(ProcessMessages(Params(), peer.get()));
+
+    time.AdvanceSeconds(HEADERS_IBD_POLL_INTERVAL - 1);
+    BOOST_REQUIRE(SendMessages(Params().GetConsensus(), peer.get()));
+    BOOST_CHECK_EQUAL(GetHeadersMessages(*peer).size(), 1);
+
+    time.AdvanceSeconds(2);
+    BOOST_REQUIRE(SendMessages(Params().GetConsensus(), peer.get()));
+    BOOST_CHECK_EQUAL(GetHeadersMessages(*peer).size(), 2);
+}
+
+BOOST_AUTO_TEST_CASE(answered_ibd_poll_rearms_timer)
+{
+    MockTimeGuard time;
+    InitialBlockDownloadGuard ibd;
+    auto peer = MakePeer();
+    StartInitialGetHeaders(*peer);
+    ReceiveHeaders(*peer, {});
+    BOOST_REQUIRE(ProcessMessages(Params(), peer.get()));
+
+    time.AdvanceSeconds(HEADERS_IBD_POLL_INTERVAL + 1);
+    BOOST_REQUIRE(SendMessages(Params().GetConsensus(), peer.get()));
+    BOOST_REQUIRE_EQUAL(GetHeadersMessages(*peer).size(), 2);
+
+    ReceiveHeaders(*peer, {});
+    BOOST_REQUIRE(ProcessMessages(Params(), peer.get()));
+    time.AdvanceSeconds(HEADERS_IBD_POLL_INTERVAL - 1);
+    BOOST_REQUIRE(SendMessages(Params().GetConsensus(), peer.get()));
+    BOOST_CHECK_EQUAL(GetHeadersMessages(*peer).size(), 2);
+
+    time.AdvanceSeconds(2);
+    BOOST_REQUIRE(SendMessages(Params().GetConsensus(), peer.get()));
+    BOOST_CHECK_EQUAL(GetHeadersMessages(*peer).size(), 3);
+}
+
+BOOST_AUTO_TEST_CASE(unanswered_ibd_poll_retries_and_disconnects)
+{
+    MockTimeGuard time;
+    InitialBlockDownloadGuard ibd;
+    auto peer = MakePeer();
+    StartInitialGetHeaders(*peer);
+    ReceiveHeaders(*peer, {});
+    BOOST_REQUIRE(ProcessMessages(Params(), peer.get()));
+
+    time.AdvanceSeconds(HEADERS_IBD_POLL_INTERVAL + 1);
+    BOOST_REQUIRE(SendMessages(Params().GetConsensus(), peer.get()));
+    const GetHeadersPayload poll = GetHeadersMessages(*peer).back();
+
+    for (int retry = 1; retry <= MAX_HEADERS_SYNC_RETRIES; retry++) {
+        time.AdvanceHeadersTimeout();
+        BOOST_REQUIRE(SendMessages(Params().GetConsensus(), peer.get()));
+        BOOST_CHECK(!peer->fDisconnect);
+        CheckSameGetHeaders(poll, GetHeadersMessages(*peer).back());
+    }
+
+    time.AdvanceHeadersTimeout();
+    BOOST_REQUIRE(SendMessages(Params().GetConsensus(), peer.get()));
+    BOOST_CHECK(peer->fDisconnect);
 }
 
 #ifdef ENABLE_MINING

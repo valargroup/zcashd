@@ -124,6 +124,13 @@ static const unsigned int BLOCK_STALLING_TIMEOUT = 2;
  * So this only fires against a peer that goes silent without disconnecting, which is exactly
  * the case nothing else here detects. */
 static const unsigned int HEADERS_RESPONSE_TIMEOUT = 30;
+/** While in initial block download, re-request headers from the sync peer if none have
+ * arrived for this many seconds.
+ *
+ * This is deliberately longer than HEADERS_RESPONSE_TIMEOUT so an outstanding request
+ * follows its timeout/retry path instead of overlapping a poll. Since this sidecar uses
+ * a loopback peer, one cheap request per minute bounds idle time without meaningful load. */
+static const unsigned int HEADERS_IBD_POLL_INTERVAL = 60;
 /** Number of times to re-send an unanswered getheaders before disconnecting the peer.
  *
  * Disconnecting is a working last resort: ThreadOpenConnections re-dials the -connect peer,
