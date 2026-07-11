@@ -405,7 +405,11 @@ static int64_t GetHeadersTimeoutAt()
 static void PushTrackedGetHeaders(CNode* pto, CNodeState& state, const CBlockLocator& locator, const uint256& hashStop)
     EXCLUSIVE_LOCKS_REQUIRED(cs_main)
 {
-    assert(!state.pendingGetHeaders);
+    if (state.pendingGetHeaders) {
+        LogPrintf("Peer=%d already has a pending getheaders; not sending another\n", pto->id);
+        return;
+    }
+
     pto->PushMessage("getheaders", locator, hashStop);
     state.pendingGetHeaders = CNodeState::GetHeadersRequest{
         locator,
@@ -9087,12 +9091,15 @@ bool static ProcessMessage(const CChainParams& chainparams, CNode* pfrom, string
             LogPrint("net", "NO more getheaders (%d) to send to peer=%d (startheight:%d)\n", pindexLast->nHeight, pfrom->id, pfrom->nStartingHeight);
         }
 
-        if (fMatchedPendingGetHeaders && nCount == MAX_HEADERS_RESULTS && pindexLast && hasNewHeaders && !fReachedRequestedStop) {
+        const bool fFullNewHeaders = nCount == MAX_HEADERS_RESULTS && pindexLast && hasNewHeaders && !fReachedRequestedStop;
+        if (fFullNewHeaders && (fMatchedPendingGetHeaders || !nodestate->pendingGetHeaders)) {
             // Headers message had its maximum size; the peer may have more headers.
             // TODO: optimize: if pindexLast is an ancestor of chainActive.Tip or pindexBestHeader, continue
             // from there instead.
             LogPrint("net", "more getheaders (%d) to send to peer=%d (startheight:%d)\n", pindexLast->nHeight, pfrom->id, pfrom->nStartingHeight);
-            nodestate->pendingGetHeaders.reset();
+            if (fMatchedPendingGetHeaders) {
+                nodestate->pendingGetHeaders.reset();
+            }
             PushTrackedGetHeaders(pfrom, *nodestate, chainActive.GetLocator(pindexLast), uint256());
         } else if (fMatchedPendingGetHeaders) {
             nodestate->pendingGetHeaders.reset();

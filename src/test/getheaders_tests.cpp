@@ -268,6 +268,8 @@ BOOST_FIXTURE_TEST_CASE(continuation_request_is_tracked_and_replayed, TestChain1
     std::vector<CMutableTransaction> noTxns;
     std::vector<CBlockHeader> headers;
     headers.reserve(MAX_HEADERS_RESULTS);
+    // TestChain100Setup leaves regtest out of IBD, so these self-mined headers still exercise
+    // the full-batch continuation path even though they are already in mapBlockIndex.
     for (unsigned int i = 0; i < MAX_HEADERS_RESULTS; i++) {
         headers.push_back(CreateAndProcessBlock(noTxns, scriptPubKey).GetBlockHeader());
     }
@@ -287,6 +289,31 @@ BOOST_FIXTURE_TEST_CASE(continuation_request_is_tracked_and_replayed, TestChain1
     messages = GetHeadersMessages(*peer);
     BOOST_REQUIRE_EQUAL(messages.size(), 4);
     CheckSameGetHeaders(continuation, messages.back());
+}
+
+BOOST_FIXTURE_TEST_CASE(full_new_headers_without_pending_still_continues, TestChain100Setup)
+{
+    auto peer = MakePeer();
+    StartInitialGetHeaders(*peer);
+    ReceiveHeaders(*peer, {});
+    BOOST_REQUIRE(ProcessMessages(Params(), peer.get()));
+
+    CScript scriptPubKey = CScript() << ToByteVector(coinbaseKey.GetPubKey()) << OP_CHECKSIG;
+    std::vector<CMutableTransaction> noTxns;
+    std::vector<CBlockHeader> headers;
+    headers.reserve(MAX_HEADERS_RESULTS);
+    for (unsigned int i = 0; i < MAX_HEADERS_RESULTS; i++) {
+        headers.push_back(CreateAndProcessBlock(noTxns, scriptPubKey).GetBlockHeader());
+    }
+
+    ReceiveHeaders(*peer, headers);
+    BOOST_REQUIRE(ProcessMessages(Params(), peer.get()));
+
+    std::vector<GetHeadersPayload> messages = GetHeadersMessages(*peer);
+    BOOST_REQUIRE_EQUAL(messages.size(), 2);
+    BOOST_CHECK(messages.back().hashStop.IsNull());
+    BOOST_REQUIRE(!messages.back().locator.IsNull());
+    BOOST_CHECK_EQUAL(messages.back().locator.vHave.front().ToString(), headers.back().GetHash().ToString());
 }
 #endif
 

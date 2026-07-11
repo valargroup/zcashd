@@ -118,11 +118,11 @@ static const unsigned int BLOCK_STALLING_TIMEOUT = 2;
  * Zakura peer via -connect, so there is no other peer to pick up the slack: one unanswered
  * getheaders stalls the chain forever, with the connection still alive and ping/pong flowing.
  *
- * This must comfortably exceed the peer's own inbound request timeout so a slow-but-live
- * response is not duplicated needlessly. Zakura's is 5 seconds, and a Zakura that sheds our
- * request retries it for at most 20 seconds before closing the connection -- which we notice
- * directly, without waiting for this timeout. So this only fires against a peer that goes
- * silent without disconnecting, which is exactly the case nothing else here detects. */
+ * This must comfortably exceed the peer's own inbound service timeout so a slow-but-live
+ * response is not duplicated needlessly. Zakura's inbound service timeout is 5 seconds, and
+ * a peer that closes the connection is noticed directly, without waiting for this timeout.
+ * So this only fires against a peer that goes silent without disconnecting, which is exactly
+ * the case nothing else here detects. */
 static const unsigned int HEADERS_RESPONSE_TIMEOUT = 30;
 /** Number of times to re-send an unanswered getheaders before disconnecting the peer.
  *
