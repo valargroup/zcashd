@@ -332,6 +332,13 @@ struct CBlockReject {
  * and we're no longer holding the node's locks.
  */
 struct CNodeState {
+    struct GetHeadersRequest {
+        CBlockLocator locator;
+        uint256 hashStop;
+        int64_t nTimeout;
+        int nRetries;
+    };
+
     //! The peer's address
     CService address;
     //! Whether we have a fully established connection.
@@ -352,6 +359,10 @@ struct CNodeState {
     CBlockIndex *pindexLastCommonBlock;
     //! Whether we've started headers synchronization with this peer.
     bool fSyncStarted;
+    //! The getheaders request we are currently waiting on, if any.
+    std::optional<GetHeadersRequest> pendingGetHeaders;
+    //! The most recent inv-triggered getheaders request deferred while another request is pending.
+    std::optional<uint256> deferredGetHeadersStop;
     //! Since when we're stalling block download progress (in microseconds), or 0.
     int64_t nStallingSince;
     list<QueuedBlock> vBlocksInFlight;
@@ -384,6 +395,77 @@ CNodeState *State(NodeId pnode) {
     if (it == mapNodeState.end())
         return NULL;
     return &it->second;
+}
+
+static int64_t GetHeadersTimeoutAt()
+{
+    return GetTimeMicros() + 1000000 * (int64_t)HEADERS_RESPONSE_TIMEOUT;
+}
+
+static void PushTrackedGetHeaders(CNode* pto, CNodeState& state, const CBlockLocator& locator, const uint256& hashStop)
+    EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+{
+    assert(!state.pendingGetHeaders);
+    pto->PushMessage("getheaders", locator, hashStop);
+    state.pendingGetHeaders = CNodeState::GetHeadersRequest{
+        locator,
+        hashStop,
+        GetHeadersTimeoutAt(),
+        0,
+    };
+}
+
+static void QueueOrPushInvGetHeaders(CNode* pto, CNodeState& state, const CBlockLocator& locator, const uint256& hashStop)
+    EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+{
+    if (state.pendingGetHeaders) {
+        state.deferredGetHeadersStop = hashStop;
+        LogPrint("net", "deferring getheaders %s for peer=%d while another getheaders is pending\n",
+                 hashStop.ToString(), pto->id);
+        return;
+    }
+    PushTrackedGetHeaders(pto, state, locator, hashStop);
+}
+
+static void MaybePushDeferredGetHeaders(CNode* pto, CNodeState& state)
+    EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+{
+    if (!state.deferredGetHeadersStop || state.pendingGetHeaders) {
+        return;
+    }
+
+    uint256 hashStop = *state.deferredGetHeadersStop;
+    state.deferredGetHeadersStop.reset();
+    if (mapBlockIndex.count(hashStop)) {
+        return;
+    }
+
+    if (pindexBestHeader == NULL) {
+        pindexBestHeader = chainActive.Tip();
+    }
+    LogPrint("net", "deferred getheaders (%d) %s to peer=%d\n", pindexBestHeader->nHeight, hashStop.ToString(), pto->id);
+    PushTrackedGetHeaders(pto, state, chainActive.GetLocator(pindexBestHeader), hashStop);
+}
+
+static bool HeadersMatchPendingGetHeaders(const CNodeState& state, const std::vector<CBlockHeader>& headers)
+    EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+{
+    if (!state.pendingGetHeaders || headers.empty()) {
+        return false;
+    }
+
+    const uint256& hashPrevBlock = headers.front().hashPrevBlock;
+    const std::vector<uint256>& locator = state.pendingGetHeaders->locator.vHave;
+    return std::find(locator.begin(), locator.end(), hashPrevBlock) != locator.end();
+}
+
+static bool HeadersReachedStop(const CNodeState& state, const CBlockIndex* pindexLast)
+    EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+{
+    return state.pendingGetHeaders &&
+           pindexLast &&
+           !state.pendingGetHeaders->hashStop.IsNull() &&
+           pindexLast->GetBlockHash() == state.pendingGetHeaders->hashStop;
 }
 
 int GetHeight()
@@ -8692,8 +8774,10 @@ bool static ProcessMessage(const CChainParams& chainparams, CNode* pfrom, string
         }
 
         if (best_block != nullptr) {
-            pfrom->PushMessage("getheaders", chainActive.GetLocator(pindexBestHeader), *best_block);
             LogPrint("net", "getheaders (%d) %s to peer=%d\n", pindexBestHeader->nHeight, best_block->ToString(), pfrom->id);
+            CNodeState *state = State(pfrom->GetId());
+            assert(state != NULL);
+            QueueOrPushInvGetHeaders(pfrom, *state, chainActive.GetLocator(pindexBestHeader), *best_block);
         }
     }
 
@@ -8949,9 +9033,15 @@ bool static ProcessMessage(const CChainParams& chainparams, CNode* pfrom, string
 
         {
         LOCK(cs_main);
+        CNodeState *nodestate = State(pfrom->GetId());
+        assert(nodestate != NULL);
 
         if (nCount == 0) {
             // Nothing interesting. Stop asking this peer for more headers.
+            if (nodestate->pendingGetHeaders) {
+                nodestate->pendingGetHeaders.reset();
+                MaybePushDeferredGetHeaders(pfrom, *nodestate);
+            }
             return true;
         }
 
@@ -8968,6 +9058,7 @@ bool static ProcessMessage(const CChainParams& chainparams, CNode* pfrom, string
         }
 
         CBlockIndex *pindexLast = NULL;
+        bool fAcceptedAllHeaders = true;
         for (const CBlockHeader& header : headers) {
             CValidationState state;
             if (pindexLast != NULL && header.hashPrevBlock != pindexLast->GetBlockHash()) {
@@ -8981,23 +9072,31 @@ bool static ProcessMessage(const CChainParams& chainparams, CNode* pfrom, string
                         Misbehaving(pfrom->GetId(), nDoS);
                     return error("invalid header received");
                 }
+                fAcceptedAllHeaders = false;
             }
         }
 
         if (pindexLast)
             UpdateBlockAvailability(pfrom->GetId(), pindexLast->GetBlockHash());
 
+        const bool fMatchedPendingGetHeaders = fAcceptedAllHeaders && pindexLast && HeadersMatchPendingGetHeaders(*nodestate, headers);
+        const bool fReachedRequestedStop = HeadersReachedStop(*nodestate, pindexLast);
+
         // Temporary, until we're sure the optimization works
         if (nCount == MAX_HEADERS_RESULTS && pindexLast && !hasNewHeaders) {
             LogPrint("net", "NO more getheaders (%d) to send to peer=%d (startheight:%d)\n", pindexLast->nHeight, pfrom->id, pfrom->nStartingHeight);
         }
 
-        if (nCount == MAX_HEADERS_RESULTS && pindexLast && hasNewHeaders) {
+        if (fMatchedPendingGetHeaders && nCount == MAX_HEADERS_RESULTS && pindexLast && hasNewHeaders && !fReachedRequestedStop) {
             // Headers message had its maximum size; the peer may have more headers.
             // TODO: optimize: if pindexLast is an ancestor of chainActive.Tip or pindexBestHeader, continue
             // from there instead.
             LogPrint("net", "more getheaders (%d) to send to peer=%d (startheight:%d)\n", pindexLast->nHeight, pfrom->id, pfrom->nStartingHeight);
-            pfrom->PushMessage("getheaders", chainActive.GetLocator(pindexLast), uint256());
+            nodestate->pendingGetHeaders.reset();
+            PushTrackedGetHeaders(pfrom, *nodestate, chainActive.GetLocator(pindexLast), uint256());
+        } else if (fMatchedPendingGetHeaders) {
+            nodestate->pendingGetHeaders.reset();
+            MaybePushDeferredGetHeaders(pfrom, *nodestate);
         }
 
         CheckBlockIndex(chainparams.GetConsensus());
@@ -9520,7 +9619,9 @@ bool SendMessages(const Consensus::Params& params, CNode* pto)
                 if (pindexStart->pprev)
                     pindexStart = pindexStart->pprev;
                 LogPrint("net", "initial getheaders (%d) to peer=%d (startheight:%d)\n", pindexStart->nHeight, pto->id, pto->nStartingHeight);
-                pto->PushMessage("getheaders", chainActive.GetLocator(pindexStart), uint256());
+                if (!state.pendingGetHeaders) {
+                    PushTrackedGetHeaders(pto, state, chainActive.GetLocator(pindexStart), uint256());
+                }
             }
         }
 
@@ -9670,6 +9771,19 @@ bool SendMessages(const Consensus::Params& params, CNode* pto)
 
         // Detect whether we're stalling
         nNow = GetTimeMicros();
+        if (!pto->fDisconnect && state.pendingGetHeaders && state.pendingGetHeaders->nTimeout < nNow) {
+            if (state.pendingGetHeaders->nRetries < MAX_HEADERS_SYNC_RETRIES) {
+                state.pendingGetHeaders->nRetries++;
+                LogPrintf("Peer=%d did not answer getheaders in %ds, re-sending (retry %d of %d)\n",
+                          pto->id, HEADERS_RESPONSE_TIMEOUT, state.pendingGetHeaders->nRetries, MAX_HEADERS_SYNC_RETRIES);
+                pto->PushMessage("getheaders", state.pendingGetHeaders->locator, state.pendingGetHeaders->hashStop);
+                state.pendingGetHeaders->nTimeout = nNow + 1000000 * (int64_t)HEADERS_RESPONSE_TIMEOUT;
+            } else {
+                LogPrintf("Peer=%d did not answer getheaders after %d retries, disconnecting to restart headers sync\n",
+                          pto->id, MAX_HEADERS_SYNC_RETRIES);
+                pto->fDisconnect = true;
+            }
+        }
         if (!pto->fDisconnect && state.nStallingSince && state.nStallingSince < nNow - 1000000 * BLOCK_STALLING_TIMEOUT) {
             // Stalling only triggers when the block download window cannot move. During normal steady state,
             // the download window should be much larger than the to-be-downloaded set of blocks, so disconnection
