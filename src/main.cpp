@@ -352,6 +352,11 @@ struct CNodeState {
     CBlockIndex *pindexLastCommonBlock;
     //! Whether we've started headers synchronization with this peer.
     bool fSyncStarted;
+    //! When the getheaders we are currently waiting on expires (in microseconds), or 0
+    //! if we are not waiting on one. See HEADERS_RESPONSE_TIMEOUT.
+    int64_t nHeadersSyncTimeout;
+    //! How many times we have re-sent an unanswered getheaders to this peer.
+    int nHeadersSyncRetries;
     //! Since when we're stalling block download progress (in microseconds), or 0.
     int64_t nStallingSince;
     list<QueuedBlock> vBlocksInFlight;
@@ -368,6 +373,8 @@ struct CNodeState {
         hashLastUnknownBlock.SetNull();
         pindexLastCommonBlock = NULL;
         fSyncStarted = false;
+        nHeadersSyncTimeout = 0;
+        nHeadersSyncRetries = 0;
         nStallingSince = 0;
         nBlocksInFlight = 0;
         nBlocksInFlightValidHeaders = 0;
@@ -8950,6 +8957,16 @@ bool static ProcessMessage(const CChainParams& chainparams, CNode* pfrom, string
         {
         LOCK(cs_main);
 
+        // The peer answered the getheaders we were waiting on, so stop timing it out.
+        // If we ask for more headers below, the timeout is re-armed there. Doing this
+        // before the nCount == 0 return also disarms the timeout once we reach the
+        // peer's tip, so a synced node does not re-send getheaders forever.
+        CNodeState *nodestate = State(pfrom->GetId());
+        if (nodestate) {
+            nodestate->nHeadersSyncTimeout = 0;
+            nodestate->nHeadersSyncRetries = 0;
+        }
+
         if (nCount == 0) {
             // Nothing interesting. Stop asking this peer for more headers.
             return true;
@@ -8998,6 +9015,9 @@ bool static ProcessMessage(const CChainParams& chainparams, CNode* pfrom, string
             // from there instead.
             LogPrint("net", "more getheaders (%d) to send to peer=%d (startheight:%d)\n", pindexLast->nHeight, pfrom->id, pfrom->nStartingHeight);
             pfrom->PushMessage("getheaders", chainActive.GetLocator(pindexLast), uint256());
+            if (nodestate) {
+                nodestate->nHeadersSyncTimeout = GetTimeMicros() + 1000000 * (int64_t)HEADERS_RESPONSE_TIMEOUT;
+            }
         }
 
         CheckBlockIndex(chainparams.GetConsensus());
@@ -9521,6 +9541,8 @@ bool SendMessages(const Consensus::Params& params, CNode* pto)
                     pindexStart = pindexStart->pprev;
                 LogPrint("net", "initial getheaders (%d) to peer=%d (startheight:%d)\n", pindexStart->nHeight, pto->id, pto->nStartingHeight);
                 pto->PushMessage("getheaders", chainActive.GetLocator(pindexStart), uint256());
+                state.nHeadersSyncTimeout = GetTimeMicros() + 1000000 * (int64_t)HEADERS_RESPONSE_TIMEOUT;
+                state.nHeadersSyncRetries = 0;
             }
         }
 
@@ -9670,6 +9692,38 @@ bool SendMessages(const Consensus::Params& params, CNode* pto)
 
         // Detect whether we're stalling
         nNow = GetTimeMicros();
+
+        // Detect an unanswered getheaders.
+        //
+        // Headers sync is a strict request/response chain, and upstream zcashd never times it
+        // out: it assumes many peers, so a silent one is simply outrun. This sidecar build is
+        // pinned to a single Zakura peer, which can legitimately drop an inbound request when
+        // its own inbound queue is saturated. With no other peer to fall back on, an unanswered
+        // getheaders wedges the chain permanently while the connection stays alive and ping/pong
+        // keeps flowing, so nothing else here detects it: the block-stalling checks below are
+        // unreachable without headers, and the socket inactivity check in net.cpp never fires.
+        //
+        // Re-send the request rather than disconnecting immediately: getheaders is idempotent and
+        // cheap, and the peer is likely to have recovered capacity by now. Disconnect only if it
+        // stays silent, which resets our state and starts a fresh sync when -connect re-dials.
+        if (!pto->fDisconnect && state.fSyncStarted && state.nHeadersSyncTimeout > 0 && state.nHeadersSyncTimeout < nNow) {
+            if (state.nHeadersSyncRetries < MAX_HEADERS_SYNC_RETRIES) {
+                state.nHeadersSyncRetries++;
+                const CBlockIndex *pindexStart = pindexBestHeader;
+                if (pindexStart && pindexStart->pprev)
+                    pindexStart = pindexStart->pprev;
+
+                LogPrintf("Peer=%d did not answer getheaders in %ds, re-sending (retry %d of %d)\n",
+                          pto->id, HEADERS_RESPONSE_TIMEOUT, state.nHeadersSyncRetries, MAX_HEADERS_SYNC_RETRIES);
+                pto->PushMessage("getheaders", chainActive.GetLocator(pindexStart), uint256());
+                state.nHeadersSyncTimeout = nNow + 1000000 * (int64_t)HEADERS_RESPONSE_TIMEOUT;
+            } else {
+                LogPrintf("Peer=%d did not answer getheaders after %d retries, disconnecting to restart headers sync\n",
+                          pto->id, MAX_HEADERS_SYNC_RETRIES);
+                pto->fDisconnect = true;
+            }
+        }
+
         if (!pto->fDisconnect && state.nStallingSince && state.nStallingSince < nNow - 1000000 * BLOCK_STALLING_TIMEOUT) {
             // Stalling only triggers when the block download window cannot move. During normal steady state,
             // the download window should be much larger than the to-be-downloaded set of blocks, so disconnection
