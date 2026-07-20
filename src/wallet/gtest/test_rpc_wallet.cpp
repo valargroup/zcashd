@@ -217,6 +217,35 @@ TEST(WalletRPCTests, PrepareTransactionAvoidsOrchardAfterNU6point3)
         EXPECT_TRUE(transparentEffects->GetPayments().HasSaplingRecipient());
         EXPECT_FALSE(transparentEffects->GetPayments().HasOrchardRecipient());
 
+        auto orchardOnlyInputs =
+            MixedSaplingAndOrchardInputs(sourceSaplingAddress, 2 * COIN);
+        orchardOnlyInputs.saplingNoteEntries.clear();
+        auto orchardOnlyResult = builder.PrepareTransaction(
+                *pwalletMain,
+                selector,
+                orchardOnlyInputs,
+                transparentPayments,
+                chainActive,
+                TransactionStrategy(PrivacyPolicy::AllowRevealedRecipients),
+                MINIMUM_FEE,
+                1);
+        ASSERT_FALSE(orchardOnlyResult.has_value());
+        EXPECT_TRUE(std::holds_alternative<IronwoodUnsupportedError>(
+                orchardOnlyResult.error()));
+
+        auto genuinelyInsufficientResult = builder.PrepareTransaction(
+                *pwalletMain,
+                selector,
+                MixedSaplingAndOrchardInputs(sourceSaplingAddress, COIN / 10),
+                transparentPayments,
+                chainActive,
+                TransactionStrategy(PrivacyPolicy::AllowRevealedRecipients),
+                MINIMUM_FEE,
+                1);
+        ASSERT_FALSE(genuinelyInsufficientResult.has_value());
+        EXPECT_TRUE(std::holds_alternative<InvalidFundsError>(
+                genuinelyInsufficientResult.error()));
+
         auto destinationSaplingKey = pwalletMain->GenerateNewLegacySaplingZKey();
         auto orchardSeed = MnemonicSeed::Random(0);
         auto destinationOrchardKey = OrchardSpendingKey::ForAccount(orchardSeed, 0, 0);

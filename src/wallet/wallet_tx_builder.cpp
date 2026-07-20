@@ -473,6 +473,28 @@ WalletTxBuilder::PrepareTransaction(
             },
         });
     if (!selected.has_value()) {
+        // If supported pools cannot fund the transaction but adding the excluded
+        // Orchard balance would have made the amount sufficient, report the
+        // intentional NU6.3 wallet restriction rather than "insufficient funds".
+        // This keeps Orchard-only and Orchard-dependent accounts fail-closed
+        // without hiding the actual reason their visible balance cannot be spent.
+        if (!allowOrchard && spendable.GetOrchardTotal() > 0) {
+            const auto* invalidFunds = std::get_if<InvalidFundsError>(&selected.error());
+            if (invalidFunds != nullptr) {
+                const auto* insufficient =
+                    std::get_if<InsufficientFundsError>(&invalidFunds->reason);
+                if (insufficient != nullptr) {
+                    auto total = spendable.Total();
+                    auto required = insufficient->required;
+                    if (total == required
+                        || (total > required
+                            && total - required > DefaultDustThreshold()))
+                    {
+                        return tl::make_unexpected(IronwoodUnsupportedError());
+                    }
+                }
+            }
+        }
         return tl::make_unexpected(selected.error());
     }
     const auto& resolvedSelection = selected.value();
