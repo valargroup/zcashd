@@ -523,7 +523,7 @@ WalletTxBuilder::PrepareTransaction(
         }
     }
 
-    auto ovks = SelectOVKs(wallet, selector, resolvedSelection.GetInputs());
+    auto ovks = SelectOVKs(wallet, selector, spendable);
 
     return TransactionEffects(
             anchorConfirmations,
