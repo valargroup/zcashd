@@ -19,6 +19,8 @@
 #include <rust/bridge.h>
 #include <rust/ed25519.h>
 
+#include <stdexcept>
+
 namespace
 {
 bool find_error(const UniValue& objError, const std::string& expected) {
@@ -57,6 +59,59 @@ SpendableInputs MixedSaplingAndOrchardInputs(
 
     return inputs;
 }
+
+class ScopedFakeChainTip
+{
+private:
+    uint256 blockHash;
+    CBlockIndex fakeIndex;
+    CBlockIndex* previousTip;
+
+public:
+    explicit ScopedFakeChainTip(const CBlock& block)
+        : blockHash(block.GetHash()),
+          fakeIndex(block),
+          previousTip(chainActive.Tip())
+    {
+        if (!mapBlockIndex.insert(std::make_pair(blockHash, &fakeIndex)).second) {
+            throw std::runtime_error("Fake block is already present in mapBlockIndex");
+        }
+        chainActive.SetTip(&fakeIndex);
+    }
+
+    ~ScopedFakeChainTip()
+    {
+        chainActive.SetTip(previousTip);
+        mapBlockIndex.erase(blockHash);
+    }
+
+    CBlockIndex* Get()
+    {
+        return &fakeIndex;
+    }
+
+    ScopedFakeChainTip(const ScopedFakeChainTip&) = delete;
+    ScopedFakeChainTip& operator=(const ScopedFakeChainTip&) = delete;
+};
+
+class ScopedNU6point3Wallet
+{
+public:
+    ScopedNU6point3Wallet()
+    {
+        RegtestActivateNU6point3();
+        LoadGlobalWallet();
+    }
+
+    ~ScopedNU6point3Wallet()
+    {
+        RegtestDeactivateNU6point3();
+        UnloadGlobalWallet();
+    }
+
+    ScopedNU6point3Wallet(const ScopedNU6point3Wallet&) = delete;
+    ScopedNU6point3Wallet& operator=(const ScopedNU6point3Wallet&) = delete;
+};
 
 /// Expects that the fee calculated during transaction construction matches the fee used by block
 /// construction. It allows the fee included in the transaction to be `MARGINAL_FEE` higher than the
@@ -180,8 +235,7 @@ TEST(WalletRPCTests, PrepareTransaction)
 
 TEST(WalletRPCTests, PrepareTransactionAvoidsOrchardAfterNU6point3)
 {
-    RegtestActivateNU6point3();
-    LoadGlobalWallet();
+    ScopedNU6point3Wallet wallet;
 
     {
         LOCK2(cs_main, pwalletMain->cs_wallet);
@@ -193,11 +247,8 @@ TEST(WalletRPCTests, PrepareTransactionAvoidsOrchardAfterNU6point3)
         EXPECT_EQ(-1, chainActive.Height());
         CBlock block;
         block.hashMerkleRoot = BlockMerkleRoot(block);
-        auto blockHash = block.GetHash();
-        CBlockIndex fakeIndex {block};
-        mapBlockIndex.insert(std::make_pair(blockHash, &fakeIndex));
-        chainActive.SetTip(&fakeIndex);
-        EXPECT_TRUE(chainActive.Contains(&fakeIndex));
+        ScopedFakeChainTip fakeTip(block);
+        EXPECT_TRUE(chainActive.Contains(fakeTip.Get()));
         EXPECT_EQ(0, chainActive.Height());
 
         auto [ufvk, accountId] = pwalletMain->GenerateNewUnifiedSpendingKey();
@@ -206,7 +257,7 @@ TEST(WalletRPCTests, PrepareTransactionAvoidsOrchardAfterNU6point3)
                 true,
                 TransparentCoinbasePolicy::Disallow).value();
         auto sourceSaplingAddress =
-            ufvk.GetSaplingKey().value().Address(diversifier_index_t{0}).value();
+            ufvk.GetSaplingKey().value().FindAddress(diversifier_index_t{0}).first;
 
         WalletTxBuilder builder(Params(), minRelayTxFee);
 
@@ -282,13 +333,7 @@ TEST(WalletRPCTests, PrepareTransactionAvoidsOrchardAfterNU6point3)
         EXPECT_EQ(unifiedEffects->GetSpendable().GetOrchardTotal(), 0);
         EXPECT_TRUE(unifiedEffects->GetPayments().HasSaplingRecipient());
         EXPECT_FALSE(unifiedEffects->GetPayments().HasOrchardRecipient());
-
-        chainActive.SetTip(NULL);
-        mapBlockIndex.erase(blockHash);
     }
-
-    RegtestDeactivateNU6point3();
-    UnloadGlobalWallet();
 }
 
 // TODO: test private methods
