@@ -189,6 +189,17 @@ TEST(WalletRPCTests, PrepareTransactionAvoidsOrchardAfterNU6point3)
         if (!pwalletMain->HaveMnemonicSeed()) {
             pwalletMain->GenerateNewSeed();
         }
+
+        EXPECT_EQ(-1, chainActive.Height());
+        CBlock block;
+        block.hashMerkleRoot = BlockMerkleRoot(block);
+        auto blockHash = block.GetHash();
+        CBlockIndex fakeIndex {block};
+        mapBlockIndex.insert(std::make_pair(blockHash, &fakeIndex));
+        chainActive.SetTip(&fakeIndex);
+        EXPECT_TRUE(chainActive.Contains(&fakeIndex));
+        EXPECT_EQ(0, chainActive.Height());
+
         auto [ufvk, accountId] = pwalletMain->GenerateNewUnifiedSpendingKey();
         auto selector = pwalletMain->ZTXOSelectorForAccount(
                 accountId,
@@ -271,6 +282,9 @@ TEST(WalletRPCTests, PrepareTransactionAvoidsOrchardAfterNU6point3)
         EXPECT_EQ(unifiedEffects->GetSpendable().GetOrchardTotal(), 0);
         EXPECT_TRUE(unifiedEffects->GetPayments().HasSaplingRecipient());
         EXPECT_FALSE(unifiedEffects->GetPayments().HasOrchardRecipient());
+
+        chainActive.SetTip(NULL);
+        mapBlockIndex.erase(blockHash);
     }
 
     RegtestDeactivateNU6point3();
