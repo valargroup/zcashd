@@ -229,4 +229,17 @@ void UpdateOnetimeLockboxDisbursementParameters(
  */
 void UpdateRegtestTemporaryOrchardDisablingSoftForkHeight(int nHeight);
 
+/**
+ * Sets the regtest ZIP 237 INITIAL_NSM_VALUE_BALANCE, or with nullopt derives it from the
+ * chain supply at NU7ActivationHeight - 1 (the default).
+ */
+void UpdateRegtestInitialNSMValueBalance(std::optional<CAmount> balance);
+
+/**
+ * For tests only: starts regtest ZIP 237 NSM reissuance at nHeight (not before NU7), or
+ * with nullopt restores the derived height, which regtest never reaches. As in Zakura,
+ * no node option sets this.
+ */
+void UpdateRegtestNSMReissuanceHeightForTesting(std::optional<int> nHeight);
+
 #endif // BITCOIN_CHAINPARAMS_H

@@ -96,7 +96,13 @@ struct CBlockTemplate
     std::vector<int64_t> vTxSigOps;
 };
 
-CMutableTransaction CreateCoinbaseTransaction(const CChainParams& chainparams, CAmount nFees, const MinerAddress& minerAddress, int nHeight);
+/**
+ * Builds the coinbase for the block at nHeight, claiming the block subsidy, the ZIP 237
+ * additionalSubsidy (AdditionalBlockSubsidy for the parent's NSM value balance), and the
+ * miner's ZIP 235 share of the block's total fees nFees.
+ */
+CMutableTransaction CreateCoinbaseTransaction(
+    const CChainParams& chainparams, CAmount nFees, CAmount additionalSubsidy, const MinerAddress& minerAddress, int nHeight);
 
 /** Generate a new block, without valid proof-of-work */
 class BlockAssembler

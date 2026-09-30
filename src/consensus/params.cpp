@@ -467,6 +467,124 @@ namespace Consensus {
         }
     }
 
+    CAmount Params::MinerFeeShare(int nHeight, CAmount nFees) const {
+        assert(MoneyRange(nFees));
+        if (!NetworkUpgradeActive(nHeight, Consensus::UPGRADE_NU7)) {
+            return nFees;
+        }
+        // NSMFeeContribution := floor(6 * TransactionFees / 10), over the whole block.
+        return nFees - (nFees * 6) / 10;
+    }
+
+    /**
+     * The lowest height above `height` at which the scheduled block subsidy may change:
+     * the next halving or the next target spacing era (Blossom or NU7), if any.
+     */
+    static std::optional<int> NextSubsidyBoundary(const Params& params, int height) {
+        std::optional<int> boundary = params.HeightForHalving(params.Halving(height) + 1);
+        for (auto idx : {Consensus::UPGRADE_BLOSSOM, Consensus::UPGRADE_NU7}) {
+            auto era = params.GetActivationHeight(idx);
+            if (era.has_value() && *era > height && (!boundary.has_value() || *era < *boundary)) {
+                boundary = era;
+            }
+        }
+        return boundary;
+    }
+
+    CAmount Params::ScheduledIssuance(int nHeight) const {
+        CAmount total = 0;
+
+        // The slow start pays rate * h below its shift and rate * (h + 1) from the shift
+        // to its end (see GetBlockSubsidy), so each phase sums consecutive integers.
+        const int64_t interval = nSubsidySlowStartInterval;
+        const int64_t shift = SubsidySlowStartShift();
+        if (interval > 0 && shift > 0 && nHeight >= 1) {
+            const CAmount rate = CAmount(12.5 * COIN) / interval;
+            auto sumFromOneThrough = [](int64_t n) { return n * (n + 1) / 2; };
+            const int64_t slowStartEnd = std::min<int64_t>(nHeight, interval - 1);
+            total += rate * sumFromOneThrough(std::min(slowStartEnd, shift - 1));
+            if (slowStartEnd >= shift) {
+                total += rate * (sumFromOneThrough(slowStartEnd + 1) - sumFromOneThrough(shift));
+            }
+        }
+
+        // After the slow start the subsidy only changes at a halving or a spacing era,
+        // so sum constant runs.
+        int block = std::max<int>(interval, 1);
+        while (block <= nHeight) {
+            const CAmount subsidy = GetBlockSubsidy(block);
+            if (subsidy == 0) {
+                break;
+            }
+            const auto boundary = NextSubsidyBoundary(*this, block);
+            const int runEnd = boundary.has_value() ? std::min(*boundary - 1, nHeight) : nHeight;
+            total += CAmount(runEnd - block + 1) * subsidy;
+            assert(total >= 0);
+            if (runEnd == nHeight) {
+                break;
+            }
+            block = runEnd + 1;
+        }
+        return total;
+    }
+
+    std::optional<int> Params::NSMReissuanceHeight() const {
+        const auto nu7Activation = GetActivationHeight(Consensus::UPGRADE_NU7);
+        if (!nu7Activation.has_value()) {
+            return std::nullopt;
+        }
+        if (nTestNSMReissuanceHeight.has_value()) {
+            return std::max(*nTestNSMReissuanceHeight, *nu7Activation);
+        }
+        const auto thirdHalving = HeightForHalving(3);
+        if (!thirdHalving.has_value() || *thirdHalving == std::numeric_limits<int>::max()) {
+            return std::nullopt;
+        }
+        const auto fourthHalving = HeightForHalving(4);
+        const int runEnd = fourthHalving.has_value() ? *fourthHalving - 1 : std::numeric_limits<int>::max();
+        const int first = std::max(*thirdHalving + 1, *nu7Activation);
+        if (first > runEnd) {
+            return std::nullopt;
+        }
+
+        // The subsidy is constant on [first, runEnd], so solve for the first crossing:
+        // ceil(fraction * reserve) < subsidy exactly when reserve <= maxReserve.
+        const CAmount subsidy = GetBlockSubsidy(first);
+        if (subsidy == 0) {
+            return std::nullopt;
+        }
+        const uint64_t maxReserve =
+            (uint64_t(subsidy) - 1) * NSM_BLOCK_SUBSIDY_FRACTION_DENOMINATOR / NSM_BLOCK_SUBSIDY_FRACTION_NUMERATOR;
+        const CAmount supplyBeforeFirst = ScheduledIssuance(first - 1);
+        const uint64_t reserve = MAX_MONEY > supplyBeforeFirst ? uint64_t(MAX_MONEY - supplyBeforeFirst) : 0;
+        const uint64_t excess = reserve > maxReserve ? reserve - maxReserve : 0;
+        const uint64_t blocksUntilCrossing = (excess + uint64_t(subsidy) - 1) / uint64_t(subsidy);
+        const uint64_t crossing = uint64_t(first) + blocksUntilCrossing;
+        if (crossing > uint64_t(runEnd)) {
+            return std::nullopt;
+        }
+        return int(crossing);
+    }
+
+    bool Params::IsNSMReissuanceActive(int nHeight) const {
+        // Reissuance never starts before NU7, so skip deriving the height for older blocks.
+        if (!NetworkUpgradeActive(nHeight, Consensus::UPGRADE_NU7)) {
+            return false;
+        }
+        const auto start = NSMReissuanceHeight();
+        return start.has_value() && nHeight >= *start;
+    }
+
+    CAmount Params::AdditionalBlockSubsidy(int nHeight, CAmount parentNSMValueBalance) const {
+        if (!IsNSMReissuanceActive(nHeight)) {
+            return 0;
+        }
+        assert(MoneyRange(parentNSMValueBalance));
+        // MAX_MONEY * 1375 fits in an int64_t, so this ceiling division cannot overflow.
+        return (parentNSMValueBalance * NSM_BLOCK_SUBSIDY_FRACTION_NUMERATOR + NSM_BLOCK_SUBSIDY_FRACTION_DENOMINATOR - 1)
+            / NSM_BLOCK_SUBSIDY_FRACTION_DENOMINATOR;
+    }
+
     std::vector<std::pair<FSInfo, FundingStream>> Params::GetActiveFundingStreams(int nHeight) const
     {
         std::vector<std::pair<FSInfo, FundingStream>> activeStreams;
