@@ -328,6 +328,18 @@ static const unsigned int PRE_BLOSSOM_REGTEST_HALVING_INTERVAL = 144;
 #define POST_BLOSSOM_HALVING_INTERVAL(preBlossomInterval) \
     (preBlossomInterval * Consensus::BLOSSOM_POW_TARGET_SPACING_RATIO)
 
+/** ZIP 218 PostNU7HalvingInterval, in blocks. */
+#define POST_NU7_HALVING_INTERVAL(preBlossomInterval) \
+    (POST_BLOSSOM_HALVING_INTERVAL(preBlossomInterval) * Consensus::NU7_POW_TARGET_SPACING_RATIO)
+
+/**
+ * ZIP 214 Revision 3: a funding stream end height after NU7 activation A moves to
+ * A + NU7PoWTargetSpacingRatio * (height - A), so it keeps its date; for the Revision 2
+ * streams this is HeightForHalving(3). Heights at or before A, and all heights on a
+ * network without NU7, are unchanged.
+ */
+int NU7AdjustedFundingStreamHeight(int height, std::optional<int> nu7Activation);
+
 /**
  * Parameters that influence chain consensus.
  */
@@ -378,6 +390,7 @@ struct Params {
     int SubsidySlowStartShift() const { return nSubsidySlowStartInterval / 2; }
     int nPreBlossomSubsidyHalvingInterval;
     int nPostBlossomSubsidyHalvingInterval;
+    int nPostNU7SubsidyHalvingInterval;
 
     /**
      * Identify the halving index at the specified height. The result will be
@@ -390,8 +403,25 @@ struct Params {
      */
     int HalvingHeight(int nHeight, int halvingIndex) const;
 
+    /**
+     * The first height at which Halving() reaches halvingIndex, taking every target
+     * spacing era (including NU7) into account, or nullopt if no height up to INT_MAX
+     * reaches it.
+     */
+    std::optional<int> HeightForHalving(int halvingIndex) const;
+
     int GetLastFoundersRewardBlockHeight(int nHeight) const;
 
+    /**
+     * ZIP 207 AddressPeriod(nHeight), revised by ZIP 207 Revision 2 so that each
+     * period keeps its duration after NU7 shortens the target spacing.
+     */
+    int64_t FundingStreamAddressPeriod(int nHeight) const;
+
+    /**
+     * The index of the funding stream recipient address for nHeight, for a stream
+     * starting at fundingStreamStartHeight.
+     */
     int FundingPeriodIndex(int fundingStreamStartHeight, int nHeight) const;
 
     /** Used to check majorities for block version upgrade */
