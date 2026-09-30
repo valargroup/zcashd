@@ -187,6 +187,13 @@ public:
             Consensus::NetworkUpgrade::NO_ACTIVATION_HEIGHT;
         ValidateUpgradeTable(consensus, true);
 
+        // ZIP 237 INITIAL_NSM_VALUE_BALANCE: ScheduledIssuance(H) - IssuedSupply(H) for any
+        // H from the last pre-NU6 height to NU7ActivationHeight - 1, measured at 2,726,399.
+        // Zakura uses the same value; the balance derived at NU7ActivationHeight - 1 is
+        // checked against it.
+        consensus.nInitialNSMValueBalance = 36858445520;
+        consensus.fCheckInitialNSMValueBalance = true;
+
         consensus.nFundingPeriodLength = consensus.nPostBlossomSubsidyHalvingInterval / 48;
 
         // guarantees the first 2 characters, when base58 encoded, are "t1"
@@ -595,6 +602,10 @@ public:
         consensus.vUpgrades[Consensus::UPGRADE_ZFUTURE].nActivationHeight =
             Consensus::NetworkUpgrade::NO_ACTIVATION_HEIGHT;
         ValidateUpgradeTable(consensus, true);
+
+        // ZIP 237 INITIAL_NSM_VALUE_BALANCE, measured at 2,975,999 (as in Zakura).
+        consensus.nInitialNSMValueBalance = 55768414957;
+        consensus.fCheckInitialNSMValueBalance = true;
 
         consensus.nFundingPeriodLength = consensus.nPostBlossomSubsidyHalvingInterval / 48;
 
@@ -1056,6 +1067,16 @@ public:
         consensus.nTemporaryOrchardDisablingSoftForkHeight = nHeight;
     }
 
+    void UpdateInitialNSMValueBalance(std::optional<CAmount> balance)
+    {
+        consensus.nInitialNSMValueBalance = balance;
+    }
+
+    void UpdateTestNSMReissuanceHeight(std::optional<int> nHeight)
+    {
+        consensus.nTestNSMReissuanceHeight = nHeight;
+    }
+
     void SetRegTestZIP209Enabled() {
         fZIP209Enabled = true;
     }
@@ -1220,4 +1241,14 @@ void UpdateRegtestPow(
 void UpdateRegtestTemporaryOrchardDisablingSoftForkHeight(int nHeight)
 {
     regTestParams.UpdateTemporaryOrchardDisablingSoftForkHeight(nHeight);
+}
+
+void UpdateRegtestInitialNSMValueBalance(std::optional<CAmount> balance)
+{
+    regTestParams.UpdateInitialNSMValueBalance(balance);
+}
+
+void UpdateRegtestNSMReissuanceHeightForTesting(std::optional<int> nHeight)
+{
+    regTestParams.UpdateTestNSMReissuanceHeight(nHeight);
 }
