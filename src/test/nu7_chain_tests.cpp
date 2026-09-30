@@ -13,6 +13,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include <boost/test/unit_test.hpp>
@@ -129,25 +130,47 @@ struct Nu7ChainSetup : public TestingSetup {
     }
 
     /**
-     * Adds a transaction to the mempool that spends the coinbase output of the block at
-     * `height` back to coinbaseScript, paying `fee`.
+     * A transaction for the next block that spends the coinbase output of the block at
+     * `height` back to coinbaseScript, paying `fee`, with the default expiry or `expiry`.
      */
-    void AddFeeTransaction(int height, CAmount fee) {
+    CMutableTransaction FeeTransaction(int height, CAmount fee, std::optional<uint32_t> expiry = std::nullopt) {
         const auto& consensus = Params().GetConsensus();
         const CTransaction& prev = coinbaseTxns.at(height - 1);
         const int nextHeight = chainActive.Height() + 1;
-        const uint32_t branchId = CurrentEpochBranchId(nextHeight, consensus);
 
         CMutableTransaction mtx = CreateNewContextualCMutableTransaction(consensus, nextHeight, false);
+        if (expiry.has_value()) {
+            mtx.nExpiryHeight = expiry.value();
+        }
         mtx.vin.emplace_back(COutPoint(prev.GetHash(), 0));
         mtx.vout.emplace_back(prev.vout[0].nValue - fee, coinbaseScript);
         const PrecomputedTransactionData txdata(mtx, {prev.vout[0]});
         BOOST_REQUIRE(SignSignature(
-            keystore, prev.vout[0].scriptPubKey, mtx, txdata, 0, prev.vout[0].nValue, SIGHASH_ALL, branchId));
+            keystore, prev.vout[0].scriptPubKey, mtx, txdata, 0, prev.vout[0].nValue, SIGHASH_ALL,
+            CurrentEpochBranchId(nextHeight, consensus)));
+        return mtx;
+    }
 
+    /** Adds FeeTransaction(height, fee) to the mempool without checking it. */
+    void AddFeeTransaction(int height, CAmount fee) {
+        CMutableTransaction mtx = FeeTransaction(height, fee);
+        const uint32_t branchId = CurrentEpochBranchId(chainActive.Height() + 1, Params().GetConsensus());
         TestMemPoolEntryHelper entry;
         mempool.addUnchecked(
             mtx.GetHash(), entry.Fee(fee).Time(GetTime()).SpendsCoinbase(true).BranchId(branchId).FromTx(mtx));
+    }
+
+    /** Submits `mtx` to the mempool, and returns the reject reason if it is refused. */
+    std::optional<std::string> Submit(const CMutableTransaction& mtx) {
+        LOCK(cs_main);
+        CValidationState state;
+        if (AcceptToMemoryPool(Params(), mempool, state, CTransaction(mtx), false, nullptr)) {
+            return std::nullopt;
+        }
+        int dos = -1;
+        BOOST_CHECK(state.IsInvalid(dos));
+        BOOST_CHECK_EQUAL(dos, 0);
+        return state.GetRejectReason();
     }
 };
 
@@ -281,6 +304,21 @@ BOOST_AUTO_TEST_CASE(failed_block_does_not_stop_reload)
     BOOST_CHECK(chainActive.Tip()->GetBlockHash() == tipHash);
     BOOST_CHECK_EQUAL(NSMValueBalance(chainActive.Tip()), 0);
     BOOST_CHECK(!mapBlockIndex.at(block.GetHash())->nChainNSMValueBalance.has_value());
+}
+
+BOOST_AUTO_TEST_CASE(mempool_refuses_what_zakura_would_reject)
+{
+    // Zakura may be up to RELAY_HEIGHT_MARGIN blocks ahead, so from next height
+    // NU7_HEIGHT - 3 a transaction committing to NU6.3 could reach Zakura after it has
+    // activated NU7. (Without an expiry, it is not refused as expiring soon.)
+    MineTo(NU7_HEIGHT - 5);
+    BOOST_CHECK(Submit(FeeTransaction(1, FEE, 0)) == std::nullopt);
+    MineBlock();
+    BOOST_CHECK(Submit(FeeTransaction(2, FEE, 0)) == std::string("tx-invalid-at-relay-height"));
+
+    // From NU7, transactions committing to NU7 are accepted again.
+    MineTo(NU7_HEIGHT);
+    BOOST_CHECK(Submit(FeeTransaction(3, FEE)) == std::nullopt);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

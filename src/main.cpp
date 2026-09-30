@@ -1232,6 +1232,15 @@ bool ContextualCheckTransaction(
         // after Canopy activation.
     }
 
+    // ZIP 2003: from NU7, v4 transactions are invalid, coinbase transactions included.
+    // Only v2 to v4 transactions can carry Sprout JoinSplits, so this also ends them.
+    if (nu7Active && tx.fOverwintered && tx.nVersionGroupId == SAPLING_VERSION_GROUP_ID) {
+        return state.DoS(
+            dosLevelConstricting,
+            error("ContextualCheckTransaction(): v4 transactions are invalid from NU7"),
+            REJECT_INVALID, "bad-tx-v4-after-nu7");
+    }
+
     // Rules that apply to NU5 or later:
     if (nu5Active) {
         // Reject transactions with invalid version group id
@@ -1525,9 +1534,6 @@ bool ContextualCheckTransaction(
                         error("ContextualCheckTransaction(): Future version too high"),
                         REJECT_INVALID, "bad-tx-zfuture-version-too-high");
                 }
-                break;
-            case SAPLING_VERSION_GROUP_ID:
-                // Allow V4 transactions while futureActive
                 break;
             case ZIP225_VERSION_GROUP_ID:
                 // Allow V5 transactions while futureActive
@@ -2166,6 +2172,28 @@ bool AcceptToMemoryPool(
     string reason;
     if (chainparams.RequireStandard() && !IsStandardTx(tx, reason, chainparams, nextBlockHeight))
         return state.DoS(0, false, REJECT_NONSTANDARD, reason);
+
+    // Zakura may be a few blocks ahead, and bans a peer that relays a transaction it
+    // rejects, so the transaction must also be valid at the highest height Zakura could
+    // check it for. From NU7 it must also fit in a block, which Zakura checks for each
+    // transaction.
+    {
+        const int relayHeight = std::max(
+            nextBlockHeight + RELAY_HEIGHT_MARGIN,
+            pindexBestHeader == nullptr ? 0 : pindexBestHeader->nHeight + 1);
+        CValidationState relayState;
+        if (!ContextualCheckTransaction(tx, relayState, chainparams, relayHeight, false)) {
+            return state.DoS(0, false, REJECT_NONSTANDARD, "tx-invalid-at-relay-height",
+                BodyCorruption::Default,
+                strprintf("invalid at height %d: %s", relayHeight, relayState.GetRejectReason()));
+        }
+        if (chainparams.GetConsensus().NetworkUpgradeActive(relayHeight, Consensus::UPGRADE_NU7)) {
+            if (auto exceeded = ShieldedActionCounts(tx).ExceededLimit()) {
+                return state.DoS(0, false, REJECT_NONSTANDARD, "tx-exceeds-block-shielded-limit",
+                    BodyCorruption::Default, exceeded.value());
+            }
+        }
+    }
 
     // Only accept nLockTime-using transactions that can be mined in the next
     // block; we don't want our mempool filled up with transactions that can't
@@ -6469,6 +6497,23 @@ bool ContextualCheckBlock(
                                  REJECT_INVALID, "bad-txns-nonfinal");
             }
         }
+
+        // ZIP 218: from NU7, the block's shielded actions (coinbase included) are limited
+        // per pool and by a global budget.
+        if (consensusParams.NetworkUpgradeActive(nHeight, Consensus::UPGRADE_NU7)) {
+            ShieldedActionCounts counts;
+            for (const CTransaction& tx : block.vtx) {
+                counts += ShieldedActionCounts(tx);
+            }
+            if (auto exceeded = counts.ExceededLimit()) {
+                return state.DoS(100,
+                    error("%s: block exceeds a ZIP 218 shielded limit (%s): %d Orchard actions, "
+                          "%d Ironwood actions, %d Sapling spends and outputs, %d JoinSplits",
+                          __func__, exceeded.value(), counts.orchardActions, counts.ironwoodActions,
+                          counts.saplingIOs, counts.sproutJoinSplits),
+                    REJECT_INVALID, exceeded.value());
+            }
+        }
     }
 
     // Enforce BIP 34 rule that the coinbase starts with serialized block height.
@@ -10088,8 +10133,12 @@ CMutableTransaction CreateNewContextualCMutableTransaction(
             mtx.nConsensusBranchId = CurrentEpochBranchId(nHeight, consensusParams);
         }
 
-        bool blossomActive = consensusParams.NetworkUpgradeActive(nHeight, Consensus::UPGRADE_BLOSSOM);
-        unsigned int defaultExpiryDelta = blossomActive ? DEFAULT_POST_BLOSSOM_TX_EXPIRY_DELTA : DEFAULT_PRE_BLOSSOM_TX_EXPIRY_DELTA;
+        unsigned int defaultExpiryDelta = DEFAULT_PRE_BLOSSOM_TX_EXPIRY_DELTA;
+        if (consensusParams.NetworkUpgradeActive(nHeight, Consensus::UPGRADE_NU7)) {
+            defaultExpiryDelta = DEFAULT_POST_NU7_TX_EXPIRY_DELTA;
+        } else if (consensusParams.NetworkUpgradeActive(nHeight, Consensus::UPGRADE_BLOSSOM)) {
+            defaultExpiryDelta = DEFAULT_POST_BLOSSOM_TX_EXPIRY_DELTA;
+        }
         mtx.nExpiryHeight = nHeight + (expiryDeltaArg ? expiryDeltaArg.value() : defaultExpiryDelta);
 
         // mtx.nExpiryHeight == 0 is valid for coinbase transactions

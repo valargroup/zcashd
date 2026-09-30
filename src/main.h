@@ -93,6 +93,8 @@ static const unsigned int DEFAULT_DESCENDANT_SIZE_LIMIT = 5000;
 /** Default for -txexpirydelta, in number of blocks */
 static const unsigned int DEFAULT_PRE_BLOSSOM_TX_EXPIRY_DELTA = 20;
 static const unsigned int DEFAULT_POST_BLOSSOM_TX_EXPIRY_DELTA = DEFAULT_PRE_BLOSSOM_TX_EXPIRY_DELTA * Consensus::BLOSSOM_POW_TARGET_SPACING_RATIO;
+/** ZIP 218 keeps the default expiry time the same by scaling it with the NU7 target spacing. */
+static const unsigned int DEFAULT_POST_NU7_TX_EXPIRY_DELTA = DEFAULT_POST_BLOSSOM_TX_EXPIRY_DELTA * Consensus::NU7_POW_TARGET_SPACING_RATIO;
 /** The number of blocks within expiry height when a tx is considered to be expiring soon */
 static constexpr uint32_t TX_EXPIRING_SOON_THRESHOLD = 3;
 /** The maximum size of a blk?????.dat file (since 0.8) */
@@ -446,6 +448,13 @@ bool ContextualCheckShieldedInputs(
         bool nu5Active,
         bool isMined,
         bool (*isInitBlockDownload)(const Consensus::Params&) = IsInitialBlockDownload);
+
+/**
+ * How many blocks past the next block the mempool also checks a transaction for. As a
+ * sidecar this node relays to Zakura, which may be a few blocks ahead and bans a peer
+ * that relays a transaction it rejects.
+ */
+static const int RELAY_HEIGHT_MARGIN = 3;
 
 /** Check a transaction contextually against a set of consensus rules */
 bool ContextualCheckTransaction(const CTransaction& tx, CValidationState &state,
