@@ -249,3 +249,14 @@ fn hash_node_inner<V: Version>(
 
     Ok(V::hash(&node))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::dispatch;
+
+    /// NU7 adds no shielded pool, so its history nodes keep the V3 (Ironwood) format.
+    #[test]
+    fn nu7_history_nodes_use_v3() {
+        assert_eq!(dispatch(0x7719_0ad9, (), |_| 1, |_| 2, |_| 3), 3);
+    }
+}
