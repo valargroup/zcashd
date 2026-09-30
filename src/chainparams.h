@@ -197,7 +197,8 @@ void SelectParams(const std::string& chain);
  * Builds a separate copy of the Mainnet or Testnet parameters with the NU7 activation
  * height set to nu7ActivationHeight, deriving every NU7-dependent value (such as the
  * ZIP 214 Revision 3 funding stream end heights and the ZIP 2008 address list) exactly
- * as the real parameters do. For tests only; the global params are not affected.
+ * as the real parameters do. Unlike a real height, it need not be a multiple of 3. For
+ * tests only; the global params are not affected.
  */
 std::unique_ptr<CChainParams> CreateChainParamsWithNU7ForTesting(const std::string& chain, int nu7ActivationHeight);
 
