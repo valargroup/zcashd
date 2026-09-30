@@ -83,6 +83,34 @@ static CBlock CreateGenesisBlock(uint32_t nTime, const uint256& nNonce, const st
 
 const arith_uint256 maxUint = UintToArith256(uint256S("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"));
 
+/**
+ * Checks the network upgrade table a network constructor just built: every upgrade
+ * has a protocol version, activation heights never decrease across upgrades, and
+ * (ZIP 259) a scheduled NU7 activation height on Mainnet or Testnet is a multiple
+ * of 3.
+ */
+static void ValidateUpgradeTable(const Consensus::Params& consensus, bool publicNetwork)
+{
+    std::optional<int> previousHeight;
+    for (int idx = Consensus::BASE_SPROUT; idx < Consensus::MAX_NETWORK_UPGRADES; idx++) {
+        // The test dummy and ZFUTURE are not part of the upgrade sequence.
+        if (idx == Consensus::UPGRADE_TESTDUMMY || idx == Consensus::UPGRADE_ZFUTURE) {
+            continue;
+        }
+        const auto& upgrade = consensus.vUpgrades[idx];
+        assert(upgrade.nProtocolVersion > 0);
+        if (upgrade.nActivationHeight == Consensus::NetworkUpgrade::NO_ACTIVATION_HEIGHT) {
+            continue;
+        }
+        assert(!previousHeight.has_value() || upgrade.nActivationHeight >= *previousHeight);
+        previousHeight = upgrade.nActivationHeight;
+    }
+    const int nu7Height = consensus.vUpgrades[Consensus::UPGRADE_NU7].nActivationHeight;
+    assert(!publicNetwork ||
+           nu7Height == Consensus::NetworkUpgrade::NO_ACTIVATION_HEIGHT ||
+           nu7Height % 3 == 0);
+}
+
 class CMainParams : public CChainParams {
 public:
     CMainParams() {
@@ -148,9 +176,14 @@ public:
         consensus.vUpgrades[Consensus::UPGRADE_NU6_2].nActivationHeight = 3364600;
         consensus.vUpgrades[Consensus::UPGRADE_NU6_3].nProtocolVersion = 170160;
         consensus.vUpgrades[Consensus::UPGRADE_NU6_3].nActivationHeight = 3428143;
+        // ZIP 204 assigns NU7 protocol version 170190 on Mainnet.
+        consensus.vUpgrades[Consensus::UPGRADE_NU7].nProtocolVersion = 170190;
+        consensus.vUpgrades[Consensus::UPGRADE_NU7].nActivationHeight =
+            Consensus::NetworkUpgrade::NO_ACTIVATION_HEIGHT;
         consensus.vUpgrades[Consensus::UPGRADE_ZFUTURE].nProtocolVersion = 0x7FFFFFFF;
         consensus.vUpgrades[Consensus::UPGRADE_ZFUTURE].nActivationHeight =
             Consensus::NetworkUpgrade::NO_ACTIVATION_HEIGHT;
+        ValidateUpgradeTable(consensus, true);
 
         consensus.nFundingPeriodLength = consensus.nPostBlossomSubsidyHalvingInterval / 48;
 
@@ -538,9 +571,14 @@ public:
         consensus.vUpgrades[Consensus::UPGRADE_NU6_2].nActivationHeight = 4052000;
         consensus.vUpgrades[Consensus::UPGRADE_NU6_3].nProtocolVersion = 170160;
         consensus.vUpgrades[Consensus::UPGRADE_NU6_3].nActivationHeight = 4134000;
+        // ZIP 204 assigns NU7 protocol version 170180 on Testnet.
+        consensus.vUpgrades[Consensus::UPGRADE_NU7].nProtocolVersion = 170180;
+        consensus.vUpgrades[Consensus::UPGRADE_NU7].nActivationHeight =
+            Consensus::NetworkUpgrade::NO_ACTIVATION_HEIGHT;
         consensus.vUpgrades[Consensus::UPGRADE_ZFUTURE].nProtocolVersion = 0x7FFFFFFF;
         consensus.vUpgrades[Consensus::UPGRADE_ZFUTURE].nActivationHeight =
             Consensus::NetworkUpgrade::NO_ACTIVATION_HEIGHT;
+        ValidateUpgradeTable(consensus, true);
 
         consensus.nFundingPeriodLength = consensus.nPostBlossomSubsidyHalvingInterval / 48;
 
@@ -878,9 +916,14 @@ public:
         consensus.vUpgrades[Consensus::UPGRADE_NU6_3].nProtocolVersion = 170160;
         consensus.vUpgrades[Consensus::UPGRADE_NU6_3].nActivationHeight =
             Consensus::NetworkUpgrade::NO_ACTIVATION_HEIGHT;
+        // Regtest uses the Testnet protocol version (ZIP 204).
+        consensus.vUpgrades[Consensus::UPGRADE_NU7].nProtocolVersion = 170180;
+        consensus.vUpgrades[Consensus::UPGRADE_NU7].nActivationHeight =
+            Consensus::NetworkUpgrade::NO_ACTIVATION_HEIGHT;
         consensus.vUpgrades[Consensus::UPGRADE_ZFUTURE].nProtocolVersion = 0x7FFFFFFF;
         consensus.vUpgrades[Consensus::UPGRADE_ZFUTURE].nActivationHeight =
             Consensus::NetworkUpgrade::NO_ACTIVATION_HEIGHT;
+        ValidateUpgradeTable(consensus, false);
 
         consensus.nFundingPeriodLength = consensus.nPostBlossomSubsidyHalvingInterval / 48;
         // Defined funding streams can be enabled with node config flags.
