@@ -185,7 +185,8 @@ public:
         consensus.vUpgrades[Consensus::UPGRADE_ZFUTURE].nProtocolVersion = 0x7FFFFFFF;
         consensus.vUpgrades[Consensus::UPGRADE_ZFUTURE].nActivationHeight =
             Consensus::NetworkUpgrade::NO_ACTIVATION_HEIGHT;
-        ValidateUpgradeTable(consensus, true);
+        // A test height need not be a multiple of 3, as on Zakura's configured testnets.
+        ValidateUpgradeTable(consensus, !nu7ActivationHeight.has_value());
 
         // ZIP 237 INITIAL_NSM_VALUE_BALANCE: ScheduledIssuance(H) - IssuedSupply(H) for any
         // H from the last pre-NU6 height to NU7ActivationHeight - 1, measured at 2,726,399.
@@ -601,7 +602,8 @@ public:
         consensus.vUpgrades[Consensus::UPGRADE_ZFUTURE].nProtocolVersion = 0x7FFFFFFF;
         consensus.vUpgrades[Consensus::UPGRADE_ZFUTURE].nActivationHeight =
             Consensus::NetworkUpgrade::NO_ACTIVATION_HEIGHT;
-        ValidateUpgradeTable(consensus, true);
+        // A test height need not be a multiple of 3, as on Zakura's configured testnets.
+        ValidateUpgradeTable(consensus, !nu7ActivationHeight.has_value());
 
         // ZIP 237 INITIAL_NSM_VALUE_BALANCE, measured at 2,975,999 (as in Zakura).
         consensus.nInitialNSMValueBalance = 55768414957;
