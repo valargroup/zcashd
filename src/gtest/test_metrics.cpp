@@ -123,6 +123,23 @@ TEST(Metrics, EstimateNetHeight) {
     SystemClock::SetGlobal();
 }
 
+TEST(Metrics, EstimateNetHeightAcrossNU7) {
+    FixedClock::SetGlobal();
+    auto params = RegtestActivateBlossom(false, 200).GetConsensus();
+    params.vUpgrades[Consensus::UPGRADE_NU7].nActivationHeight = 300;
+    int64_t blockTimes[500];
+    for (int i = 0; i < 500; i++) {
+        blockTimes[i] = i ? blockTimes[i - 1] + params.PoWTargetSpacing(i) : 0;
+    }
+    FixedClock::Instance()->Set(std::chrono::seconds(blockTimes[499]));
+    for (int i = 0; i < 500; i++) {
+        // Check that we are within 1 of the correct height, from each spacing era
+        EXPECT_LT(std::abs(499 - EstimateNetHeight(params, i, blockTimes[i])), 2) << i;
+    }
+    RegtestDeactivateBlossom();
+    SystemClock::SetGlobal();
+}
+
 TEST(Metrics, NextUpgrade) {
     SelectParams(CBaseChainParams::REGTEST);
     const Consensus::Params& params = Params().GetConsensus();

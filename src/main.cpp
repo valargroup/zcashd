@@ -497,7 +497,11 @@ void UpdatePreferredDownload(CNode* node, CNodeState* state)
 // Returns time at which to timeout block request (nTime in microseconds)
 int64_t GetBlockTimeout(int64_t nTime, int nValidatedQueuedBefore, const Consensus::Params &consensusParams, int nHeight)
 {
-    return nTime + 500000 * consensusParams.PoWTargetSpacing(nHeight) * (4 + nValidatedQueuedBefore);
+    // Keep the post-Blossom timeout after NU7's shorter spacing: disconnecting the only
+    // peer (Zakura, for a sidecar) over a slow block would stall this node.
+    const int64_t spacing = std::max<int64_t>(
+        consensusParams.PoWTargetSpacing(nHeight), Consensus::POST_BLOSSOM_POW_TARGET_SPACING);
+    return nTime + 500000 * spacing * (4 + nValidatedQueuedBefore);
 }
 
 void InitializeNode(NodeId nodeid, const CNode *pnode) {
