@@ -36,20 +36,32 @@ unsigned int GetNextWorkRequired(const CBlockIndex* pindexLast, const CBlockHead
             pindexLast->nHeight >= params.nPowAllowMinDifficultyBlocksAfterHeight.value())
         {
             // Special difficulty rule for testnet:
-            // If the new block's timestamp is more than 6 * block interval minutes
-            // then allow mining of a min-difficulty block.
-            if (pblock && pblock->GetBlockTime() > pindexLast->GetBlockTime() + params.PoWTargetSpacing(pindexLast->nHeight + 1) * 6)
+            // If the new block's timestamp is more than MinDifficultyGap (6 target
+            // spacings, or 18 from NU7) after its parent's, allow mining of a
+            // min-difficulty block.
+            if (pblock && pblock->GetBlockTime() > pindexLast->GetBlockTime() + params.MinDifficultyGap(pindexLast->nHeight + 1))
                 return nProofOfWorkLimit;
         }
     }
 
-    // Find the first block in the averaging interval
+    // Find the first block in the averaging interval. The window size depends on
+    // the height of the block being computed (ZIP 218).
+    //
+    // Sum each target's quotient and remainder by the window size separately:
+    // floor(sum(t) / N) == sum(floor(t / N)) + floor(sum(t mod N) / N), and neither
+    // partial sum can overflow, whereas 102 targets near a testnet or regtest PoW
+    // limit overflow a plain 256-bit sum.
+    const int64_t nAveragingWindow = params.PoWAveragingWindow(pindexLast->nHeight + 1);
+    const arith_uint256 bnWindow {static_cast<uint64_t>(nAveragingWindow)};
     const CBlockIndex* pindexFirst = pindexLast;
-    arith_uint256 bnTot {0};
-    for (int i = 0; pindexFirst && i < params.nPowAveragingWindow; i++) {
+    arith_uint256 bnQuotients {0};
+    arith_uint256 bnRemainders {0};
+    for (int i = 0; pindexFirst && i < nAveragingWindow; i++) {
         arith_uint256 bnTmp;
         bnTmp.SetCompact(pindexFirst->nBits);
-        bnTot += bnTmp;
+        const arith_uint256 bnQuotient = bnTmp / bnWindow;
+        bnQuotients += bnQuotient;
+        bnRemainders += bnTmp - bnQuotient * static_cast<uint32_t>(nAveragingWindow);
         pindexFirst = pindexFirst->pprev;
     }
 
@@ -63,7 +75,7 @@ unsigned int GetNextWorkRequired(const CBlockIndex* pindexLast, const CBlockHead
     //
     // Here we take the floor of MeanTarget(height) immediately, but that is equivalent to doing
     // so only after a further division, as proven in <https://math.stackexchange.com/a/147832/185422>.
-    arith_uint256 bnAvg {bnTot / params.nPowAveragingWindow};
+    arith_uint256 bnAvg {bnQuotients + bnRemainders / bnWindow};
 
     return CalculateNextWorkRequired(bnAvg,
                                      pindexLast->GetMedianTimePast(), pindexFirst->GetMedianTimePast(),

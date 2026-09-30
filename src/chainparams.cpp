@@ -81,7 +81,6 @@ static CBlock CreateGenesisBlock(uint32_t nTime, const uint256& nNonce, const st
  * + Contains no strange transactions
  */
 
-const arith_uint256 maxUint = UintToArith256(uint256S("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"));
 
 /**
  * Checks the network upgrade table a network constructor just built: every upgrade
@@ -130,11 +129,12 @@ public:
         consensus.nEquihashK = K;
         consensus.powLimit = uint256S("0007ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
         consensus.nPowAveragingWindow = 17;
-        assert(maxUint/UintToArith256(consensus.powLimit) >= consensus.nPowAveragingWindow);
+        consensus.nPostNU7PowAveragingWindow = Consensus::POST_NU7_POW_AVERAGING_WINDOW;
         consensus.nPowMaxAdjustDown = 32; // 32% adjustment down
         consensus.nPowMaxAdjustUp = 16; // 16% adjustment up
         consensus.nPreBlossomPowTargetSpacing = Consensus::PRE_BLOSSOM_POW_TARGET_SPACING;
         consensus.nPostBlossomPowTargetSpacing = Consensus::POST_BLOSSOM_POW_TARGET_SPACING;
+        consensus.nPostNU7PowTargetSpacing = Consensus::POST_NU7_POW_TARGET_SPACING;
         consensus.nPowAllowMinDifficultyBlocksAfterHeight = std::nullopt;
         consensus.fPowNoRetargeting = false;
         consensus.vUpgrades[Consensus::BASE_SPROUT].nProtocolVersion = 170002;
@@ -525,11 +525,12 @@ public:
         consensus.nEquihashK = K;
         consensus.powLimit = uint256S("07ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
         consensus.nPowAveragingWindow = 17;
-        assert(maxUint/UintToArith256(consensus.powLimit) >= consensus.nPowAveragingWindow);
+        consensus.nPostNU7PowAveragingWindow = Consensus::POST_NU7_POW_AVERAGING_WINDOW;
         consensus.nPowMaxAdjustDown = 32; // 32% adjustment down
         consensus.nPowMaxAdjustUp = 16; // 16% adjustment up
         consensus.nPreBlossomPowTargetSpacing = Consensus::PRE_BLOSSOM_POW_TARGET_SPACING;
         consensus.nPostBlossomPowTargetSpacing = Consensus::POST_BLOSSOM_POW_TARGET_SPACING;
+        consensus.nPostNU7PowTargetSpacing = Consensus::POST_NU7_POW_TARGET_SPACING;
         consensus.nPowAllowMinDifficultyBlocksAfterHeight = 299187;
         consensus.fPowNoRetargeting = false;
         consensus.vUpgrades[Consensus::BASE_SPROUT].nProtocolVersion = 170002;
@@ -766,6 +767,12 @@ public:
 
         static_assert(6 * Consensus::POST_BLOSSOM_POW_TARGET_SPACING * 7 < MAX_FUTURE_BLOCK_TIME_MTP - 60,
                       "MAX_FUTURE_BLOCK_TIME_MTP is too low given block target spacing");
+        // From NU7 the threshold is 18 times the 25-second spacing (ZIP 218), which is still
+        // 7.5 minutes.
+        static_assert(
+            Consensus::POST_NU7_MIN_DIFFICULTY_GAP_SPACINGS * Consensus::POST_NU7_POW_TARGET_SPACING * 7
+                < MAX_FUTURE_BLOCK_TIME_MTP - 60,
+            "MAX_FUTURE_BLOCK_TIME_MTP is too low given the NU7 block target spacing");
         consensus.nFutureTimestampSoftForkHeight = consensus.vUpgrades[Consensus::UPGRADE_BLOSSOM].nActivationHeight + 6;
 
         // The best chain should have at least this much work.
@@ -869,13 +876,14 @@ public:
         static_assert(equihash_parameters_acceptable(N, K));
         consensus.nEquihashN = N;
         consensus.nEquihashK = K;
-        consensus.powLimit = uint256S("0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"); // if this is any larger, the for loop in GetNextWorkRequired can overflow bnTot
+        consensus.powLimit = uint256S("0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f");
         consensus.nPowAveragingWindow = 17;
-        assert(maxUint/UintToArith256(consensus.powLimit) >= consensus.nPowAveragingWindow);
+        consensus.nPostNU7PowAveragingWindow = Consensus::POST_NU7_POW_AVERAGING_WINDOW;
         consensus.nPowMaxAdjustDown = 0; // Turn off adjustment down
         consensus.nPowMaxAdjustUp = 0; // Turn off adjustment up
         consensus.nPreBlossomPowTargetSpacing = Consensus::PRE_BLOSSOM_POW_TARGET_SPACING;
         consensus.nPostBlossomPowTargetSpacing = Consensus::POST_BLOSSOM_POW_TARGET_SPACING;
+        consensus.nPostNU7PowTargetSpacing = Consensus::POST_NU7_POW_TARGET_SPACING;
         consensus.nPowAllowMinDifficultyBlocksAfterHeight = 0;
         consensus.fPowNoRetargeting = true;
         consensus.vUpgrades[Consensus::BASE_SPROUT].nProtocolVersion = 170002;

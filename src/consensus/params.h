@@ -305,6 +305,23 @@ static_assert(PRE_BLOSSOM_POW_TARGET_SPACING % POST_BLOSSOM_POW_TARGET_SPACING =
 static const int BLOSSOM_POW_TARGET_SPACING_RATIO = PRE_BLOSSOM_POW_TARGET_SPACING / POST_BLOSSOM_POW_TARGET_SPACING;
 static_assert(BLOSSOM_POW_TARGET_SPACING_RATIO * POST_BLOSSOM_POW_TARGET_SPACING == PRE_BLOSSOM_POW_TARGET_SPACING, "Invalid BLOSSOM_POW_TARGET_SPACING_RATIO");
 
+/** ZIP 218 block target interval in seconds from NU7. */
+static const unsigned int POST_NU7_POW_TARGET_SPACING = 25;
+static_assert(POST_BLOSSOM_POW_TARGET_SPACING % POST_NU7_POW_TARGET_SPACING == 0, "NU7 target spacing must exactly divide post-Blossom target spacing.");
+
+static const int NU7_POW_TARGET_SPACING_RATIO = POST_BLOSSOM_POW_TARGET_SPACING / POST_NU7_POW_TARGET_SPACING;
+static_assert(NU7_POW_TARGET_SPACING_RATIO == 3, "ZIP 218 defines NU7PoWTargetSpacingRatio as 3");
+
+/** ZIP 218 PoW averaging window, in blocks, from NU7 (PostNU7PoWAveragingWindow). */
+static const int64_t POST_NU7_POW_AVERAGING_WINDOW = 102;
+
+/**
+ * Testnet minimum-difficulty gap, in target spacings: 6 before NU7 (ZIP 208) and 18 from
+ * NU7 (ZIP 218 and ZIP 259), so the gap stays 450 seconds across the spacing change.
+ */
+static const int PRE_NU7_MIN_DIFFICULTY_GAP_SPACINGS = 6;
+static const int POST_NU7_MIN_DIFFICULTY_GAP_SPACINGS = 18;
+
 static const unsigned int PRE_BLOSSOM_HALVING_INTERVAL = 840000;
 static const unsigned int PRE_BLOSSOM_REGTEST_HALVING_INTERVAL = 144;
 
@@ -504,11 +521,15 @@ struct Params {
     uint256 powLimit;
     std::optional<uint32_t> nPowAllowMinDifficultyBlocksAfterHeight;
     bool fPowNoRetargeting;
+    /** PoW averaging window, in blocks, before NU7. */
     int64_t nPowAveragingWindow;
+    /** PoW averaging window, in blocks, from NU7 (ZIP 218). */
+    int64_t nPostNU7PowAveragingWindow = POST_NU7_POW_AVERAGING_WINDOW;
     int64_t nPowMaxAdjustDown;
     int64_t nPowMaxAdjustUp;
     int64_t nPreBlossomPowTargetSpacing;
     int64_t nPostBlossomPowTargetSpacing;
+    int64_t nPostNU7PowTargetSpacing = POST_NU7_POW_TARGET_SPACING;
 
     /** Regtest-only (`-regtestacceptunvalidatedpow`): accept block headers
      *  without validating the Equihash solution or the proof-of-work hash
@@ -517,7 +538,15 @@ struct Params {
     bool fAcceptUnvalidatedPoW = false;
 
     int64_t PoWTargetSpacing(int nHeight) const;
+    /** Number of blocks averaged to compute the target of the block at nHeight (ZIP 218). */
+    int64_t PoWAveragingWindow(int nHeight) const;
     int64_t AveragingWindowTimespan(int nHeight) const;
+    /**
+     * On networks that allow minimum-difficulty blocks, the block at nHeight may use the
+     * minimum difficulty only if its time is strictly more than this many seconds after its
+     * parent's time.
+     */
+    int64_t MinDifficultyGap(int nHeight) const;
     int64_t MinActualTimespan(int nHeight) const;
     int64_t MaxActualTimespan(int nHeight) const;
 
