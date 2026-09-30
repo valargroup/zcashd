@@ -121,6 +121,8 @@ private:
     uint64_t nBlockSize;
     uint64_t nBlockTx;
     unsigned int nBlockSigOps;
+    // The ZIP 218 counts of the block, including room for the coinbase
+    ShieldedActionCounts blockShieldedCounts;
     CAmount nFees;
     CTxMemPool::setEntries inBlock;
 
