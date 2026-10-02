@@ -431,6 +431,7 @@ TEST(NU7Diff, DISABLED_Dump) {
     const std::vector<Scenario> scenarios{
         {"testnet-A1", *testnetA1, 4200000, 4198000, 16200000, true, true},
         {"testnet-A2", *testnetA2, 4187001, 4185001, 16187001, true, false},
+        {"testnet-real", Params(CBaseChainParams::TESTNET), 4465026, 4463026, 16465026, true, true},
         {"regtest-R", Params(CBaseChainParams::REGTEST), 300, 1, 2000000, false, true},
     };
     const char* only = std::getenv("NU7_DIFF_ONLY");

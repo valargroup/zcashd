@@ -13,12 +13,12 @@ of each quantity in [`SPEC.md`](SPEC.md), computed with each node's production c
 ## Provenance of `zakura.jsonl.gz`
 
 Written by Zakura's ignored test `crates/zakura-consensus/tests/nu7_diff_dump.rs`, from
-commit fad9745af (branch `adam/nu7-diff-dump-harness`) on top of Zakura `main` at 2af66b616:
+commit a4021b9ba (branch `adam/nu7-diff-dump-harness`) on top of Zakura `main` at 3ef9f45f2:
 
 ```sh
 NU7_DIFF_OUT=zakura.jsonl cargo test -p zakura-consensus --test nu7_diff_dump -- --ignored
 sort zakura.jsonl | gzip -9n > zakura.jsonl.gz
 ```
 
-It has 344,118 rows. Regenerate it whenever Zakura's NU7 rules or the spec change, and
+It has 478,906 rows. Regenerate it whenever Zakura's NU7 rules or the spec change, and
 update this section.

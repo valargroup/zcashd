@@ -790,104 +790,104 @@ version = "3.0.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.zakura-address]]
-version = "2.1.0"
+version = "2.2.0"
 criteria = "safe-to-deploy"
-notes = "Coordinated Zakura Common 2.1.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
+notes = "Coordinated Zakura Common 2.2.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
 
 [[exemptions.zakura-bellman]]
-version = "2.1.0"
+version = "2.2.0"
 criteria = "safe-to-deploy"
-notes = "Coordinated Zakura Common 2.1.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
+notes = "Coordinated Zakura Common 2.2.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
 
 [[exemptions.zakura-bls12-381]]
-version = "2.1.0"
+version = "2.2.0"
 criteria = "safe-to-deploy"
-notes = "Coordinated Zakura Common 2.1.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
+notes = "Coordinated Zakura Common 2.2.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
 
 [[exemptions.zakura-equihash]]
-version = "2.1.0"
+version = "2.2.0"
 criteria = "safe-to-deploy"
-notes = "Coordinated Zakura Common 2.1.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
+notes = "Coordinated Zakura Common 2.2.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
 
 [[exemptions.zakura-halo2-gadgets]]
-version = "2.1.0"
+version = "2.2.0"
 criteria = "safe-to-deploy"
-notes = "Coordinated Zakura Common 2.1.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
+notes = "Coordinated Zakura Common 2.2.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
 
 [[exemptions.zakura-halo2-legacy-pdqsort]]
-version = "2.1.0"
+version = "2.2.0"
 criteria = "safe-to-deploy"
-notes = "Coordinated Zakura Common 2.1.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
+notes = "Coordinated Zakura Common 2.2.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
 
 [[exemptions.zakura-halo2-poseidon]]
-version = "2.1.0"
+version = "2.2.0"
 criteria = "safe-to-deploy"
-notes = "Coordinated Zakura Common 2.1.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
+notes = "Coordinated Zakura Common 2.2.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
 
 [[exemptions.zakura-halo2-proofs]]
-version = "2.1.0"
+version = "2.2.0"
 criteria = "safe-to-deploy"
-notes = "Coordinated Zakura Common 2.1.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
+notes = "Coordinated Zakura Common 2.2.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
 
 [[exemptions.zakura-jubjub]]
-version = "2.1.0"
+version = "2.2.0"
 criteria = "safe-to-deploy"
-notes = "Coordinated Zakura Common 2.1.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
+notes = "Coordinated Zakura Common 2.2.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
 
 [[exemptions.zakura-orchard]]
-version = "2.1.0"
+version = "2.2.0"
 criteria = "safe-to-deploy"
-notes = "Coordinated Zakura Common 2.1.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
+notes = "Coordinated Zakura Common 2.2.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
 
 [[exemptions.zakura-pairing]]
-version = "2.1.0"
+version = "2.2.0"
 criteria = "safe-to-deploy"
-notes = "Coordinated Zakura Common 2.1.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
+notes = "Coordinated Zakura Common 2.2.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
 
 [[exemptions.zakura-pasta-curves]]
-version = "2.1.0"
+version = "2.2.0"
 criteria = "safe-to-deploy"
-notes = "Coordinated Zakura Common 2.1.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
+notes = "Coordinated Zakura Common 2.2.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
 
 [[exemptions.zakura-primitives]]
-version = "2.1.0"
+version = "2.2.0"
 criteria = "safe-to-deploy"
-notes = "Coordinated Zakura Common 2.1.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
+notes = "Coordinated Zakura Common 2.2.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
 
 [[exemptions.zakura-proofs]]
-version = "2.1.0"
+version = "2.2.0"
 criteria = "safe-to-deploy"
-notes = "Coordinated Zakura Common 2.1.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
+notes = "Coordinated Zakura Common 2.2.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
 
 [[exemptions.zakura-protocol]]
-version = "2.1.0"
+version = "2.2.0"
 criteria = "safe-to-deploy"
-notes = "Coordinated Zakura Common 2.1.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
+notes = "Coordinated Zakura Common 2.2.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
 
 [[exemptions.zakura-reddsa]]
-version = "2.1.0"
+version = "2.2.0"
 criteria = "safe-to-deploy"
-notes = "Coordinated Zakura Common 2.1.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
+notes = "Coordinated Zakura Common 2.2.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
 
 [[exemptions.zakura-redjubjub]]
-version = "2.1.0"
+version = "2.2.0"
 criteria = "safe-to-deploy"
-notes = "Coordinated Zakura Common 2.1.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
+notes = "Coordinated Zakura Common 2.2.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
 
 [[exemptions.zakura-sapling-crypto]]
-version = "2.1.0"
+version = "2.2.0"
 criteria = "safe-to-deploy"
-notes = "Coordinated Zakura Common 2.1.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
+notes = "Coordinated Zakura Common 2.2.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
 
 [[exemptions.zakura-sinsemilla]]
-version = "2.1.0"
+version = "2.2.0"
 criteria = "safe-to-deploy"
-notes = "Coordinated Zakura Common 2.1.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
+notes = "Coordinated Zakura Common 2.2.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
 
 [[exemptions.zakura-transparent]]
-version = "2.1.0"
+version = "2.2.0"
 criteria = "safe-to-deploy"
-notes = "Coordinated Zakura Common 2.1.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
+notes = "Coordinated Zakura Common 2.2.0 release, the same crates Zakura pins; retain this exact-version exemption pending direct package audit."
 
 [[exemptions.zcash_history]]
 version = "0.5.0"

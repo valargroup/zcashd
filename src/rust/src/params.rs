@@ -112,7 +112,7 @@ mod tests {
         .unwrap();
         let test = network(
             "test", 207_500, 280_000, 584_000, 903_800, 1_028_500, 1_842_420, 2_976_000, 3_536_500,
-            4_052_000, 4_134_000, -1,
+            4_052_000, 4_134_000, 4_465_026,
         )
         .unwrap();
 
@@ -129,6 +129,7 @@ mod tests {
             NetworkUpgrade::Nu6_1,
             NetworkUpgrade::Nu6_2,
             NetworkUpgrade::Nu6_3,
+            NetworkUpgrade::Nu7,
         ] {
             assert_eq!(
                 main.activation_height(nu),
