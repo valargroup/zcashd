@@ -2,6 +2,7 @@
 
 #include "chainparams.h"
 #include "consensus/funding.h"
+#include "consensus/upgrades.h"
 #include "key_io.h"
 #include "script/standard.h"
 
@@ -40,7 +41,6 @@ static CAmount StreamValue(const Consensus::Params& params, Consensus::FundingSt
 TEST(NU7Subsidy, PublicNetworkHalvingsMoveWithNU7) {
     // Without NU7, the third halving stays at its pre-NU7 height.
     EXPECT_EQ(Params(CBaseChainParams::MAIN).GetConsensus().HeightForHalving(3), 4406400);
-    EXPECT_EQ(Params(CBaseChainParams::TESTNET).GetConsensus().HeightForHalving(3), 4476000);
 
     // With NU7 at A, the third halving is at A + 3 * (H3 - A), and the fourth one
     // PostNU7HalvingInterval (5,040,000) blocks later.
@@ -69,6 +69,40 @@ TEST(NU7Subsidy, PublicNetworkHalvingsMoveWithNU7) {
     for (size_t i = 0; i < expected.size(); i++) {
         EXPECT_EQ(testnet->GetConsensus().HeightForHalving(i + 1), expected[i]) << "halving " << i + 1;
     }
+}
+
+TEST(NU7Subsidy, TestnetSchedule) {
+    // NU7 activates on Testnet at 4,465,026. Zakura derives the same values from that height.
+    const auto& params = Params(CBaseChainParams::TESTNET).GetConsensus();
+    const int nu7 = 4465026;
+    EXPECT_EQ(params.vUpgrades[Consensus::UPGRADE_NU7].nActivationHeight, nu7);
+    EXPECT_EQ(CurrentEpochBranchId(nu7 - 1, params), NetworkUpgradeInfo[Consensus::UPGRADE_NU6_3].nBranchId);
+    EXPECT_EQ(CurrentEpochBranchId(nu7, params), 0x77190ad9);
+
+    // ZIP 218 spacing and averaging window; the minimum-difficulty gap stays 450 seconds.
+    EXPECT_EQ(params.PoWTargetSpacing(nu7 - 1), 75);
+    EXPECT_EQ(params.PoWTargetSpacing(nu7), 25);
+    EXPECT_EQ(params.PoWAveragingWindow(nu7 - 1), 17);
+    EXPECT_EQ(params.PoWAveragingWindow(nu7), 102);
+    for (int height : {nu7 - 1, nu7, nu7 + 1}) {
+        EXPECT_EQ(params.MinDifficultyGap(height), 450) << height;
+    }
+
+    // The third halving moves to 4,497,948, where the Revision 2 streams now end.
+    EXPECT_EQ(params.HeightForHalving(3), 4497948);
+    EXPECT_EQ(params.HeightForHalving(4), 9537948);
+    EXPECT_EQ(params.GetBlockSubsidy(nu7 - 1), 156250000);
+    EXPECT_EQ(params.GetBlockSubsidy(nu7), 52083333);
+    EXPECT_EQ(params.GetBlockSubsidy(4497947), 52083333);
+    EXPECT_EQ(params.GetBlockSubsidy(4497948), 26041666);
+    EXPECT_EQ(params.vFundingStreams[Consensus::FS_FPF_ZCG_H3]->GetEndHeight(), 4497948);
+    EXPECT_EQ(params.vFundingStreams[Consensus::FS_CCF_H3]->GetEndHeight(), 4497948);
+    EXPECT_EQ(StreamValue(params, Consensus::FS_FPF_ZCG_H3, nu7), 4166666);
+    EXPECT_EQ(StreamValue(params, Consensus::FS_CCF_H3, nu7), 6249999);
+    EXPECT_EQ(StreamValue(params, Consensus::FS_FPF_ZCG_H3, 4497948), 0);
+
+    // ZIP 237 reissuance starts at 16,235,274 - 2 * 4,465,026.
+    EXPECT_EQ(params.NSMReissuanceHeight(), 7305222);
 }
 
 TEST(NU7Subsidy, RegtestHalvings) {
@@ -108,7 +142,6 @@ TEST(NU7Subsidy, Revision2StreamsEndAtTheMovedThirdHalving) {
 
     // Without NU7 the Revision 2 end heights are unchanged.
     EXPECT_EQ(Params(CBaseChainParams::MAIN).GetConsensus().vFundingStreams[Consensus::FS_FPF_ZCG_H3]->GetEndHeight(), 4406400);
-    EXPECT_EQ(Params(CBaseChainParams::TESTNET).GetConsensus().vFundingStreams[Consensus::FS_FPF_ZCG_H3]->GetEndHeight(), 4476000);
     EXPECT_EQ(Consensus::NU7AdjustedFundingStreamHeight(4476000, std::nullopt), 4476000);
     EXPECT_EQ(Consensus::NU7AdjustedFundingStreamHeight(4476000, 4476000), 4476000);
     EXPECT_EQ(Consensus::NU7AdjustedFundingStreamHeight(4476000, 4476003), 4476000);

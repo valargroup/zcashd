@@ -7,6 +7,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -47,15 +48,16 @@ TEST(UpgradeTable, Complete) {
     EXPECT_EQ(Consensus::UPGRADE_NU7 + 1, Consensus::UPGRADE_ZFUTURE);
     EXPECT_EQ(NetworkUpgradeInfo[Consensus::UPGRADE_ZFUTURE].nBranchId, 0xffffffff);
 
-    // ZIP 204: NU7 is 170190 on Mainnet and 170180 on Testnet and Regtest. The
-    // activation heights stay unscheduled until ZIP 259 assigns them.
-    for (const auto& [network, protocolVersion] : std::vector<std::pair<std::string, int>>{
-             {CBaseChainParams::MAIN, 170190},
-             {CBaseChainParams::TESTNET, 170180},
-             {CBaseChainParams::REGTEST, 170180}}) {
+    // ZIP 204: NU7 is 170190 on Mainnet and 170180 on Testnet and Regtest. NU7 activates on
+    // Testnet at 4,465,026, as in Zakura; Mainnet and default Regtest stay unscheduled.
+    constexpr int unscheduled = Consensus::NetworkUpgrade::NO_ACTIVATION_HEIGHT;
+    for (const auto& [network, protocolVersion, activationHeight] : std::vector<std::tuple<std::string, int, int>>{
+             {CBaseChainParams::MAIN, 170190, unscheduled},
+             {CBaseChainParams::TESTNET, 170180, 4465026},
+             {CBaseChainParams::REGTEST, 170180, unscheduled}}) {
         const auto& nu7 = Params(network).GetConsensus().vUpgrades[Consensus::UPGRADE_NU7];
         EXPECT_EQ(nu7.nProtocolVersion, protocolVersion) << network;
-        EXPECT_EQ(nu7.nActivationHeight, Consensus::NetworkUpgrade::NO_ACTIVATION_HEIGHT) << network;
+        EXPECT_EQ(nu7.nActivationHeight, activationHeight) << network;
     }
 }
 
