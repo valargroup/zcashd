@@ -1261,6 +1261,10 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
                 _("Invalid value for -preferredtxversion=<version>: %d"),
                 nPreferredTxVersion));
     }
+    if (nPreferredTxVersion < ZIP225_TX_VERSION &&
+        chainparams.GetConsensus().GetActivationHeight(Consensus::UPGRADE_NU7).has_value()) {
+        InitWarning(_("-preferredtxversion=4 only applies before NU7: from NU7, v4 transactions are invalid (ZIP 2003), so v5 transactions are created instead."));
+    }
 
     fIsBareMultisigStd = GetBoolArg("-permitbaremultisig", DEFAULT_PERMIT_BAREMULTISIG);
     fAcceptDatacarrier = GetBoolArg("-datacarrier", DEFAULT_ACCEPT_DATACARRIER);
