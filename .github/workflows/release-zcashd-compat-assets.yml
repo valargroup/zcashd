@@ -25,7 +25,10 @@ jobs:
             host: x86_64-pc-linux-gnu
             cross_deps: ""
     steps:
+      # Build the tagged source, also for a manual run from another branch.
       - uses: actions/checkout@v6.0.3
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.release_tag }}
 
       - name: Resolve release tag
         id: release-tag
@@ -41,6 +44,20 @@ jobs:
             exit 1
           fi
           echo "value=$TAG" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # Zakura pins the checksums of published assets, so a rebuild must never replace them.
+      - name: Refuse to rebuild a tag with published assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release-tag.outputs.value }}
+        run: |
+          if gh release view "$TAG" --repo "${{ github.repository }}" --json assets --jq '.assets[].name' \
+              | grep -q '\.tar\.gz$'; then
+            echo "::error::Release $TAG already has assets, which Zakura may pin. Publish a new tag instead."
+            exit 1
+          fi
 
       - name: Install cross-compilation dependencies
         if: matrix.cross_deps != ''
@@ -59,6 +76,13 @@ jobs:
             --host "${{ matrix.host }}" \
             --version "${{ steps.release-tag.outputs.value }}" \
             --output-dir "./artifacts/${{ matrix.name }}"
+
+      # Upload before the Docker steps, so that a Docker failure cannot lose the assets.
+      - name: Upload matrix artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: zcashd-compat-${{ matrix.name }}
+          path: ./artifacts/${{ matrix.name }}
 
       - name: Prepare Docker build context
         if: matrix.name == 'linux-x86_64'
@@ -101,14 +125,8 @@ jobs:
           tags: zakuracore/zcashd:${{ steps.release-tag.outputs.value }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ steps.release-tag.outputs.sha }}
             org.opencontainers.image.version=${{ steps.release-tag.outputs.value }}
-
-      - name: Upload matrix artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: zcashd-compat-${{ matrix.name }}
-          path: ./artifacts/${{ matrix.name }}
 
   publish-assets:
     name: Publish zcashd compat assets
@@ -183,10 +201,12 @@ jobs:
           find ./publish -type f -name '*.tar.gz' -exec cp {} ./publish/final/ \;
           (cd ./publish/final && sha256sum ./* > SHA256SUMS.txt)
 
+      # A release candidate is a prerelease, so it never becomes the latest release.
       - name: Upload assets to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.release-tag.outputs.value }}
+          prerelease: ${{ contains(steps.release-tag.outputs.value, '-rc') }}
           files: |
             ./publish/final/*.tar.gz
             ./publish/final/zcashd-zebra-compat-manifest-*.json
