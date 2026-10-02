@@ -112,7 +112,8 @@ static void ValidateUpgradeTable(const Consensus::Params& consensus, bool public
 
 class CMainParams : public CChainParams {
 public:
-    CMainParams() {
+    /** nu7ActivationHeight overrides the NU7 activation height (for tests). */
+    explicit CMainParams(std::optional<int> nu7ActivationHeight = std::nullopt) {
         keyConstants.strNetworkID = "main";
         strCurrencyUnits = "ZEC";
         keyConstants.bip44CoinType = 133; // As registered in https://github.com/satoshilabs/slips/blob/master/slip-0044.md
@@ -120,6 +121,7 @@ public:
         consensus.nSubsidySlowStartInterval = 20000;
         consensus.nPreBlossomSubsidyHalvingInterval = Consensus::PRE_BLOSSOM_HALVING_INTERVAL;
         consensus.nPostBlossomSubsidyHalvingInterval = POST_BLOSSOM_HALVING_INTERVAL(Consensus::PRE_BLOSSOM_HALVING_INTERVAL);
+        consensus.nPostNU7SubsidyHalvingInterval = POST_NU7_HALVING_INTERVAL(Consensus::PRE_BLOSSOM_HALVING_INTERVAL);
         consensus.nMajorityEnforceBlockUpgrade = 750;
         consensus.nMajorityRejectBlockOutdated = 950;
         consensus.nMajorityWindow = 4000;
@@ -179,7 +181,7 @@ public:
         // ZIP 204 assigns NU7 protocol version 170190 on Mainnet.
         consensus.vUpgrades[Consensus::UPGRADE_NU7].nProtocolVersion = 170190;
         consensus.vUpgrades[Consensus::UPGRADE_NU7].nActivationHeight =
-            Consensus::NetworkUpgrade::NO_ACTIVATION_HEIGHT;
+            nu7ActivationHeight.value_or(Consensus::NetworkUpgrade::NO_ACTIVATION_HEIGHT);
         consensus.vUpgrades[Consensus::UPGRADE_ZFUTURE].nProtocolVersion = 0x7FFFFFFF;
         consensus.vUpgrades[Consensus::UPGRADE_ZFUTURE].nActivationHeight =
             Consensus::NetworkUpgrade::NO_ACTIVATION_HEIGHT;
@@ -307,20 +309,31 @@ public:
                 nu6Activation,
                 nu6_1Activation);
 
-            // ZIP 214 Revision 2
-            // FPF uses a single address repeated 36 times, once for each funding period.
+            // ZIP 214 Revision 2, with the Revision 3 end height: if NU7 activates before
+            // the third halving, the streams end at HeightForHalving(3) under ZIP 218.
+            const auto nu7Activation = consensus.GetActivationHeight(Consensus::UPGRADE_NU7);
+            const int rev2EndHeight = Consensus::NU7AdjustedFundingStreamHeight(4406400, nu7Activation);
+            // FPF uses one address per funding period, 36 in total. ZIP 2008 replaces the
+            // recipient from the first period that starts after NU7 activation:
+            // N = AddressIndex(NU7ActivationHeight - 1) + 1.
             std::vector<std::string> fpf_addresses_h3(36, "t3cFfPt1Bcvgez9ZbMBFWeZsskxTkPzGCow");
+            if (nu7Activation.has_value() && *nu7Activation - 1 >= nu6_1Activation) {
+                const int firstNewIndex = consensus.FundingPeriodIndex(nu6_1Activation, *nu7Activation - 1) + 1;
+                for (int i = firstNewIndex; i < (int) fpf_addresses_h3.size(); i++) {
+                    fpf_addresses_h3[i] = "t1MkHnkxVjNpNbCrSs3AJ8J7ZSp6NTYiUcG";
+                }
+            }
             consensus.AddZIP207FundingStream(
                 keyConstants,
                 Consensus::FS_FPF_ZCG_H3,
                 nu6_1Activation,
-                4406400,
+                rev2EndHeight,
                 fpf_addresses_h3);
             consensus.AddZIP207LockboxStream(
                 keyConstants,
                 Consensus::FS_CCF_H3,
                 nu6_1Activation,
-                4406400);
+                rev2EndHeight);
 
             // ZIP 271
             // For convenience of distribution, we split the lockbox contents into 10 equal chunks.
@@ -508,7 +521,8 @@ static CMainParams mainParams;
  */
 class CTestNetParams : public CChainParams {
 public:
-    CTestNetParams() {
+    /** nu7ActivationHeight overrides the NU7 activation height (for tests). */
+    explicit CTestNetParams(std::optional<int> nu7ActivationHeight = std::nullopt) {
         keyConstants.strNetworkID = "test";
         strCurrencyUnits = "TAZ";
         keyConstants.bip44CoinType = 1;
@@ -516,6 +530,7 @@ public:
         consensus.nSubsidySlowStartInterval = 20000;
         consensus.nPreBlossomSubsidyHalvingInterval = Consensus::PRE_BLOSSOM_HALVING_INTERVAL;
         consensus.nPostBlossomSubsidyHalvingInterval = POST_BLOSSOM_HALVING_INTERVAL(Consensus::PRE_BLOSSOM_HALVING_INTERVAL);
+        consensus.nPostNU7SubsidyHalvingInterval = POST_NU7_HALVING_INTERVAL(Consensus::PRE_BLOSSOM_HALVING_INTERVAL);
         consensus.nMajorityEnforceBlockUpgrade = 51;
         consensus.nMajorityRejectBlockOutdated = 75;
         consensus.nMajorityWindow = 400;
@@ -575,7 +590,7 @@ public:
         // ZIP 204 assigns NU7 protocol version 170180 on Testnet.
         consensus.vUpgrades[Consensus::UPGRADE_NU7].nProtocolVersion = 170180;
         consensus.vUpgrades[Consensus::UPGRADE_NU7].nActivationHeight =
-            Consensus::NetworkUpgrade::NO_ACTIVATION_HEIGHT;
+            nu7ActivationHeight.value_or(Consensus::NetworkUpgrade::NO_ACTIVATION_HEIGHT);
         consensus.vUpgrades[Consensus::UPGRADE_ZFUTURE].nProtocolVersion = 0x7FFFFFFF;
         consensus.vUpgrades[Consensus::UPGRADE_ZFUTURE].nActivationHeight =
             Consensus::NetworkUpgrade::NO_ACTIVATION_HEIGHT;
@@ -712,17 +727,21 @@ public:
             // There are 27 periods because the start height is after the second halving
             // on testnet and does not align with a period boundary.
             std::vector<std::string> fpf_addresses_h3(27, "t2HifwjUj9uyxr9bknR8LFuQbc98c3vkXtu");
+            // ZIP 214 Revision 3: if NU7 activates before the third halving, the streams end
+            // at HeightForHalving(3) under ZIP 218. They keep the same number of periods.
+            const int rev2EndHeight = Consensus::NU7AdjustedFundingStreamHeight(
+                4476000, consensus.GetActivationHeight(Consensus::UPGRADE_NU7));
             consensus.AddZIP207FundingStream(
                 keyConstants,
                 Consensus::FS_FPF_ZCG_H3,
                 nu6_1Activation,
-                4476000,
+                rev2EndHeight,
                 fpf_addresses_h3);
             consensus.AddZIP207LockboxStream(
                 keyConstants,
                 Consensus::FS_CCF_H3,
                 nu6_1Activation,
-                4476000);
+                rev2EndHeight);
 
             // ZIP 271
             // For testing purposes, we split the lockbox contents into 10 equal chunks.
@@ -869,6 +888,7 @@ public:
         consensus.nSubsidySlowStartInterval = 0;
         consensus.nPreBlossomSubsidyHalvingInterval = Consensus::PRE_BLOSSOM_REGTEST_HALVING_INTERVAL;
         consensus.nPostBlossomSubsidyHalvingInterval = POST_BLOSSOM_HALVING_INTERVAL(Consensus::PRE_BLOSSOM_REGTEST_HALVING_INTERVAL);
+        consensus.nPostNU7SubsidyHalvingInterval = POST_NU7_HALVING_INTERVAL(Consensus::PRE_BLOSSOM_REGTEST_HALVING_INTERVAL);
         consensus.nMajorityEnforceBlockUpgrade = 750;
         consensus.nMajorityRejectBlockOutdated = 950;
         consensus.nMajorityWindow = 1000;
@@ -1067,6 +1087,16 @@ public:
 static CRegTestParams regTestParams;
 
 static const CChainParams* pCurrentParams = nullptr;
+
+std::unique_ptr<CChainParams> CreateChainParamsWithNU7ForTesting(const std::string& chain, int nu7ActivationHeight)
+{
+    if (chain == CBaseChainParams::MAIN) {
+        return std::make_unique<CMainParams>(nu7ActivationHeight);
+    } else if (chain == CBaseChainParams::TESTNET) {
+        return std::make_unique<CTestNetParams>(nu7ActivationHeight);
+    }
+    throw std::runtime_error(strprintf("%s: unsupported chain %s", __func__, chain));
+}
 
 const CChainParams& Params() {
     assert(pCurrentParams);
