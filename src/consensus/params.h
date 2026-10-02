@@ -341,6 +341,17 @@ static const unsigned int PRE_BLOSSOM_REGTEST_HALVING_INTERVAL = 144;
 int NU7AdjustedFundingStreamHeight(int height, std::optional<int> nu7Activation);
 
 /**
+ * ZIP 237 BLOCK_SUBSIDY_FRACTION from NU7: floor(LN2_SCALED / PostNU7HalvingInterval) / 10^10.
+ * As in Zakura, the fraction is the same on every network.
+ */
+static const int64_t NSM_LN2_SCALED = 6931680000;
+static const int64_t NSM_BLOCK_SUBSIDY_FRACTION_NUMERATOR = 1375;
+static const int64_t NSM_BLOCK_SUBSIDY_FRACTION_DENOMINATOR = 10000000000;
+static_assert(
+    NSM_LN2_SCALED / POST_NU7_HALVING_INTERVAL(PRE_BLOSSOM_HALVING_INTERVAL) == NSM_BLOCK_SUBSIDY_FRACTION_NUMERATOR,
+    "ZIP 237 BLOCK_SUBSIDY_FRACTION numerator is floor(LN2_SCALED / PostNU7HalvingInterval)");
+
+/**
  * Parameters that influence chain consensus.
  */
 struct Params {
@@ -423,6 +434,49 @@ struct Params {
      * starting at fundingStreamStartHeight.
      */
     int FundingPeriodIndex(int fundingStreamStartHeight, int nHeight) const;
+
+    /**
+     * ZIP 237 INITIAL_NSM_VALUE_BALANCE, the NSM value balance after block
+     * NU7ActivationHeight - 1, or nullopt to derive it there from the chain supply
+     * (ScheduledIssuance(height) - chain total supply), which regtest does by default.
+     */
+    std::optional<CAmount> nInitialNSMValueBalance;
+    /**
+     * Whether the NSM value balance derived at NU7ActivationHeight - 1 must also equal
+     * nInitialNSMValueBalance (Mainnet and Testnet, whose constants were measured).
+     */
+    bool fCheckInitialNSMValueBalance = false;
+    /** For tests only: NSM reissuance starts here (not before NU7) instead of the derived height. */
+    std::optional<int> nTestNSMReissuanceHeight;
+
+    /**
+     * ZIP 235: the part of a block's total non-coinbase fees nFees that its coinbase may
+     * claim. From NU7, floor(6 * nFees / 10) of the aggregate is removed from circulation.
+     */
+    CAmount MinerFeeShare(int nHeight, CAmount nFees) const;
+
+    /**
+     * The scheduled block subsidy summed over heights 1 to nHeight. As in Zakura, the
+     * genesis subsidy (zero on Mainnet and Testnet) is excluded.
+     */
+    CAmount ScheduledIssuance(int nHeight) const;
+
+    /**
+     * ZIP 237 DEPLOYMENT_BLOCK_HEIGHT: the first height in [max(A, H3 + 1), H4) at which
+     * ceil(BLOCK_SUBSIDY_FRACTION * (MAX_MONEY - ScheduledIssuance(height - 1))) is below the
+     * scheduled subsidy, where A is the NU7 activation height and H3 and H4 the third and
+     * fourth halvings. nullopt if NU7 is not scheduled or there is no such height.
+     */
+    std::optional<int> NSMReissuanceHeight() const;
+
+    /** Whether ZIP 237 NSM reissuance applies to the block at nHeight. */
+    bool IsNSMReissuanceActive(int nHeight) const;
+
+    /**
+     * ZIP 237 AdditionalBlockSubsidy(nHeight) given NSMValueBalance(nHeight - 1):
+     * ceil(BLOCK_SUBSIDY_FRACTION * balance) once reissuance is active, otherwise zero.
+     */
+    CAmount AdditionalBlockSubsidy(int nHeight, CAmount parentNSMValueBalance) const;
 
     /** Used to check majorities for block version upgrade */
     int nMajorityEnforceBlockUpgrade;
