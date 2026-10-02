@@ -68,6 +68,8 @@ pub(crate) fn network(
             nu6_1: i32_to_optional_height(nu6_1),
             nu6_2: i32_to_optional_height(nu6_2),
             nu6_3: i32_to_optional_height(nu6_3),
+            // Plumbed from the C++ chainparams in the NU7 declaration change.
+            nu7: None,
         }),
         _ => return Err("Unsupported network kind"),
     };
