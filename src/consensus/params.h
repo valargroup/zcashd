@@ -44,6 +44,7 @@ enum UpgradeIndex : uint32_t {
     UPGRADE_NU6_1,
     UPGRADE_NU6_2,
     UPGRADE_NU6_3,
+    UPGRADE_NU7,
     // Add new network upgrades before this line.
     // NOTE: Also add new upgrades to NetworkUpgradeInfo in upgrades.cpp
     UPGRADE_ZFUTURE,
@@ -54,12 +55,14 @@ struct NetworkUpgrade {
     /**
      * The first protocol version which will understand the new consensus rules
      */
-    int nProtocolVersion;
+    int nProtocolVersion = 0;
 
     /**
-     * Height of the first block for which the new consensus rules will be active
+     * Height of the first block for which the new consensus rules will be active.
+     * Defaults to NO_ACTIVATION_HEIGHT so that an entry a network forgets to set
+     * never activates (zero would mean ALWAYS_ACTIVE).
      */
-    int nActivationHeight;
+    int nActivationHeight = NO_ACTIVATION_HEIGHT;
 
     /**
      * Special value for nActivationHeight indicating that the upgrade is always active.

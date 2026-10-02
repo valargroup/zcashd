@@ -10,7 +10,9 @@
  * network protocol versioning
  */
 
-static const int PROTOCOL_VERSION = 170160;
+// NU7 (ZIP 204): 170180 is the Testnet/Regtest NU7 version. Releases advertise it
+// until the release that sets the Mainnet NU7 height, which moves to 170190.
+static const int PROTOCOL_VERSION = 170180;
 
 //! initial proto version, to be increased after version/verack negotiation
 static const int INIT_PROTO_VERSION = 209;

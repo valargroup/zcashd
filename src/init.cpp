@@ -1377,6 +1377,40 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
         }
     }
 
+    // The Rust side derives consensus branch ids from the same activation heights
+    // (via RustNetwork), so both sides must agree at every scheduled upgrade
+    // boundary. Rust cannot represent the regtest-only test dummy and ZFUTURE
+    // upgrades, so skip the check when either is scheduled.
+    {
+        const auto& consensusParams = chainparams.GetConsensus();
+        const bool unrepresentable =
+            consensusParams.vUpgrades[Consensus::UPGRADE_TESTDUMMY].nActivationHeight !=
+                Consensus::NetworkUpgrade::NO_ACTIVATION_HEIGHT ||
+            consensusParams.vUpgrades[Consensus::UPGRADE_ZFUTURE].nActivationHeight !=
+                Consensus::NetworkUpgrade::NO_ACTIVATION_HEIGHT;
+        if (!unrepresentable) {
+            auto rustNetwork = chainparams.RustNetwork();
+            for (int i = Consensus::UPGRADE_OVERWINTER; i < Consensus::UPGRADE_ZFUTURE; i++) {
+                const int activationHeight = consensusParams.vUpgrades[i].nActivationHeight;
+                if (activationHeight == Consensus::NetworkUpgrade::NO_ACTIVATION_HEIGHT) {
+                    continue;
+                }
+                for (int height : {activationHeight - 1, activationHeight}) {
+                    if (height < 0) {
+                        continue;
+                    }
+                    const uint32_t cppBranchId = CurrentEpochBranchId(height, consensusParams);
+                    const uint32_t rustBranchId = consensus::branch_id(*rustNetwork, height);
+                    if (cppBranchId != rustBranchId) {
+                        return InitError(strprintf(
+                            "Consensus branch id mismatch at height %d: C++ %08x, Rust %08x",
+                            height, cppBranchId, rustBranchId));
+                    }
+                }
+            }
+        }
+    }
+
     if (mapArgs.count("-nurejectoldversions")) {
         if (chainparams.NetworkIDString() != "regtest") {
             return InitError("-nurejectoldversions may only be set on regtest.");
