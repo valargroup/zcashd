@@ -480,16 +480,33 @@ namespace Consensus {
     };
 
     int64_t Params::PoWTargetSpacing(int nHeight) const {
-        // zip208
+        // zip208, zip218
         // PoWTargetSpacing(height) :=
         // PreBlossomPoWTargetSpacing, if not IsBlossomActivated(height)
-        // PostBlossomPoWTargetSpacing, otherwise.
+        // PostBlossomPoWTargetSpacing, if IsBlossomActivated(height) and not IsNU7Activated(height)
+        // PostNU7PoWTargetSpacing, otherwise.
+        if (NetworkUpgradeActive(nHeight, Consensus::UPGRADE_NU7)) {
+            return nPostNU7PowTargetSpacing;
+        }
         bool blossomActive = NetworkUpgradeActive(nHeight, Consensus::UPGRADE_BLOSSOM);
         return blossomActive ? nPostBlossomPowTargetSpacing : nPreBlossomPowTargetSpacing;
     }
 
+    int64_t Params::PoWAveragingWindow(int nHeight) const {
+        return NetworkUpgradeActive(nHeight, Consensus::UPGRADE_NU7)
+            ? nPostNU7PowAveragingWindow
+            : nPowAveragingWindow;
+    }
+
     int64_t Params::AveragingWindowTimespan(int nHeight) const {
-        return nPowAveragingWindow * PoWTargetSpacing(nHeight);
+        return PoWAveragingWindow(nHeight) * PoWTargetSpacing(nHeight);
+    }
+
+    int64_t Params::MinDifficultyGap(int nHeight) const {
+        const int spacings = NetworkUpgradeActive(nHeight, Consensus::UPGRADE_NU7)
+            ? POST_NU7_MIN_DIFFICULTY_GAP_SPACINGS
+            : PRE_NU7_MIN_DIFFICULTY_GAP_SPACINGS;
+        return PoWTargetSpacing(nHeight) * spacings;
     }
 
     int64_t Params::MinActualTimespan(int nHeight) const {
