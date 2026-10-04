@@ -53,11 +53,26 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.release-tag.outputs.value }}
         run: |
-          if gh release view "$TAG" --repo "${{ github.repository }}" --json assets --jq '.assets[].name' \
-              | grep -q '\.tar\.gz$'; then
-            echo "::error::Release $TAG already has assets, which Zakura may pin. Publish a new tag instead."
-            exit 1
-          fi
+          set -euo pipefail
+          # Only a missing release may continue; any other lookup failure fails closed.
+          status=$(curl -sS -o release.json -w '%{http_code}' \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "${{ github.api_url }}/repos/${{ github.repository }}/releases/tags/$TAG")
+          case "$status" in
+            200)
+              if jq -r '.assets[].name' release.json | grep -q '\.tar\.gz$'; then
+                echo "::error::Release $TAG already has assets, which Zakura may pin. Publish a new tag instead."
+                exit 1
+              fi
+              ;;
+            404)
+              echo "Release $TAG does not exist yet."
+              ;;
+            *)
+              echo "::error::Looking up release $TAG failed with HTTP $status."
+              exit 1
+              ;;
+          esac
 
       - name: Install cross-compilation dependencies
         if: matrix.cross_deps != ''
@@ -114,6 +129,24 @@ jobs:
           username: valaroman
           password: ${{ secrets.DOCKERHUB_TOKEN_ZAKURA }}
 
+      # Also push the unprefixed tag that the previous release publisher pushed.
+      - name: Resolve Docker tags
+        id: docker-tags
+        if: matrix.name == 'linux-x86_64'
+        shell: bash
+        env:
+          TAG: ${{ steps.release-tag.outputs.value }}
+        run: |
+          tags=("zakuracore/zcashd:${TAG}")
+          if [[ "$TAG" == v* ]]; then
+            tags+=("zakuracore/zcashd:${TAG#v}")
+          fi
+          {
+            echo "tags<<EOF"
+            printf '%s\n' "${tags[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build and push Docker image
         if: matrix.name == 'linux-x86_64'
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
@@ -122,7 +155,7 @@ jobs:
           file: ./contrib/docker/source-runtime.Dockerfile
           platforms: linux/amd64
           push: true
-          tags: zakuracore/zcashd:${{ steps.release-tag.outputs.value }}
+          tags: ${{ steps.docker-tags.outputs.tags }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ steps.release-tag.outputs.sha }}
