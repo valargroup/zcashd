@@ -53,8 +53,9 @@ jobs:
           echo "value=$TAG" >> "$GITHUB_OUTPUT"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      # Zakura pins the checksums of published assets, so a rebuild must never replace them.
-      - name: Refuse to rebuild a tag with published assets
+      # Zakura pins the checksums of published assets, and a rebuilt image would differ from the
+      # pushed one (the base image floats), so a rebuild must never replace either.
+      - name: Refuse to rebuild a tag with published assets or images
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -77,6 +78,21 @@ jobs:
               ;;
             *)
               echo "::error::Looking up release $TAG failed with HTTP $status."
+              exit 1
+              ;;
+          esac
+
+          status=$(curl -sS -o /dev/null -w '%{http_code}' \
+            "https://hub.docker.com/v2/namespaces/zakuracore/repositories/zcashd/tags/$TAG")
+          case "$status" in
+            200)
+              echo "::error::Image zakuracore/zcashd:$TAG already exists. To finish this run, use \"Re-run failed jobs\"; otherwise publish a new tag."
+              exit 1
+              ;;
+            404)
+              ;;
+            *)
+              echo "::error::Looking up image zakuracore/zcashd:$TAG failed with HTTP $status."
               exit 1
               ;;
           esac
