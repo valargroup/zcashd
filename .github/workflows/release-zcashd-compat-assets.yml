@@ -13,6 +13,12 @@ on:
 permissions:
   contents: write
 
+# Runs for the same tag queue instead of overlapping, so a later run's asset check sees what the
+# first run published.
+concurrency:
+  group: release-zcashd-compat-${{ github.event.release.tag_name || inputs.release_tag }}
+  cancel-in-progress: false
+
 jobs:
   build-assets:
     name: Build zcashd compat (${{ matrix.name }})
@@ -25,10 +31,11 @@ jobs:
             host: x86_64-pc-linux-gnu
             cross_deps: ""
     steps:
-      # Build the tagged source, also for a manual run from another branch.
+      # Build the tagged source, also for a manual run from another branch. The qualified ref
+      # keeps a branch with the same name from being built instead.
       - uses: actions/checkout@v6.0.3
         with:
-          ref: ${{ github.event.release.tag_name || inputs.release_tag }}
+          ref: refs/tags/${{ github.event.release.tag_name || inputs.release_tag }}
 
       - name: Resolve release tag
         id: release-tag
@@ -98,6 +105,8 @@ jobs:
         with:
           name: zcashd-compat-${{ matrix.name }}
           path: ./artifacts/${{ matrix.name }}
+          # Lets "Re-run failed jobs" retry a failed Docker step after this upload.
+          overwrite: true
 
       - name: Prepare Docker build context
         if: matrix.name == 'linux-x86_64'
