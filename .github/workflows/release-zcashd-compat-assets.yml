@@ -53,6 +53,23 @@ jobs:
           echo "value=$TAG" >> "$GITHUB_OUTPUT"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+      # Also push the unprefixed tag that the previous release publisher pushed.
+      - name: Resolve Docker tags
+        id: docker-tags
+        shell: bash
+        env:
+          TAG: ${{ steps.release-tag.outputs.value }}
+        run: |
+          tags=("zakuracore/zcashd:${TAG}")
+          if [[ "$TAG" == v* ]]; then
+            tags+=("zakuracore/zcashd:${TAG#v}")
+          fi
+          {
+            echo "tags<<EOF"
+            printf '%s\n' "${tags[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       # Zakura pins the checksums of published assets, and a rebuilt image would differ from the
       # pushed one (the base image floats), so a rebuild must never replace either.
       - name: Refuse to rebuild a tag with published assets or images
@@ -60,9 +77,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.release-tag.outputs.value }}
+          IMAGES: ${{ steps.docker-tags.outputs.tags }}
         run: |
           set -euo pipefail
-          # Only a missing release may continue; any other lookup failure fails closed.
+          # Only a missing release or image may continue; any other lookup failure fails closed.
           status=$(curl -sS -o release.json -w '%{http_code}' \
             -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
             "${{ github.api_url }}/repos/${{ github.repository }}/releases/tags/$TAG")
@@ -82,20 +100,22 @@ jobs:
               ;;
           esac
 
-          status=$(curl -sS -o /dev/null -w '%{http_code}' \
-            "https://hub.docker.com/v2/namespaces/zakuracore/repositories/zcashd/tags/$TAG")
-          case "$status" in
-            200)
-              echo "::error::Image zakuracore/zcashd:$TAG already exists. To finish this run, use \"Re-run failed jobs\"; otherwise publish a new tag."
-              exit 1
-              ;;
-            404)
-              ;;
-            *)
-              echo "::error::Looking up image zakuracore/zcashd:$TAG failed with HTTP $status."
-              exit 1
-              ;;
-          esac
+          while read -r image; do
+            status=$(curl -sS -o /dev/null -w '%{http_code}' \
+              "https://hub.docker.com/v2/namespaces/zakuracore/repositories/zcashd/tags/${image#*:}")
+            case "$status" in
+              200)
+                echo "::error::Image $image already exists. To finish this run, use \"Re-run failed jobs\"; otherwise publish a new tag."
+                exit 1
+                ;;
+              404)
+                ;;
+              *)
+                echo "::error::Looking up image $image failed with HTTP $status."
+                exit 1
+                ;;
+            esac
+          done <<< "$IMAGES"
 
       - name: Install cross-compilation dependencies
         if: matrix.cross_deps != ''
@@ -153,24 +173,6 @@ jobs:
         with:
           username: valaroman
           password: ${{ secrets.DOCKERHUB_TOKEN_ZAKURA }}
-
-      # Also push the unprefixed tag that the previous release publisher pushed.
-      - name: Resolve Docker tags
-        id: docker-tags
-        if: matrix.name == 'linux-x86_64'
-        shell: bash
-        env:
-          TAG: ${{ steps.release-tag.outputs.value }}
-        run: |
-          tags=("zakuracore/zcashd:${TAG}")
-          if [[ "$TAG" == v* ]]; then
-            tags+=("zakuracore/zcashd:${TAG#v}")
-          fi
-          {
-            echo "tags<<EOF"
-            printf '%s\n' "${tags[@]}"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
 
       - name: Build and push Docker image
         if: matrix.name == 'linux-x86_64'
