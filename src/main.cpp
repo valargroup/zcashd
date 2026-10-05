@@ -2126,6 +2126,30 @@ std::string FormatStateMessage(const CValidationState &state)
     return orchard_circuit_version;
 }
 
+/**
+ * The height AcceptToMemoryPool also checks a transaction at: RELAY_HEIGHT_MARGIN blocks
+ * past the next block, or the block after the best header if that is higher.
+ */
+static int RelayHeight(int nextBlockHeight)
+{
+    AssertLockHeld(cs_main);
+    return std::max(
+        nextBlockHeight + RELAY_HEIGHT_MARGIN,
+        pindexBestHeader == nullptr ? 0 : pindexBestHeader->nHeight + 1);
+}
+
+/**
+ * Removes the mempool transactions that commit to a branch ID other than the next block's
+ * or the one at RelayHeight, which AcceptToMemoryPool would now refuse. Once RelayHeight
+ * reaches an upgrade, that is every transaction until the upgrade activates.
+ */
+static void RemoveMempoolTxsForOtherBranches(const Consensus::Params& consensus)
+{
+    AssertLockHeld(cs_main);
+    const int nextBlockHeight = chainActive.Tip()->nHeight + 1;
+    mempool.removeWithoutBranchId(CurrentEpochBranchId(nextBlockHeight, consensus));
+    mempool.removeWithoutBranchId(CurrentEpochBranchId(RelayHeight(nextBlockHeight), consensus));
+}
 
 bool AcceptToMemoryPool(
         const CChainParams& chainparams,
@@ -2178,9 +2202,7 @@ bool AcceptToMemoryPool(
     // check it for. From NU7 it must also fit in a block, which Zakura checks for each
     // transaction.
     {
-        const int relayHeight = std::max(
-            nextBlockHeight + RELAY_HEIGHT_MARGIN,
-            pindexBestHeader == nullptr ? 0 : pindexBestHeader->nHeight + 1);
+        const int relayHeight = RelayHeight(nextBlockHeight);
         CValidationState relayState;
         if (!ContextualCheckTransaction(tx, relayState, chainparams, relayHeight, false)) {
             return state.DoS(0, false, REJECT_NONSTANDARD, "tx-invalid-at-relay-height",
@@ -5381,8 +5403,7 @@ static bool ActivateBestChainStep(CValidationState& state, const CChainParams& c
     if (fBlocksDisconnected) {
         mempool.removeForReorg(pcoinsTip, chainActive.Tip()->nHeight + 1, STANDARD_LOCKTIME_VERIFY_FLAGS);
     }
-    mempool.removeWithoutBranchId(
-        CurrentEpochBranchId(chainActive.Tip()->nHeight + 1, chainparams.GetConsensus()));
+    RemoveMempoolTxsForOtherBranches(chainparams.GetConsensus());
     mempool.check(pcoinsTip);
 
     // Callbacks/notifications for a new best chain.
@@ -5511,8 +5532,7 @@ bool InvalidateBlock(CValidationState& state, const CChainParams& chainparams, C
         // unconditionally valid already, so force disconnect away from it.
         if (!DisconnectTip(state, chainparams)) {
             mempool.removeForReorg(pcoinsTip, chainActive.Tip()->nHeight + 1, STANDARD_LOCKTIME_VERIFY_FLAGS);
-            mempool.removeWithoutBranchId(
-                CurrentEpochBranchId(chainActive.Tip()->nHeight + 1, chainparams.GetConsensus()));
+            RemoveMempoolTxsForOtherBranches(chainparams.GetConsensus());
             return false;
         }
     }
@@ -5529,8 +5549,7 @@ bool InvalidateBlock(CValidationState& state, const CChainParams& chainparams, C
 
     InvalidChainFound(pindex, chainparams);
     mempool.removeForReorg(pcoinsTip, chainActive.Tip()->nHeight + 1, STANDARD_LOCKTIME_VERIFY_FLAGS);
-    mempool.removeWithoutBranchId(
-        CurrentEpochBranchId(chainActive.Tip()->nHeight + 1, chainparams.GetConsensus()));
+    RemoveMempoolTxsForOtherBranches(chainparams.GetConsensus());
     return true;
 }
 
@@ -9259,6 +9278,7 @@ bool static ProcessMessage(const CChainParams& chainparams, CNode* pfrom, string
             hasNewHeaders = (mapBlockIndex.count(headers.back().GetHash()) == 0);
         }
 
+        const CBlockIndex* pindexBestHeaderBefore = pindexBestHeader;
         CBlockIndex *pindexLast = NULL;
         bool fAcceptedAllHeaders = true;
         for (const CBlockHeader& header : headers) {
@@ -9280,6 +9300,11 @@ bool static ProcessMessage(const CChainParams& chainparams, CNode* pfrom, string
 
         if (pindexLast)
             UpdateBlockAvailability(pfrom->GetId(), pindexLast->GetBlockHash());
+
+        // A higher best header can raise RelayHeight before any block arrives.
+        if (pindexBestHeader != pindexBestHeaderBefore) {
+            RemoveMempoolTxsForOtherBranches(chainparams.GetConsensus());
+        }
 
         const bool fMatchedPendingGetHeaders = fAcceptedAllHeaders && pindexLast && HeadersMatchPendingGetHeaders(*nodestate, headers);
         const bool fReachedRequestedStop = HeadersReachedStop(*nodestate, pindexLast);

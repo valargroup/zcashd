@@ -321,6 +321,27 @@ BOOST_AUTO_TEST_CASE(mempool_refuses_what_zakura_would_reject)
     BOOST_CHECK(Submit(FeeTransaction(3, FEE)) == std::nullopt);
 }
 
+BOOST_AUTO_TEST_CASE(mempool_drops_what_zakura_would_reject)
+{
+    // With the next block at NU7_HEIGHT - 4 a transaction committing to NU6.3 is still
+    // valid at the relay height, NU7_HEIGHT - 1. Assemble that block before submitting the
+    // transaction, so it stays in the mempool.
+    MineTo(NU7_HEIGHT - 5);
+    auto tmpl = TemplateWithCoinbaseDelta(0);
+    const CMutableTransaction mtx = FeeTransaction(1, FEE, 0);
+    BOOST_REQUIRE(Submit(mtx) == std::nullopt);
+    BOOST_REQUIRE(mempool.exists(mtx.GetHash()));
+
+    // Once the block raises the relay height to NU7, Zakura could reject the transaction,
+    // so the mempool drops it rather than relay it.
+    CBlock& block = tmpl->block;
+    Solve(block);
+    CValidationState state;
+    ProcessNewBlock(state, Params(), NULL, &block, true, NULL);
+    BOOST_REQUIRE(chainActive.Tip()->GetBlockHash() == block.GetHash());
+    BOOST_CHECK(!mempool.exists(mtx.GetHash()));
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 #endif // ENABLE_MINING
