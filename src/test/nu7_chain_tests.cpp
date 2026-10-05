@@ -208,6 +208,47 @@ std::vector<std::string> OutboundCommands(CNode& node) {
     return commands;
 }
 
+/** A peer that relays transactions, as after the version handshake (which MSG_WTX inventory needs). */
+std::unique_ptr<CNode> MakePeer(uint32_t ip) {
+    struct in_addr addr;
+    addr.s_addr = ip;
+    auto peer = std::make_unique<CNode>(
+        INVALID_SOCKET, CAddress(CService(CNetAddr(addr), Params().GetDefaultPort())), "", false);
+    peer->nVersion = PROTOCOL_VERSION;
+    {
+        LOCK(peer->cs_vSend);
+        peer->ssSend.SetVersion(PROTOCOL_VERSION);
+    }
+    {
+        LOCK(peer->cs_vRecvMsg);
+        peer->SetRecvVersion(PROTOCOL_VERSION);
+    }
+    {
+        LOCK(peer->cs_filter);
+        peer->fRelayTxes = true;
+    }
+    return peer;
+}
+
+/** Announces `tx` to `peer`, which also puts it in the relay map. */
+void Announce(CNode& peer, const CTransaction& tx) {
+    peer.PushTxInventory(tx.GetWTxId());
+    BOOST_REQUIRE(SendMessages(Params().GetConsensus(), &peer));
+    const auto commands = OutboundCommands(peer);
+    BOOST_REQUIRE(std::find(commands.begin(), commands.end(), "inv") != commands.end());
+}
+
+/** Whether a getdata from `peer` for `tx` is answered with the transaction. */
+bool ServesTx(CNode& peer, const CTransaction& tx) {
+    const WTxId wtxid = tx.GetWTxId();
+    CDataStream payload(SER_NETWORK, PROTOCOL_VERSION);
+    payload << std::vector<CInv>{CInv(MSG_WTX, wtxid.hash, wtxid.authDigest)};
+    ReceiveRawMessage(peer, "getdata", payload);
+    BOOST_REQUIRE(ProcessMessages(Params(), &peer));
+    const auto commands = OutboundCommands(peer);
+    return std::find(commands.begin(), commands.end(), "tx") != commands.end();
+}
+
 /** The chain supply delta of the tip. */
 CAmount TipSupplyDelta() {
     return chainActive.Tip()->nChainTotalSupply.value() - chainActive.Tip()->pprev->nChainTotalSupply.value();
@@ -358,30 +399,8 @@ BOOST_AUTO_TEST_CASE(mempool_drops_what_zakura_would_reject)
     auto tmpl = TemplateWithCoinbaseDelta(0);
     const CTransaction tx(FeeTransaction(1, FEE, 0));
     BOOST_REQUIRE(Submit(CMutableTransaction(tx)) == std::nullopt);
-    BOOST_REQUIRE(mempool.exists(tx.GetHash()));
-
-    // Announce it to a peer, which puts it in the relay map.
-    struct in_addr peerIp;
-    peerIp.s_addr = 0xa0b0c001;
-    CNode peer(INVALID_SOCKET, CAddress(CService(CNetAddr(peerIp), Params().GetDefaultPort())), "", false);
-    // As after the version handshake, which MSG_WTX inventory needs.
-    peer.nVersion = PROTOCOL_VERSION;
-    {
-        LOCK(peer.cs_vSend);
-        peer.ssSend.SetVersion(PROTOCOL_VERSION);
-    }
-    {
-        LOCK(peer.cs_vRecvMsg);
-        peer.SetRecvVersion(PROTOCOL_VERSION);
-    }
-    {
-        LOCK(peer.cs_filter);
-        peer.fRelayTxes = true;
-    }
-    peer.PushTxInventory(tx.GetWTxId());
-    BOOST_REQUIRE(SendMessages(Params().GetConsensus(), &peer));
-    const auto announced = OutboundCommands(peer);
-    BOOST_REQUIRE(std::find(announced.begin(), announced.end(), "inv") != announced.end());
+    auto peer = MakePeer(0xa0b0c001);
+    Announce(*peer, tx);
 
     // Once the block raises the relay height to NU7, Zakura could reject the transaction,
     // so the mempool drops it and a getdata for it gets notfound.
@@ -391,15 +410,58 @@ BOOST_AUTO_TEST_CASE(mempool_drops_what_zakura_would_reject)
     ProcessNewBlock(state, Params(), NULL, &block, true, NULL);
     BOOST_REQUIRE(chainActive.Tip()->GetBlockHash() == block.GetHash());
     BOOST_CHECK(!mempool.exists(tx.GetHash()));
+    BOOST_CHECK(!ServesTx(*peer, tx));
 
-    const WTxId wtxid = tx.GetWTxId();
+    // Disconnecting the block lowers the relay height again, so the mempool readmits the
+    // transaction and serves it to a peer it is announced to.
+    {
+        LOCK(cs_main);
+        CValidationState invalidState;
+        BOOST_REQUIRE(InvalidateBlock(invalidState, Params(), chainActive.Tip()));
+    }
+    BOOST_REQUIRE(Submit(CMutableTransaction(tx)) == std::nullopt);
+    auto otherPeer = MakePeer(0xa0b0c002);
+    Announce(*otherPeer, tx);
+    BOOST_CHECK(ServesTx(*otherPeer, tx));
+}
+
+BOOST_AUTO_TEST_CASE(best_header_drops_what_zakura_would_reject)
+{
+    MineTo(NU7_HEIGHT - 5);
+    const CTransaction tx(FeeTransaction(1, FEE, 0));
+    BOOST_REQUIRE(Submit(CMutableTransaction(tx)) == std::nullopt);
+
+    // Headers up to NU7_HEIGHT - 1 raise the relay height to NU7 before their blocks
+    // arrive, even when a later header in the same message is rejected.
+    std::vector<CBlockHeader> headers;
+    CBlockHeader prev = chainActive.Tip()->GetBlockHeader();
+    for (int i = 0; i < 4; i++) {
+        CBlock block;
+        block.nVersion = CBlockHeader::CURRENT_VERSION;
+        block.hashPrevBlock = prev.GetHash();
+        block.hashMerkleRoot = ArithToUint256(arith_uint256(i + 1));
+        block.nTime = prev.nTime + 1;
+        block.nBits = prev.nBits;
+        Solve(block);
+        headers.push_back(block.GetBlockHeader());
+        prev = headers.back();
+    }
+    CBlockHeader stray = headers.back();
+    stray.hashPrevBlock = uint256();
+    headers.push_back(stray);
+
+    auto peer = MakePeer(0xa0b0c003);
     CDataStream payload(SER_NETWORK, PROTOCOL_VERSION);
-    payload << std::vector<CInv>{CInv(MSG_WTX, wtxid.hash, wtxid.authDigest)};
-    ReceiveRawMessage(peer, "getdata", payload);
-    BOOST_REQUIRE(ProcessMessages(Params(), &peer));
-    const auto replies = OutboundCommands(peer);
-    BOOST_CHECK(std::find(replies.begin(), replies.end(), "tx") == replies.end());
-    BOOST_CHECK(std::find(replies.begin(), replies.end(), "notfound") != replies.end());
+    WriteCompactSize(payload, headers.size());
+    for (const CBlockHeader& header : headers) {
+        payload << header;
+        WriteCompactSize(payload, 0);
+    }
+    ReceiveRawMessage(*peer, "headers", payload);
+    ProcessMessages(Params(), peer.get());
+    BOOST_REQUIRE_EQUAL(pindexBestHeader->nHeight, NU7_HEIGHT - 1);
+    BOOST_CHECK_EQUAL(chainActive.Height(), NU7_HEIGHT - 5);
+    BOOST_CHECK(!mempool.exists(tx.GetHash()));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

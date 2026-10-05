@@ -5644,8 +5644,13 @@ CBlockIndex* AddToBlockIndex(const CBlockHeader& block, const Consensus::Params&
     }
     pindexNew->nChainWork = (pindexNew->pprev ? pindexNew->pprev->nChainWork : 0) + GetBlockProof(*pindexNew);
     pindexNew->RaiseValidity(BLOCK_VALID_TREE);
-    if (pindexBestHeader == NULL || pindexBestHeader->nChainWork < pindexNew->nChainWork)
+    if (pindexBestHeader == NULL || pindexBestHeader->nChainWork < pindexNew->nChainWork) {
         pindexBestHeader = pindexNew;
+        // A higher best header can raise RelayHeight before any block connects.
+        if (chainActive.Tip() != nullptr) {
+            RemoveMempoolTxsForOtherBranches(consensusParams);
+        }
+    }
 
     setDirtyBlockIndex.insert(pindexNew);
 
@@ -9287,7 +9292,6 @@ bool static ProcessMessage(const CChainParams& chainparams, CNode* pfrom, string
             hasNewHeaders = (mapBlockIndex.count(headers.back().GetHash()) == 0);
         }
 
-        const CBlockIndex* pindexBestHeaderBefore = pindexBestHeader;
         CBlockIndex *pindexLast = NULL;
         bool fAcceptedAllHeaders = true;
         for (const CBlockHeader& header : headers) {
@@ -9309,11 +9313,6 @@ bool static ProcessMessage(const CChainParams& chainparams, CNode* pfrom, string
 
         if (pindexLast)
             UpdateBlockAvailability(pfrom->GetId(), pindexLast->GetBlockHash());
-
-        // A higher best header can raise RelayHeight before any block arrives.
-        if (pindexBestHeader != pindexBestHeaderBefore) {
-            RemoveMempoolTxsForOtherBranches(chainparams.GetConsensus());
-        }
 
         const bool fMatchedPendingGetHeaders = fAcceptedAllHeaders && pindexLast && HeadersMatchPendingGetHeaders(*nodestate, headers);
         const bool fReachedRequestedStop = HeadersReachedStop(*nodestate, pindexLast);
@@ -9992,9 +9991,13 @@ bool SendMessages(const Consensus::Params& params, CNode* pto)
                             vRelayExpiration.pop_front();
                         }
 
-                        auto ret = mapRelay.insert(std::make_pair(hash, std::move(txinfo.tx)));
+                        auto ret = mapRelay.insert(std::make_pair(hash, txinfo.tx));
                         if (ret.second) {
                             vRelayExpiration.push_back(std::make_pair(nNow + 15 * 60 * 1000000, ret.first));
+                        } else if (!ret.first->second) {
+                            // RemoveMempoolTxsForOtherBranches emptied it, and the mempool
+                            // has since readmitted the transaction.
+                            ret.first->second = txinfo.tx;
                         }
                     }
                     if (vInv.size() == MAX_INV_SZ) {
