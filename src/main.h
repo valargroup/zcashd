@@ -450,9 +450,10 @@ bool ContextualCheckShieldedInputs(
         bool (*isInitBlockDownload)(const Consensus::Params&) = IsInitialBlockDownload);
 
 /**
- * How many blocks past the next block the mempool also checks a transaction for. As a
- * sidecar this node relays to Zakura, which may be a few blocks ahead and bans a peer
- * that relays a transaction it rejects.
+ * How many blocks past the next block (its own, or Zakura's from the best header) the
+ * mempool also checks a transaction for. As a sidecar this node relays to Zakura, which
+ * may be a few blocks further on by the time it checks one, and bans a peer that relays a
+ * transaction it rejects.
  */
 static const int RELAY_HEIGHT_MARGIN = 3;
 

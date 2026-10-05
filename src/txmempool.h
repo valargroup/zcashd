@@ -505,8 +505,7 @@ public:
     std::vector<uint256> removeExpired(unsigned int nBlockHeight);
     void removeForBlock(const std::vector<CTransaction>& vtx, unsigned int nBlockHeight,
                         std::list<CTransaction>& conflicts);
-    /** Removes the transactions not validated for nMemPoolBranchId, appending them to `removed` if given. */
-    void removeWithoutBranchId(uint32_t nMemPoolBranchId, std::list<CTransaction>* removed = nullptr);
+    void removeWithoutBranchId(uint32_t nMemPoolBranchId);
     void removeContainingOrchard();
     void clear();
     void _clear(); // unlocked

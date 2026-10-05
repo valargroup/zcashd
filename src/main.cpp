@@ -305,8 +305,13 @@ namespace {
     /** Dirty block file entries. */
     set<int> setDirtyFileInfo;
 
+    /** A relayed transaction, and the branch ID it was in the mempool for. */
+    struct RelayedTx {
+        std::shared_ptr<const CTransaction> tx;
+        uint32_t branchId;
+    };
     /** Relay map, protected by cs_main. */
-    typedef std::map<uint256, std::shared_ptr<const CTransaction>> MapRelay;
+    typedef std::map<uint256, RelayedTx> MapRelay;
     MapRelay mapRelay;
     /** Expiration-time ordered list of (expire time, relay map entry) pairs, protected by cs_main). */
     std::deque<std::pair<int64_t, MapRelay::iterator>> vRelayExpiration;
@@ -2128,14 +2133,14 @@ std::string FormatStateMessage(const CValidationState &state)
 
 /**
  * The height AcceptToMemoryPool also checks a transaction at: RELAY_HEIGHT_MARGIN blocks
- * past the next block, or the block after the best header if that is higher.
+ * past the next block, or past the block after the best header if that is higher.
  */
 static int RelayHeight(int nextBlockHeight)
 {
     AssertLockHeld(cs_main);
     return std::max(
-        nextBlockHeight + RELAY_HEIGHT_MARGIN,
-        pindexBestHeader == nullptr ? 0 : pindexBestHeader->nHeight + 1);
+        nextBlockHeight,
+        pindexBestHeader == nullptr ? 0 : pindexBestHeader->nHeight + 1) + RELAY_HEIGHT_MARGIN;
 }
 
 /**
@@ -2147,17 +2152,8 @@ static void RemoveMempoolTxsForOtherBranches(const Consensus::Params& consensus)
 {
     AssertLockHeld(cs_main);
     const int nextBlockHeight = chainActive.Tip()->nHeight + 1;
-    std::list<CTransaction> removed;
-    mempool.removeWithoutBranchId(CurrentEpochBranchId(nextBlockHeight, consensus), &removed);
-    mempool.removeWithoutBranchId(CurrentEpochBranchId(RelayHeight(nextBlockHeight), consensus), &removed);
-    // Stop serving them to getdata from the relay map too. vRelayExpiration holds iterators
-    // into it, so the entries stay until they expire.
-    for (const CTransaction& tx : removed) {
-        auto it = mapRelay.find(tx.GetHash());
-        if (it != mapRelay.end()) {
-            it->second = nullptr;
-        }
-    }
+    mempool.removeWithoutBranchId(CurrentEpochBranchId(nextBlockHeight, consensus));
+    mempool.removeWithoutBranchId(CurrentEpochBranchId(RelayHeight(nextBlockHeight), consensus));
 }
 
 bool AcceptToMemoryPool(
@@ -8394,6 +8390,12 @@ void static ProcessGetData(CNode* pfrom, const Consensus::Params& consensusParam
 
     LOCK(cs_main);
 
+    // A relayed transaction may no longer be valid for the branch at the next block or at
+    // RelayHeight, whatever removed it from the mempool, so getdata serves it only while
+    // both are its branch.
+    const uint32_t nextBranchId = CurrentEpochBranchId(currentHeight + 1, consensusParams);
+    const uint32_t relayBranchId = CurrentEpochBranchId(RelayHeight(currentHeight + 1), consensusParams);
+
     while (it != pfrom->vRecvGetData.end()) {
         // Don't bother if send buffer is too full to respond anyway
         if (pfrom->nSendSize >= SendBufferSize())
@@ -8496,11 +8498,14 @@ void static ProcessGetData(CNode* pfrom, const Consensus::Params& consensusParam
                 // Send stream from relay memory
                 bool push = false;
                 auto mi = mapRelay.find(inv.hash);
-                if (mi != mapRelay.end() && mi->second && !IsExpiringSoonTx(*mi->second, currentHeight + 1)) {
+                if (mi != mapRelay.end() &&
+                    mi->second.branchId == nextBranchId && mi->second.branchId == relayBranchId &&
+                    !IsExpiringSoonTx(*mi->second.tx, currentHeight + 1)) {
+                    const CTransaction& relayedTx = *mi->second.tx;
                     // ZIP 239: MSG_TX should be used if and only if the tx is v4 or earlier.
-                    if ((mi->second->nVersion <= 4) != (inv.type == MSG_TX)) {
+                    if ((relayedTx.nVersion <= 4) != (inv.type == MSG_TX)) {
                         Misbehaving(pfrom->GetId(), 100);
-                        LogPrint("net", "Wrong INV message type used for v%d tx", mi->second->nVersion);
+                        LogPrint("net", "Wrong INV message type used for v%d tx", relayedTx.nVersion);
                         // Break so that this inv message will be erased from the queue
                         // (otherwise the peer would repeatedly hit this case until its
                         // Misbehaving level rises above -banscore, no matter what the
@@ -8509,8 +8514,8 @@ void static ProcessGetData(CNode* pfrom, const Consensus::Params& consensusParam
                     }
                     // Ensure we only reply with a transaction if it is exactly what the
                     // peer requested from us. Otherwise we add it to vNotFound below.
-                    if (inv.hashAux == mi->second->GetAuthDigest()) {
-                        pfrom->PushMessage("tx", *mi->second);
+                    if (inv.hashAux == relayedTx.GetAuthDigest()) {
+                        pfrom->PushMessage("tx", relayedTx);
                         push = true;
                     }
                 } else if (pfrom->timeLastMempoolReq) {
@@ -9991,13 +9996,12 @@ bool SendMessages(const Consensus::Params& params, CNode* pto)
                             vRelayExpiration.pop_front();
                         }
 
-                        auto ret = mapRelay.insert(std::make_pair(hash, txinfo.tx));
+                        // RemoveMempoolTxsForOtherBranches keeps every mempool transaction
+                        // on the next block's branch.
+                        auto ret = mapRelay.insert(std::make_pair(
+                            hash, RelayedTx{std::move(txinfo.tx), CurrentEpochBranchId(currentHeight + 1, params)}));
                         if (ret.second) {
                             vRelayExpiration.push_back(std::make_pair(nNow + 15 * 60 * 1000000, ret.first));
-                        } else if (!ret.first->second) {
-                            // RemoveMempoolTxsForOtherBranches emptied it, and the mempool
-                            // has since readmitted the transaction.
-                            ret.first->second = txinfo.tx;
                         }
                     }
                     if (vInv.size() == MAX_INV_SZ) {

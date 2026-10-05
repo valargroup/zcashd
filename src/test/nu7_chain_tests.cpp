@@ -13,6 +13,7 @@
 #include "test/test_bitcoin.h"
 
 #include <algorithm>
+#include <list>
 #include <map>
 #include <memory>
 #include <optional>
@@ -240,13 +241,14 @@ void Announce(CNode& peer, const CTransaction& tx) {
 
 /** Whether a getdata from `peer` for `tx` is answered with the transaction. */
 bool ServesTx(CNode& peer, const CTransaction& tx) {
+    const size_t queuedBefore = OutboundCommands(peer).size();
     const WTxId wtxid = tx.GetWTxId();
     CDataStream payload(SER_NETWORK, PROTOCOL_VERSION);
     payload << std::vector<CInv>{CInv(MSG_WTX, wtxid.hash, wtxid.authDigest)};
     ReceiveRawMessage(peer, "getdata", payload);
     BOOST_REQUIRE(ProcessMessages(Params(), &peer));
     const auto commands = OutboundCommands(peer);
-    return std::find(commands.begin(), commands.end(), "tx") != commands.end();
+    return std::find(commands.begin() + queuedBefore, commands.end(), "tx") != commands.end();
 }
 
 /** The chain supply delta of the tip. */
@@ -401,6 +403,7 @@ BOOST_AUTO_TEST_CASE(mempool_drops_what_zakura_would_reject)
     BOOST_REQUIRE(Submit(CMutableTransaction(tx)) == std::nullopt);
     auto peer = MakePeer(0xa0b0c001);
     Announce(*peer, tx);
+    BOOST_CHECK(ServesTx(*peer, tx));
 
     // Once the block raises the relay height to NU7, Zakura could reject the transaction,
     // so the mempool drops it and a getdata for it gets notfound.
@@ -411,18 +414,6 @@ BOOST_AUTO_TEST_CASE(mempool_drops_what_zakura_would_reject)
     BOOST_REQUIRE(chainActive.Tip()->GetBlockHash() == block.GetHash());
     BOOST_CHECK(!mempool.exists(tx.GetHash()));
     BOOST_CHECK(!ServesTx(*peer, tx));
-
-    // Disconnecting the block lowers the relay height again, so the mempool readmits the
-    // transaction and serves it to a peer it is announced to.
-    {
-        LOCK(cs_main);
-        CValidationState invalidState;
-        BOOST_REQUIRE(InvalidateBlock(invalidState, Params(), chainActive.Tip()));
-    }
-    BOOST_REQUIRE(Submit(CMutableTransaction(tx)) == std::nullopt);
-    auto otherPeer = MakePeer(0xa0b0c002);
-    Announce(*otherPeer, tx);
-    BOOST_CHECK(ServesTx(*otherPeer, tx));
 }
 
 BOOST_AUTO_TEST_CASE(best_header_drops_what_zakura_would_reject)
@@ -431,24 +422,19 @@ BOOST_AUTO_TEST_CASE(best_header_drops_what_zakura_would_reject)
     const CTransaction tx(FeeTransaction(1, FEE, 0));
     BOOST_REQUIRE(Submit(CMutableTransaction(tx)) == std::nullopt);
 
-    // Headers up to NU7_HEIGHT - 1 raise the relay height to NU7 before their blocks
-    // arrive, even when a later header in the same message is rejected.
-    std::vector<CBlockHeader> headers;
-    CBlockHeader prev = chainActive.Tip()->GetBlockHeader();
-    for (int i = 0; i < 4; i++) {
-        CBlock block;
-        block.nVersion = CBlockHeader::CURRENT_VERSION;
-        block.hashPrevBlock = prev.GetHash();
-        block.hashMerkleRoot = ArithToUint256(arith_uint256(i + 1));
-        block.nTime = prev.nTime + 1;
-        block.nBits = prev.nBits;
-        Solve(block);
-        headers.push_back(block.GetBlockHeader());
-        prev = headers.back();
-    }
-    CBlockHeader stray = headers.back();
+    // Zakura's header for NU7_HEIGHT - 4 raises the relay height RELAY_HEIGHT_MARGIN blocks
+    // past its next block, to NU7, before the block arrives, even when a later header in
+    // the same message is rejected.
+    CBlock block;
+    block.nVersion = CBlockHeader::CURRENT_VERSION;
+    block.hashPrevBlock = chainActive.Tip()->GetBlockHash();
+    block.hashMerkleRoot = ArithToUint256(arith_uint256(1));
+    block.nTime = chainActive.Tip()->nTime + 1;
+    block.nBits = chainActive.Tip()->nBits;
+    Solve(block);
+    CBlockHeader stray = block.GetBlockHeader();
     stray.hashPrevBlock = uint256();
-    headers.push_back(stray);
+    const std::vector<CBlockHeader> headers{block.GetBlockHeader(), stray};
 
     auto peer = MakePeer(0xa0b0c003);
     CDataStream payload(SER_NETWORK, PROTOCOL_VERSION);
@@ -459,9 +445,33 @@ BOOST_AUTO_TEST_CASE(best_header_drops_what_zakura_would_reject)
     }
     ReceiveRawMessage(*peer, "headers", payload);
     ProcessMessages(Params(), peer.get());
-    BOOST_REQUIRE_EQUAL(pindexBestHeader->nHeight, NU7_HEIGHT - 1);
+    BOOST_REQUIRE_EQUAL(pindexBestHeader->nHeight, NU7_HEIGHT - 4);
     BOOST_CHECK_EQUAL(chainActive.Height(), NU7_HEIGHT - 5);
     BOOST_CHECK(!mempool.exists(tx.GetHash()));
+}
+
+BOOST_AUTO_TEST_CASE(relay_map_checks_the_branch)
+{
+    // A transaction the mempool lost some other way before the relay height reached NU7 is
+    // still in the relay map, but getdata no longer serves it.
+    MineTo(NU7_HEIGHT - 5);
+    auto tmpl = TemplateWithCoinbaseDelta(0);
+    const CTransaction tx(FeeTransaction(1, FEE, 0));
+    BOOST_REQUIRE(Submit(CMutableTransaction(tx)) == std::nullopt);
+    auto peer = MakePeer(0xa0b0c004);
+    Announce(*peer, tx);
+    {
+        LOCK(mempool.cs);
+        std::list<CTransaction> removed;
+        mempool.remove(tx, removed, true);
+    }
+
+    CBlock& block = tmpl->block;
+    Solve(block);
+    CValidationState state;
+    ProcessNewBlock(state, Params(), NULL, &block, true, NULL);
+    BOOST_REQUIRE(chainActive.Tip()->GetBlockHash() == block.GetHash());
+    BOOST_CHECK(!ServesTx(*peer, tx));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

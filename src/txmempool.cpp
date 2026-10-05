@@ -854,7 +854,7 @@ void CTxMemPool::removeForBlock(const std::vector<CTransaction>& vtx, unsigned i
  * Called whenever the tip changes. Removes transactions which don't commit to
  * the given branch ID from the mempool.
  */
-void CTxMemPool::removeWithoutBranchId(uint32_t nMemPoolBranchId, std::list<CTransaction>* removedOut)
+void CTxMemPool::removeWithoutBranchId(uint32_t nMemPoolBranchId)
 {
     LOCK(cs);
     std::list<CTransaction> transactionsToRemove;
@@ -869,9 +869,6 @@ void CTxMemPool::removeWithoutBranchId(uint32_t nMemPoolBranchId, std::list<CTra
     for (const CTransaction& tx : transactionsToRemove) {
         std::list<CTransaction> removed;
         remove(tx, removed, true);
-        if (removedOut != nullptr) {
-            removedOut->splice(removedOut->end(), removed);
-        }
     }
 }
 
