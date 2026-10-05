@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Tests for compare.py: in particular, a dump that leaves values out must not pass."""
+import os
+import tempfile
 import unittest
 
-from compare import compare
+from compare import compare, load
 
 
 def dump(*records):
@@ -31,6 +33,16 @@ class CompareTest(unittest.TestCase):
     def test_change_points_must_start_at_the_same_height(self):
         diffs, _ = compare(dump(("s", "branch_id", "", 5, "0xa")), dump(("s", "branch_id", "", 0, "0xa")))
         self.assertEqual(len(diffs), 1)
+
+    def test_duplicate_records_are_refused(self):
+        record = '{"scenario": "s", "quantity": "expected_bits", "key": "", "height": 1, "value": "0x1"}\n'
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
+            f.write(record + record.replace("0x1", "0x2"))
+        try:
+            with self.assertRaises(SystemExit):
+                load(f.name)
+        finally:
+            os.unlink(f.name)
 
     def test_missing_is_noted_not_counted(self):
         a = dump(("s", "tx_version_allowed", "v4", 1, "MISSING:no such function"))

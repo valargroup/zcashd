@@ -24,7 +24,7 @@ RLE = {
 
 
 def load(path):
-    """Returns {(scenario, quantity, key): {height: value}} from a JSONL file."""
+    """Returns {(scenario, quantity, key): {height: value}} from a JSONL file, refusing duplicate records."""
     opener = gzip.open if path.endswith(".gz") else open
     recs = defaultdict(dict)
     with opener(path, "rt") as f:
@@ -32,7 +32,11 @@ def load(path):
             line = line.strip()
             if line:
                 r = json.loads(line)
-                recs[(r["scenario"], r["quantity"], r.get("key", ""))][r.get("height")] = str(r["value"])
+                k = (r["scenario"], r["quantity"], r.get("key", ""))
+                height = r.get("height")
+                if height in recs[k]:
+                    sys.exit(f"{path}:{n}: duplicate record for {k} at height {height}")
+                recs[k][height] = str(r["value"])
     return recs
 
 

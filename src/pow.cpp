@@ -17,6 +17,14 @@
 #include <librustzcash.h>
 #include <rust/equihash.h>
 
+bool IsMinDifficultyBlock(const CBlockIndex* pindexLast, const CBlockHeader* pblock, const Consensus::Params& params)
+{
+    // Comparing to pindexLast->nHeight with >= because pblock is the block after pindexLast.
+    return params.nPowAllowMinDifficultyBlocksAfterHeight != std::nullopt &&
+        pindexLast->nHeight >= params.nPowAllowMinDifficultyBlocksAfterHeight.value() &&
+        pblock && pblock->GetBlockTime() > pindexLast->GetBlockTime() + params.MinDifficultyGap(pindexLast->nHeight + 1);
+}
+
 unsigned int GetNextWorkRequired(const CBlockIndex* pindexLast, const CBlockHeader *pblock, const Consensus::Params& params)
 {
     unsigned int nProofOfWorkLimit = UintToArith256(params.powLimit).GetCompact();
@@ -29,20 +37,8 @@ unsigned int GetNextWorkRequired(const CBlockIndex* pindexLast, const CBlockHead
     if (params.fPowNoRetargeting)
         return pindexLast->nBits;
 
-    {
-        // Comparing to pindexLast->nHeight with >= because this function
-        // returns the work required for the block after pindexLast.
-        if (params.nPowAllowMinDifficultyBlocksAfterHeight != std::nullopt &&
-            pindexLast->nHeight >= params.nPowAllowMinDifficultyBlocksAfterHeight.value())
-        {
-            // Special difficulty rule for testnet:
-            // If the new block's timestamp is more than MinDifficultyGap (6 target
-            // spacings, or 18 from NU7) after its parent's, allow mining of a
-            // min-difficulty block.
-            if (pblock && pblock->GetBlockTime() > pindexLast->GetBlockTime() + params.MinDifficultyGap(pindexLast->nHeight + 1))
-                return nProofOfWorkLimit;
-        }
-    }
+    if (IsMinDifficultyBlock(pindexLast, pblock, params))
+        return nProofOfWorkLimit;
 
     // Find the first block in the averaging interval. The window size depends on
     // the height of the block being computed (ZIP 218).

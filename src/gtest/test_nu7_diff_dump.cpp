@@ -330,11 +330,7 @@ public:
             Emit("expected_bits" + suffix, "", h, strprintf("0x%08x", index.nBits));
             Emit("median_time_past" + suffix, "", h, std::to_string(index.pprev->GetMedianTimePast()));
             if (s.isTestnet && suffix.empty()) {
-                // GetNextWorkRequired's minimum-difficulty condition.
-                const bool minDifficulty = p.nPowAllowMinDifficultyBlocksAfterHeight.has_value() &&
-                    uint32_t(h - 1) >= p.nPowAllowMinDifficultyBlocksAfterHeight.value() &&
-                    int64_t(index.nTime) > int64_t(index.pprev->nTime) + p.MinDifficultyGap(h);
-                Emit("is_min_difficulty_block", "", h, minDifficulty ? "true" : "false");
+                Emit("is_min_difficulty_block", "", h, IsMinDifficultyBlock(index.pprev, &header, p) ? "true" : "false");
             }
         }
     }
