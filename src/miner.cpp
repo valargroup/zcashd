@@ -120,14 +120,12 @@ public:
     CAmount SetFoundersRewardAndGetMinerValue(sapling::Builder& saplingBuilder) const {
         const auto& consensus = chainparams.GetConsensus();
         const auto block_subsidy = consensus.GetBlockSubsidy(nHeight);
-        auto miner_reward = block_subsidy; // founders' reward or funding stream amounts will be subtracted below
 
         if (nHeight > 0) {
             if (chainparams.GetConsensus().NetworkUpgradeActive(nHeight, Consensus::UPGRADE_CANOPY)) {
                 LogPrint("pow", "%s: Constructing funding stream outputs for height %d", __func__, nHeight);
                 for (const auto& [fsinfo, fs] : consensus.GetActiveFundingStreams(nHeight)) {
                     const auto amount = fsinfo.Value(block_subsidy);
-                    miner_reward -= amount;
 
                     examine(fs.Recipient(consensus, nHeight), match {
                         [&](const libzcash::SaplingPaymentAddress& pa) {
@@ -149,9 +147,7 @@ public:
                 }
             } else if (nHeight <= chainparams.GetConsensus().GetLastFoundersRewardBlockHeight(nHeight)) {
                 // Founders reward is 20% of the block subsidy
-                const auto vFoundersReward = miner_reward / 5;
-                // Take some reward away from us
-                miner_reward -= vFoundersReward;
+                const auto vFoundersReward = block_subsidy / 5;
                 // And give it to the founders
                 mtx.vout.push_back(CTxOut(vFoundersReward, chainparams.GetFoundersRewardScriptAtHeight(nHeight)));
             } else {
@@ -171,6 +167,7 @@ public:
                 }
             }
         }
+        const CAmount miner_reward = MinerSubsidy(chainparams, nHeight);
         LogPrint("pow", "%s: Miner reward at height %d is %d", __func__, nHeight, miner_reward);
 
         // ZIP 237 reissuance goes to the miner: funding streams never overlap it (see
@@ -296,6 +293,26 @@ public:
         ComputeBindingSig(std::move(saplingBuilder), std::nullopt);
     }
 };
+
+CAmount MinerSubsidy(const CChainParams& chainparams, int nHeight)
+{
+    const auto& consensus = chainparams.GetConsensus();
+    const CAmount blockSubsidy = consensus.GetBlockSubsidy(nHeight);
+    if (nHeight == 0) {
+        return blockSubsidy;
+    }
+    if (consensus.NetworkUpgradeActive(nHeight, Consensus::UPGRADE_CANOPY)) {
+        CAmount streams = 0;
+        for (const auto& [fsinfo, fs] : consensus.GetActiveFundingStreams(nHeight)) {
+            streams += fsinfo.Value(blockSubsidy);
+        }
+        return blockSubsidy - streams;
+    }
+    if (nHeight <= consensus.GetLastFoundersRewardBlockHeight(nHeight)) {
+        return blockSubsidy - blockSubsidy / 5;
+    }
+    return blockSubsidy;
+}
 
 uint64_t CoinbaseSaplingOutputs(const CChainParams& chainparams, const MinerAddress& minerAddress, int nHeight)
 {
