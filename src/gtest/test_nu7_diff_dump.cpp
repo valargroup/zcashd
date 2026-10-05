@@ -127,6 +127,7 @@ public:
             out.emplace_back("funding_stream_value", r, std::to_string(it == values.end() ? 0 : it->second));
         }
         out.emplace_back("lockbox_value", "", std::to_string(values.count("Deferred") ? values.at("Deferred") : 0));
+        out.emplace_back("miner_subsidy", "", std::to_string(MinerSubsidy(s.chainparams, height)));
         if (s.isTestnet) {
             out.emplace_back("testnet_min_difficulty_gap_secs", "", std::to_string(p.MinDifficultyGap(height)));
         }
@@ -137,11 +138,11 @@ public:
      * The miner's output in the coinbase the miner builds at `height` for a transparent miner,
      * with no fees and no NSM reissuance.
      */
-    std::string MinerSubsidy(int height) const
+    CAmount CoinbaseMinerOutput(int height) const
     {
         boost::shared_ptr<CReserveScript> script(new CReserveScript());
         script->reserveScript = CScript() << OP_TRUE;
-        return std::to_string(CreateCoinbaseTransaction(s.chainparams, 0, 0, script, height).vout[0].nValue);
+        return CreateCoinbaseTransaction(s.chainparams, 0, 0, script, height).vout[0].nValue;
     }
 
     /** The address the coinbase at `height` must pay `receiver`, or "none". */
@@ -224,11 +225,11 @@ public:
             prev = std::move(cur);
         }
 
-        // The miner's subsidy comes from a whole coinbase, too slow to build at every height. It
-        // only changes with the subsidy or a funding stream, so the change points are enough.
-        Emit("miner_subsidy", "", s.lo, MinerSubsidy(s.lo));
+        // The coinbase the miner builds must pay it MinerSubsidy. A whole coinbase is too slow to
+        // build at every height, but the change points are where its outputs change.
+        EXPECT_EQ(CoinbaseMinerOutput(s.lo), MinerSubsidy(s.chainparams, s.lo)) << s.name << " " << s.lo;
         for (int h : changes) {
-            Emit("miner_subsidy", "", h, MinerSubsidy(h));
+            EXPECT_EQ(CoinbaseMinerOutput(h), MinerSubsidy(s.chainparams, h)) << s.name << " " << h;
         }
 
         // Expensive quantities, at the heights the Zakura harness uses.
