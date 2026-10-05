@@ -98,13 +98,16 @@ private:
     const CChainParams &chainparams;
     const int nHeight;
     const CAmount nFees;
+    const CAmount additionalSubsidy;
 
 public:
     AddOutputsToCoinbaseTxAndSign(
         CMutableTransaction &mtx,
         const CChainParams &chainparams,
         const int nHeight,
-        const CAmount nFees) : mtx(mtx), chainparams(chainparams), nHeight(nHeight), nFees(nFees) {}
+        const CAmount nFees,
+        const CAmount additionalSubsidy) :
+        mtx(mtx), chainparams(chainparams), nHeight(nHeight), nFees(nFees), additionalSubsidy(additionalSubsidy) {}
 
     const libzcash::Zip212Enabled GetZip212Flag() const {
         if (chainparams.GetConsensus().NetworkUpgradeActive(nHeight, Consensus::UPGRADE_CANOPY)) {
@@ -170,7 +173,9 @@ public:
         }
         LogPrint("pow", "%s: Miner reward at height %d is %d", __func__, nHeight, miner_reward);
 
-        return miner_reward + nFees;
+        // ZIP 237 reissuance goes to the miner: funding streams never overlap it (see
+        // init.cpp). ZIP 235 leaves the miner only its share of the fees.
+        return miner_reward + additionalSubsidy + consensus.MinerFeeShare(nHeight, nFees);
     }
 
     void ComputeBindingSig(rust::Box<sapling::Builder> saplingBuilder, std::optional<orchard::UnauthorizedBundle> orchardBundle) const {
@@ -292,7 +297,8 @@ public:
     }
 };
 
-CMutableTransaction CreateCoinbaseTransaction(const CChainParams& chainparams, CAmount nFees, const MinerAddress& minerAddress, int nHeight)
+CMutableTransaction CreateCoinbaseTransaction(
+    const CChainParams& chainparams, CAmount nFees, CAmount additionalSubsidy, const MinerAddress& minerAddress, int nHeight)
 {
         CMutableTransaction mtx = CreateNewContextualCMutableTransaction(
                 chainparams.GetConsensus(), nHeight,
@@ -310,7 +316,7 @@ CMutableTransaction CreateCoinbaseTransaction(const CChainParams& chainparams, C
 
         // Add outputs and sign
         std::visit(
-            AddOutputsToCoinbaseTxAndSign(mtx, chainparams, nHeight, nFees),
+            AddOutputsToCoinbaseTxAndSign(mtx, chainparams, nHeight, nFees, additionalSubsidy),
             minerAddress);
 
         mtx.vin[0].scriptSig = CScript() << nHeight << OP_0;
@@ -434,9 +440,20 @@ CBlockTemplate* BlockAssembler::CreateNewBlock(
     if (next_cb_mtx) {
         pblock->vtx[0] = *next_cb_mtx;
     } else {
-        pblock->vtx[0] = CreateCoinbaseTransaction(chainparams, nFees, minerAddress, nHeight);
+        // ZIP 237: the coinbase also claims part of the NSM value balance after the parent.
+        CAmount additionalSubsidy = 0;
+        if (chainparams.GetConsensus().IsNSMReissuanceActive(nHeight)) {
+            if (!pindexPrev->nChainNSMValueBalance.has_value()) {
+                throw std::runtime_error(strprintf(
+                    "%s: the NSM value balance before height %d is unknown", __func__, nHeight));
+            }
+            additionalSubsidy = chainparams.GetConsensus().AdditionalBlockSubsidy(
+                nHeight, pindexPrev->nChainNSMValueBalance.value());
+        }
+        pblock->vtx[0] = CreateCoinbaseTransaction(chainparams, nFees, additionalSubsidy, minerAddress, nHeight);
     }
-    pblocktemplate->vTxFees[0] = -nFees;
+    // As in Zakura's getblocktemplate, the coinbase gains only the miner's ZIP 235 fee share.
+    pblocktemplate->vTxFees[0] = -chainparams.GetConsensus().MinerFeeShare(nHeight, nFees);
 
     // Update the Sapling commitment tree.
     for (const CTransaction& tx : pblock->vtx) {

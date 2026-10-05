@@ -3563,6 +3563,67 @@ static bool CheckBlockBodyAuthCommitment(
     std::optional<uint256>& hashAuthDataRoot,
     std::optional<uint256>& hashChainHistoryRoot);
 
+/**
+ * Computes the ZIP 237 NSM value balance after the block at nHeight from the balance
+ * after its parent, the block's chain supply delta, and (for the initial balance) the
+ * chain total supply after the block.
+ *
+ * NSMValueBalance(h) is 0 below NU7ActivationHeight - 1, INITIAL_NSM_VALUE_BALANCE at
+ * NU7ActivationHeight - 1, and from NU7 changes by ScheduledBlockSubsidy(h) minus the
+ * chain supply delta. Because the coinbase must claim exactly its input value, that
+ * change is the value the block removed from circulation (ZIP 235) minus its
+ * AdditionalBlockSubsidy.
+ *
+ * A configured initial balance is used as is. If it must match the chain (Mainnet and
+ * Testnet) and does not, that is a local accounting fault, so it is only logged and
+ * raised as a warning. Returns nullopt and sets `error` if an input is unavailable.
+ */
+static std::optional<CAmount> NextNSMValueBalance(
+    const Consensus::Params& consensusParams,
+    int nHeight,
+    std::optional<CAmount> parentBalance,
+    CAmount chainSupplyDelta,
+    std::optional<CAmount> chainTotalSupply,
+    std::string& error)
+{
+    const auto nu7Activation = consensusParams.GetActivationHeight(Consensus::UPGRADE_NU7);
+    // As in Zakura, only the seed can change the balance at genesis.
+    if (!nu7Activation.has_value() || nHeight < *nu7Activation - 1 || (nHeight == 0 && *nu7Activation != 1)) {
+        return 0;
+    }
+    if (nHeight == *nu7Activation - 1) {
+        std::optional<CAmount> derived;
+        if (chainTotalSupply.has_value()) {
+            derived = consensusParams.ScheduledIssuance(nHeight) - *chainTotalSupply;
+        }
+        const auto& configured = consensusParams.nInitialNSMValueBalance;
+        if (configured.has_value()) {
+            if (consensusParams.fCheckInitialNSMValueBalance && derived.has_value() && *derived != *configured) {
+                const std::string warning = strprintf(
+                    "Warning: the chain supply at height %d implies an initial NSM value balance of %d, "
+                    "but this network's INITIAL_NSM_VALUE_BALANCE is %d. The local chain supply "
+                    "accounting may be corrupt; consider restarting with -reindex.",
+                    nHeight, *derived, *configured);
+                LogPrintf("%s\n", warning);
+                SetMiscWarning(warning, GetTime());
+            }
+            return configured;
+        }
+        if (!derived.has_value()) {
+            error = strprintf(
+                "the initial NSM value balance at height %d cannot be derived because the chain total supply is unknown",
+                nHeight);
+            return std::nullopt;
+        }
+        return derived;
+    }
+    if (!parentBalance.has_value()) {
+        error = strprintf("the NSM value balance before height %d is unknown", nHeight);
+        return std::nullopt;
+    }
+    return *parentBalance + consensusParams.GetBlockSubsidy(nHeight) - chainSupplyDelta;
+}
+
 bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pindex,
                   CCoinsViewCache& view, const CChainParams& chainparams,
                   bool fJustCheck, CheckAs blockChecks)
@@ -3660,6 +3721,11 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
             pindex->hashSproutAnchor = tree.root();
             // The genesis block contained no JoinSplits
             pindex->hashFinalSproutRoot = pindex->hashSproutAnchor;
+            // Only a network with NU7 at height 1 seeds its NSM value balance here.
+            std::string nsmError;
+            const CAmount genesisSupplyDelta = pindex->nChainSupplyDelta.value_or(0);
+            pindex->nChainNSMValueBalance = NextNSMValueBalance(
+                consensusParams, pindex->nHeight, CAmount(0), genesisSupplyDelta, genesisSupplyDelta, nsmError);
         }
         return true;
     }
@@ -4456,7 +4522,28 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
         return state.DoS(100, error("%s: coinbase output value out of range at height %d", __func__, pindex->nHeight),
             REJECT_INVALID, "bad-cb-output-value-out-of-range");
     }
-    CAmount cbTotalInputValue = consensusParams.GetBlockSubsidy(pindex->nHeight) + nFees;
+    // ZIP 237: once reissuance starts, the block subsidy also pays out part of the NSM
+    // value balance after the parent block.
+    const std::optional<CAmount> parentNSMValueBalance =
+        pindex->pprev ? pindex->pprev->nChainNSMValueBalance : std::optional<CAmount>(0);
+    CAmount additionalSubsidy = 0;
+    if (consensusParams.IsNSMReissuanceActive(pindex->nHeight)) {
+        if (!parentNSMValueBalance.has_value()) {
+            // Startup recomputes the balance from the persisted chain supply deltas.
+            return AbortNode(state,
+                strprintf("%s: the NSM value balance before height %d is unknown", __func__, pindex->nHeight),
+                _("The NSM value balance is missing. Please restart zcashd, and if this persists, restart with -reindex."));
+        }
+        if (!MoneyRange(parentNSMValueBalance.value())) {
+            return state.DoS(100, error("%s: NSM value balance out of range before height %d", __func__, pindex->nHeight),
+                REJECT_INVALID, "bad-nsm-value-balance-out-of-range");
+        }
+        additionalSubsidy = consensusParams.AdditionalBlockSubsidy(pindex->nHeight, parentNSMValueBalance.value());
+    }
+    // ZIP 235: from NU7 the coinbase claims only the miner's share of the block's fees.
+    CAmount cbTotalInputValue =
+        consensusParams.GetBlockSubsidy(pindex->nHeight) + additionalSubsidy +
+        consensusParams.MinerFeeShare(pindex->nHeight, nFees);
     if (!MoneyRange(cbTotalInputValue)) {
         return state.DoS(100, error("%s: coinbase input value out of range at height %d", __func__, pindex->nHeight),
             REJECT_INVALID, "bad-cb-input-value-out-of-range");
@@ -4477,6 +4564,38 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
                 cbTotalInputValue - pindex->nLockboxValue,
                 pindex->nLockboxValue),
             REJECT_INVALID, "bad-cb-not-exact");
+    }
+
+    // ZIP 237: track the NSM value balance, which must never become negative.
+    {
+        std::optional<CAmount> chainTotalSupplyAfter;
+        if (pindex->pprev == nullptr) {
+            chainTotalSupplyAfter = chainSupplyDelta;
+        } else if (pindex->pprev->nChainTotalSupply.has_value()) {
+            chainTotalSupplyAfter = pindex->pprev->nChainTotalSupply.value() + chainSupplyDelta;
+        }
+        std::string nsmError;
+        const auto nsmValueBalance = NextNSMValueBalance(
+            consensusParams, pindex->nHeight, parentNSMValueBalance, chainSupplyDelta,
+            chainTotalSupplyAfter, nsmError);
+        if (!nsmValueBalance.has_value()) {
+            // Before reissuance the balance does not affect validity (and from then on a
+            // missing parent balance has stopped the node above), so only log it.
+            LogPrintf("%s: %s\n", __func__, nsmError);
+        } else if (nsmValueBalance.value() < 0) {
+            return state.DoS(100,
+                error("%s: NSM value balance would be negative (%d) at height %d", __func__,
+                      nsmValueBalance.value(), pindex->nHeight),
+                REJECT_INVALID, "bad-nsm-value-balance-negative");
+        } else if (nsmValueBalance.value() > MAX_MONEY) {
+            return state.DoS(100,
+                error("%s: NSM value balance out of range (%d) at height %d", __func__,
+                      nsmValueBalance.value(), pindex->nHeight),
+                REJECT_INVALID, "bad-nsm-value-balance-out-of-range");
+        }
+        if (!fJustCheck) {
+            pindex->nChainNSMValueBalance = nsmValueBalance;
+        }
     }
 
     // (The Sapling and Orchard bundle authorizations are validated earlier,
@@ -5886,6 +6005,7 @@ bool SetChainPoolValues(
 
     pindex->nChainTotalSupply = std::nullopt;
     pindex->nChainTransparentValue = std::nullopt;
+    pindex->nChainNSMValueBalance = std::nullopt;
 
     pindex->nSproutValue = sproutValue;
     pindex->nSaplingValue = saplingValue;
@@ -7059,6 +7179,28 @@ bool static LoadBlockIndexDB(const CChainParams& chainparams)
             // existing values match the checkpoint.
             if (!FallbackChainSupplyCheckpoint(pindex, chainparams)) {
                 return false;
+            }
+
+            // The NSM value balance is memory only. Recompute it from the persisted
+            // chain supply delta, now that the chain total supply is final. Skip failed
+            // blocks: ConnectBlock stores the delta before it checks the coinbase, so an
+            // overclaiming block's delta can make the balance negative. (ConnectBlock
+            // recomputes the balance if the block is reconsidered.)
+            pindex->nChainNSMValueBalance = std::nullopt;
+            if (!(pindex->nStatus & BLOCK_FAILED_MASK) &&
+                    (pindex->pprev == nullptr || pindex->pprev->nChainTx) && pindex->nChainSupplyDelta.has_value()) {
+                if (!MoneyDeltaRange(pindex->nChainSupplyDelta.value())) {
+                    return error("%s: chain supply delta out of range at height %d", __func__, pindex->nHeight);
+                }
+                std::string nsmError;
+                pindex->nChainNSMValueBalance = NextNSMValueBalance(
+                    chainparams.GetConsensus(), pindex->nHeight,
+                    pindex->pprev ? pindex->pprev->nChainNSMValueBalance : std::optional<CAmount>(0),
+                    pindex->nChainSupplyDelta.value(), pindex->nChainTotalSupply, nsmError);
+                if (pindex->nChainNSMValueBalance.has_value() && !MoneyRange(pindex->nChainNSMValueBalance.value())) {
+                    return error("%s: NSM value balance out of range at height %d. Please restart with -reindex.",
+                                 __func__, pindex->nHeight);
+                }
             }
 
             // If developer option -developersetpoolsizezero has been enabled,
