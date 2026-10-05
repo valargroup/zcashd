@@ -37,32 +37,6 @@ use crate::{
 /// every reorg the node accepts.
 pub const MAX_CHECKPOINTS: usize = 1001;
 
-/// Raises the checkpoint limit of a note commitment tree written while `MAX_CHECKPOINTS` was
-/// smaller, so it can rewind as far as a new one once it has enough checkpoints.
-fn with_max_checkpoints(
-    tree: BridgeTree<MerkleHashOrchard, u32, { sapling::NOTE_COMMITMENT_TREE_DEPTH }>,
-) -> io::Result<BridgeTree<MerkleHashOrchard, u32, { sapling::NOTE_COMMITMENT_TREE_DEPTH }>> {
-    if tree.max_checkpoints() >= MAX_CHECKPOINTS {
-        return Ok(tree);
-    }
-    BridgeTree::from_parts(
-        tree.prior_bridges().to_vec(),
-        tree.current_bridge().clone(),
-        tree.marked_indices().clone(),
-        tree.checkpoints().clone(),
-        MAX_CHECKPOINTS,
-    )
-    .map_err(|err| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "Consistency violation found when raising the note commitment tree's checkpoint limit: {:?}",
-                err
-            ),
-        )
-    })
-}
-
 /// A data structure tracking the last transaction whose notes
 /// have been added to the wallet's note commitment tree.
 #[derive(Debug, Clone)]
@@ -1364,7 +1338,8 @@ pub extern "C" fn orchard_wallet_load_note_commitment_tree(
         let last_checkpoint = Optional::read(&mut reader, |r| {
             r.read_u32::<LittleEndian>().map(BlockHeight::from)
         })?;
-        let commitment_tree = with_max_checkpoints(read_tree(&mut reader)?)?;
+        // A tree written while MAX_CHECKPOINTS was smaller gets the current limit.
+        let commitment_tree = read_tree(&mut reader, MAX_CHECKPOINTS)?;
 
         // Read note positions.
         wallet.wallet_note_positions = Vector::read_collected(&mut reader, |mut r| {
@@ -1479,9 +1454,12 @@ mod tests {
         }
         assert_eq!(tree.checkpoints().len(), 100);
         let root = tree.root(0);
+        let mut written = vec![];
+        write_tree(&mut written, &tree).unwrap();
 
-        let mut tree = with_max_checkpoints(tree).unwrap();
+        let mut tree: Tree = read_tree(&written[..], MAX_CHECKPOINTS).unwrap();
         assert_eq!(tree.max_checkpoints(), MAX_CHECKPOINTS);
+        assert_eq!(tree.checkpoints().len(), 100);
         assert_eq!(tree.root(0), root);
 
         // It can now rewind past the old limit, as far as the node reorgs.
