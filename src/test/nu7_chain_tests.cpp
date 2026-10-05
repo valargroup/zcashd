@@ -3,13 +3,16 @@
 #include "consensus/upgrades.h"
 #include "consensus/validation.h"
 #include "crypto/equihash.h"
+#include "hash.h"
 #include "keystore.h"
 #include "main.h"
 #include "miner.h"
+#include "net.h"
 #include "pow.h"
 #include "script/sign.h"
 #include "test/test_bitcoin.h"
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <optional>
@@ -180,6 +183,31 @@ CAmount NSMValueBalance(const CBlockIndex* pindex) {
     return pindex->nChainNSMValueBalance.value();
 }
 
+/** Queues a P2P message from `node`, as if it had arrived from the network. */
+void ReceiveRawMessage(CNode& node, const char* command, CDataStream& payload) {
+    CDataStream msg(SER_NETWORK, PROTOCOL_VERSION);
+    CMessageHeader hdr(Params().MessageStart(), command, payload.size());
+    uint256 hash = Hash(payload.begin(), payload.end());
+    memcpy(hdr.pchChecksum, hash.begin(), CMessageHeader::CHECKSUM_SIZE);
+    msg << hdr;
+    msg.insert(msg.end(), payload.begin(), payload.end());
+    LOCK(node.cs_vRecvMsg);
+    BOOST_REQUIRE(node.ReceiveMsgBytes((const char*)&msg[0], msg.size()));
+}
+
+/** The commands of the messages queued to send to `node`. */
+std::vector<std::string> OutboundCommands(CNode& node) {
+    std::vector<std::string> commands;
+    LOCK(node.cs_vSend);
+    for (const CSerializeData& msg : node.vSendMsg) {
+        CDataStream ss(msg, SER_NETWORK, PROTOCOL_VERSION);
+        CMessageHeader hdr(Params().MessageStart());
+        ss >> hdr;
+        commands.push_back(hdr.GetCommand());
+    }
+    return commands;
+}
+
 /** The chain supply delta of the tip. */
 CAmount TipSupplyDelta() {
     return chainActive.Tip()->nChainTotalSupply.value() - chainActive.Tip()->pprev->nChainTotalSupply.value();
@@ -328,18 +356,50 @@ BOOST_AUTO_TEST_CASE(mempool_drops_what_zakura_would_reject)
     // transaction, so it stays in the mempool.
     MineTo(NU7_HEIGHT - 5);
     auto tmpl = TemplateWithCoinbaseDelta(0);
-    const CMutableTransaction mtx = FeeTransaction(1, FEE, 0);
-    BOOST_REQUIRE(Submit(mtx) == std::nullopt);
-    BOOST_REQUIRE(mempool.exists(mtx.GetHash()));
+    const CTransaction tx(FeeTransaction(1, FEE, 0));
+    BOOST_REQUIRE(Submit(CMutableTransaction(tx)) == std::nullopt);
+    BOOST_REQUIRE(mempool.exists(tx.GetHash()));
+
+    // Announce it to a peer, which puts it in the relay map.
+    struct in_addr peerIp;
+    peerIp.s_addr = 0xa0b0c001;
+    CNode peer(INVALID_SOCKET, CAddress(CService(CNetAddr(peerIp), Params().GetDefaultPort())), "", false);
+    // As after the version handshake, which MSG_WTX inventory needs.
+    peer.nVersion = PROTOCOL_VERSION;
+    {
+        LOCK(peer.cs_vSend);
+        peer.ssSend.SetVersion(PROTOCOL_VERSION);
+    }
+    {
+        LOCK(peer.cs_vRecvMsg);
+        peer.SetRecvVersion(PROTOCOL_VERSION);
+    }
+    {
+        LOCK(peer.cs_filter);
+        peer.fRelayTxes = true;
+    }
+    peer.PushTxInventory(tx.GetWTxId());
+    BOOST_REQUIRE(SendMessages(Params().GetConsensus(), &peer));
+    const auto announced = OutboundCommands(peer);
+    BOOST_REQUIRE(std::find(announced.begin(), announced.end(), "inv") != announced.end());
 
     // Once the block raises the relay height to NU7, Zakura could reject the transaction,
-    // so the mempool drops it rather than relay it.
+    // so the mempool drops it and a getdata for it gets notfound.
     CBlock& block = tmpl->block;
     Solve(block);
     CValidationState state;
     ProcessNewBlock(state, Params(), NULL, &block, true, NULL);
     BOOST_REQUIRE(chainActive.Tip()->GetBlockHash() == block.GetHash());
-    BOOST_CHECK(!mempool.exists(mtx.GetHash()));
+    BOOST_CHECK(!mempool.exists(tx.GetHash()));
+
+    const WTxId wtxid = tx.GetWTxId();
+    CDataStream payload(SER_NETWORK, PROTOCOL_VERSION);
+    payload << std::vector<CInv>{CInv(MSG_WTX, wtxid.hash, wtxid.authDigest)};
+    ReceiveRawMessage(peer, "getdata", payload);
+    BOOST_REQUIRE(ProcessMessages(Params(), &peer));
+    const auto replies = OutboundCommands(peer);
+    BOOST_CHECK(std::find(replies.begin(), replies.end(), "tx") == replies.end());
+    BOOST_CHECK(std::find(replies.begin(), replies.end(), "notfound") != replies.end());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

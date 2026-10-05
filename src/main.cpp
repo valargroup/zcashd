@@ -2147,8 +2147,17 @@ static void RemoveMempoolTxsForOtherBranches(const Consensus::Params& consensus)
 {
     AssertLockHeld(cs_main);
     const int nextBlockHeight = chainActive.Tip()->nHeight + 1;
-    mempool.removeWithoutBranchId(CurrentEpochBranchId(nextBlockHeight, consensus));
-    mempool.removeWithoutBranchId(CurrentEpochBranchId(RelayHeight(nextBlockHeight), consensus));
+    std::list<CTransaction> removed;
+    mempool.removeWithoutBranchId(CurrentEpochBranchId(nextBlockHeight, consensus), &removed);
+    mempool.removeWithoutBranchId(CurrentEpochBranchId(RelayHeight(nextBlockHeight), consensus), &removed);
+    // Stop serving them to getdata from the relay map too. vRelayExpiration holds iterators
+    // into it, so the entries stay until they expire.
+    for (const CTransaction& tx : removed) {
+        auto it = mapRelay.find(tx.GetHash());
+        if (it != mapRelay.end()) {
+            it->second = nullptr;
+        }
+    }
 }
 
 bool AcceptToMemoryPool(
@@ -8482,7 +8491,7 @@ void static ProcessGetData(CNode* pfrom, const Consensus::Params& consensusParam
                 // Send stream from relay memory
                 bool push = false;
                 auto mi = mapRelay.find(inv.hash);
-                if (mi != mapRelay.end() && !IsExpiringSoonTx(*mi->second, currentHeight + 1)) {
+                if (mi != mapRelay.end() && mi->second && !IsExpiringSoonTx(*mi->second, currentHeight + 1)) {
                     // ZIP 239: MSG_TX should be used if and only if the tx is v4 or earlier.
                     if ((mi->second->nVersion <= 4) != (inv.type == MSG_TX)) {
                         Misbehaving(pfrom->GetId(), 100);
