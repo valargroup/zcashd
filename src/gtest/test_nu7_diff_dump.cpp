@@ -7,6 +7,7 @@
 #include "consensus/validation.h"
 #include "key_io.h"
 #include "main.h"
+#include "miner.h"
 #include "pow.h"
 #include "primitives/transaction.h"
 #include "script/standard.h"
@@ -121,20 +122,26 @@ public:
         const CAmount subsidy = p.GetBlockSubsidy(height);
         out.emplace_back("block_subsidy", "", std::to_string(subsidy));
         const auto values = StreamValues(height);
-        CAmount streamsTotal = 0;
         for (const auto& r : RECEIVERS) {
             auto it = values.find(r);
-            const CAmount value = it == values.end() ? 0 : it->second;
-            streamsTotal += value;
-            out.emplace_back("funding_stream_value", r, std::to_string(value));
+            out.emplace_back("funding_stream_value", r, std::to_string(it == values.end() ? 0 : it->second));
         }
         out.emplace_back("lockbox_value", "", std::to_string(values.count("Deferred") ? values.at("Deferred") : 0));
-        // As in getblocksubsidy and the miner: the subsidy minus every funding stream.
-        out.emplace_back("miner_subsidy", "", std::to_string(subsidy - streamsTotal));
         if (s.isTestnet) {
             out.emplace_back("testnet_min_difficulty_gap_secs", "", std::to_string(p.MinDifficultyGap(height)));
         }
         return out;
+    }
+
+    /**
+     * The miner's output in the coinbase the miner builds at `height` for a transparent miner,
+     * with no fees and no NSM reissuance.
+     */
+    std::string MinerSubsidy(int height) const
+    {
+        boost::shared_ptr<CReserveScript> script(new CReserveScript());
+        script->reserveScript = CScript() << OP_TRUE;
+        return std::to_string(CreateCoinbaseTransaction(s.chainparams, 0, 0, script, height).vout[0].nValue);
     }
 
     /** The address the coinbase at `height` must pay `receiver`, or "none". */
@@ -215,6 +222,13 @@ public:
                 changes.insert(h);
             }
             prev = std::move(cur);
+        }
+
+        // The miner's subsidy comes from a whole coinbase, too slow to build at every height. It
+        // only changes with the subsidy or a funding stream, so the change points are enough.
+        Emit("miner_subsidy", "", s.lo, MinerSubsidy(s.lo));
+        for (int h : changes) {
+            Emit("miner_subsidy", "", h, MinerSubsidy(h));
         }
 
         // Expensive quantities, at the heights the Zakura harness uses.
