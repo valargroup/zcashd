@@ -155,7 +155,8 @@ int EstimateNetHeight(const Consensus::Params& params, int currentHeadersHeight,
         const int64_t activationTime = time +
             int64_t(activationHeight.value() - height - 1) * params.PoWTargetSpacing(height) +
             params.PoWTargetSpacing(activationHeight.value());
-        if (activationTime >= now) {
+        // A block due exactly now counts, as it did before NU7.
+        if (activationTime > now) {
             break;
         }
         height = activationHeight.value();
