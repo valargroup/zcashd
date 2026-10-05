@@ -61,6 +61,12 @@ class CompareTest(unittest.TestCase):
         diffs, _ = compare(failed, failed)
         self.assertEqual(len(diffs), 1)
 
+    def test_missing_differs_for_other_quantities(self):
+        a = dump(("s", "expected_bits", "", 1, "MISSING:no such function"))
+        b = dump(("s", "expected_bits", "", 1, "0x1"))
+        diffs, notes = compare(a, b)
+        self.assertEqual((len(diffs), len(notes)), (1, 0))
+
     def test_missing_is_noted_not_counted(self):
         a = dump(("s", "tx_version_allowed", "v4", 1, "MISSING:no such function"))
         b = dump(("s", "tx_version_allowed", "v4", 1, "true"))
