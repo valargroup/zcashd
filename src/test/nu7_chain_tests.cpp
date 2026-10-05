@@ -414,6 +414,19 @@ BOOST_AUTO_TEST_CASE(mempool_drops_what_zakura_would_reject)
     BOOST_REQUIRE(chainActive.Tip()->GetBlockHash() == block.GetHash());
     BOOST_CHECK(!mempool.exists(tx.GetHash()));
     BOOST_CHECK(!ServesTx(*peer, tx));
+
+    // Invalidating the block lowers the relay height again (the invalid best header it
+    // leaves behind is not Zakura's), so the mempool readmits the transaction and serves it
+    // to a peer it is announced to.
+    {
+        LOCK(cs_main);
+        CValidationState invalidState;
+        BOOST_REQUIRE(InvalidateBlock(invalidState, Params(), chainActive.Tip()));
+    }
+    BOOST_REQUIRE(Submit(CMutableTransaction(tx)) == std::nullopt);
+    auto otherPeer = MakePeer(0xa0b0c002);
+    Announce(*otherPeer, tx);
+    BOOST_CHECK(ServesTx(*otherPeer, tx));
 }
 
 BOOST_AUTO_TEST_CASE(best_header_drops_what_zakura_would_reject)

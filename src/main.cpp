@@ -2138,9 +2138,13 @@ std::string FormatStateMessage(const CValidationState &state)
 static int RelayHeight(int nextBlockHeight)
 {
     AssertLockHeld(cs_main);
-    return std::max(
-        nextBlockHeight,
-        pindexBestHeader == nullptr ? 0 : pindexBestHeader->nHeight + 1) + RELAY_HEIGHT_MARGIN;
+    // A best header on a chain this node found invalid is not Zakura's.
+    const bool bestHeaderValid = pindexBestHeader != nullptr &&
+        !(pindexBestHeader->nStatus & BLOCK_FAILED_MASK) &&
+        !(pindexBestInvalid != nullptr &&
+          pindexBestHeader->GetAncestor(pindexBestInvalid->nHeight) == pindexBestInvalid);
+    return std::max(nextBlockHeight, bestHeaderValid ? pindexBestHeader->nHeight + 1 : 0) +
+        RELAY_HEIGHT_MARGIN;
 }
 
 /**
@@ -2152,8 +2156,12 @@ static void RemoveMempoolTxsForOtherBranches(const Consensus::Params& consensus)
 {
     AssertLockHeld(cs_main);
     const int nextBlockHeight = chainActive.Tip()->nHeight + 1;
-    mempool.removeWithoutBranchId(CurrentEpochBranchId(nextBlockHeight, consensus));
-    mempool.removeWithoutBranchId(CurrentEpochBranchId(RelayHeight(nextBlockHeight), consensus));
+    const uint32_t nextBranchId = CurrentEpochBranchId(nextBlockHeight, consensus);
+    const uint32_t relayBranchId = CurrentEpochBranchId(RelayHeight(nextBlockHeight), consensus);
+    mempool.removeWithoutBranchId(nextBranchId);
+    if (relayBranchId != nextBranchId) {
+        mempool.removeWithoutBranchId(relayBranchId);
+    }
 }
 
 bool AcceptToMemoryPool(
@@ -5641,9 +5649,13 @@ CBlockIndex* AddToBlockIndex(const CBlockHeader& block, const Consensus::Params&
     pindexNew->nChainWork = (pindexNew->pprev ? pindexNew->pprev->nChainWork : 0) + GetBlockProof(*pindexNew);
     pindexNew->RaiseValidity(BLOCK_VALID_TREE);
     if (pindexBestHeader == NULL || pindexBestHeader->nChainWork < pindexNew->nChainWork) {
+        // A higher best header can move RelayHeight onto the next branch before any block
+        // connects.
+        const int nextBlockHeight = chainActive.Height() + 1;
+        const uint32_t relayBranchBefore = CurrentEpochBranchId(RelayHeight(nextBlockHeight), consensusParams);
         pindexBestHeader = pindexNew;
-        // A higher best header can raise RelayHeight before any block connects.
-        if (chainActive.Tip() != nullptr) {
+        if (chainActive.Tip() != nullptr &&
+                CurrentEpochBranchId(RelayHeight(nextBlockHeight), consensusParams) != relayBranchBefore) {
             RemoveMempoolTxsForOtherBranches(consensusParams);
         }
     }
@@ -8382,13 +8394,13 @@ bool static AlreadyHave(const CInv& inv) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
 
 void static ProcessGetData(CNode* pfrom, const Consensus::Params& consensusParams)
 {
-    int currentHeight = GetHeight();
-
     std::deque<CInv>::iterator it = pfrom->vRecvGetData.begin();
 
     vector<CInv> vNotFound;
 
     LOCK(cs_main);
+    // Read under cs_main, so the branches below match the mempool and relay map.
+    const int currentHeight = chainActive.Height();
 
     // A relayed transaction may no longer be valid for the branch at the next block or at
     // RelayHeight, whatever removed it from the mempool, so getdata serves it only while
