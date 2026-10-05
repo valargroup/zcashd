@@ -59,7 +59,8 @@ public:
             consensus.vUpgrades[Consensus::UPGRADE_NU6].nActivationHeight,
             consensus.vUpgrades[Consensus::UPGRADE_NU6_1].nActivationHeight,
             consensus.vUpgrades[Consensus::UPGRADE_NU6_2].nActivationHeight,
-            consensus.vUpgrades[Consensus::UPGRADE_NU6_3].nActivationHeight);
+            consensus.vUpgrades[Consensus::UPGRADE_NU6_3].nActivationHeight,
+            consensus.vUpgrades[Consensus::UPGRADE_NU7].nActivationHeight);
     }
     const CMessageHeader::MessageStartChars& MessageStart() const { return pchMessageStart; }
     int GetDefaultPort() const { return nDefaultPort; }

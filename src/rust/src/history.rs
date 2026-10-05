@@ -58,10 +58,12 @@ fn dispatch<S, T>(
         BranchId::Sprout
         | BranchId::Overwinter
         | BranchId::Sapling
+        | BranchId::Blossom
         | BranchId::Heartwood
         | BranchId::Canopy => v1(input),
         BranchId::Nu5 | BranchId::Nu6 | BranchId::Nu6_1 | BranchId::Nu6_2 => v2(input),
-        _ => v3(input),
+        // Listed explicitly so that a new upgrade must choose its node format.
+        BranchId::Nu6_3 | BranchId::Nu7 => v3(input),
     }
 }
 
