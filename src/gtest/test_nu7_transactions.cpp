@@ -2,8 +2,11 @@
 
 #include "chainparams.h"
 #include "consensus/validation.h"
+#include "gtest/utils.h"
 #include "main.h"
+#include "miner.h"
 #include "primitives/transaction.h"
+#include "script/script.h"
 #include "util/test.h"
 
 #include <optional>
@@ -137,4 +140,24 @@ TEST(NU7Transactions, ShieldedLimits) {
     CMutableTransaction mtx;
     const ShieldedActionCounts empty{CTransaction(mtx)};
     EXPECT_EQ(empty.Cost(), 0);
+}
+
+TEST(NU7Transactions, CoinbaseSaplingOutputs) {
+    LoadProofParameters();
+    RegtestActivateNU7(false, 10);
+    const CChainParams& chainparams = Params();
+
+    boost::shared_ptr<CReserveScript> script(new CReserveScript());
+    script->reserveScript = CScript() << OP_TRUE;
+    const auto saplingAddress = GetTestMasterSaplingSpendingKey().ToXFVK().DefaultAddress();
+
+    // A block template reserves exactly the Sapling outputs its coinbase will have.
+    for (const auto& [minerAddress, expected] : std::vector<std::pair<MinerAddress, uint64_t>>{
+             {script, 0}, {saplingAddress, 1}}) {
+        const CTransaction coinbase(CreateCoinbaseTransaction(chainparams, 0, 0, minerAddress, 10));
+        EXPECT_EQ(coinbase.GetSaplingOutputsCount(), expected);
+        EXPECT_EQ(CoinbaseSaplingOutputs(chainparams, minerAddress, 10), expected);
+    }
+
+    RegtestDeactivateNU7();
 }

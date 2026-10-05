@@ -297,6 +297,20 @@ public:
     }
 };
 
+uint64_t CoinbaseSaplingOutputs(const CChainParams& chainparams, const MinerAddress& minerAddress, int nHeight)
+{
+    const auto& consensus = chainparams.GetConsensus();
+    uint64_t outputs = std::holds_alternative<libzcash::SaplingPaymentAddress>(minerAddress) ? 1 : 0;
+    if (nHeight > 0 && consensus.NetworkUpgradeActive(nHeight, Consensus::UPGRADE_CANOPY)) {
+        for (const auto& [fsinfo, fs] : consensus.GetActiveFundingStreams(nHeight)) {
+            if (std::holds_alternative<libzcash::SaplingPaymentAddress>(fs.Recipient(consensus, nHeight))) {
+                outputs++;
+            }
+        }
+    }
+    return outputs;
+}
+
 CMutableTransaction CreateCoinbaseTransaction(
     const CChainParams& chainparams, CAmount nFees, CAmount additionalSubsidy, const MinerAddress& minerAddress, int nHeight)
 {
@@ -348,10 +362,8 @@ void BlockAssembler::resetBlock(const MinerAddress& minerAddress)
     });
     nBlockSigOps = 100;
 
-    // Reserve room for the coinbase's Sapling outputs (the miner's and any funding
-    // streams'), which are added after the transactions are selected.
+    // CreateNewBlock reserves room for the coinbase's Sapling outputs.
     blockShieldedCounts = ShieldedActionCounts();
-    blockShieldedCounts.saplingIOs = 5;
 
     // These counters do not include coinbase tx
     nBlockTx = 0;
@@ -390,6 +402,9 @@ CBlockTemplate* BlockAssembler::CreateNewBlock(
     CBlockIndex* pindexPrev = chainActive.Tip();
     nHeight = pindexPrev->nHeight + 1;
     uint32_t consensusBranchId = CurrentEpochBranchId(nHeight, chainparams.GetConsensus());
+    // Reserve room for the coinbase's Sapling outputs, which are added after the
+    // transactions are selected.
+    blockShieldedCounts.saplingIOs = CoinbaseSaplingOutputs(chainparams, minerAddress, nHeight);
 
     // -regtest only: allow overriding block.nVersion with
     // -blockversion=N to test forking scenarios

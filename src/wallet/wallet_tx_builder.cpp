@@ -528,8 +528,8 @@ WalletTxBuilder::PrepareTransaction(
     }
 
     // ZIP 218: from NU7 a block holds at most SAPLING_BLOCK_IO_LIMIT Sapling spends and
-    // outputs, so a transaction with more could never be mined. Count change as a Sapling
-    // output, and the builder's padding of a bundle to two outputs.
+    // outputs, so a transaction with more could never be mined. Change is among the
+    // resolved payments, and the builder pads a bundle to two outputs.
     if (nu7Active) {
         uint64_t saplingSpends = resolvedSelection.GetInputs().saplingNoteEntries.size();
         uint64_t saplingOutputs = 0;
@@ -537,9 +537,6 @@ WalletTxBuilder::PrepareTransaction(
             if (std::holds_alternative<SaplingPaymentAddress>(payment.address)) {
                 saplingOutputs++;
             }
-        }
-        if (resolvedSelection.GetChangeAddress().has_value()) {
-            saplingOutputs++;
         }
         if (saplingSpends > 0 || saplingOutputs > 0) {
             saplingOutputs = std::max<uint64_t>(saplingOutputs, 2);
