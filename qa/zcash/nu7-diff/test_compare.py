@@ -44,6 +44,18 @@ class CompareTest(unittest.TestCase):
         finally:
             os.unlink(f.name)
 
+    def test_missing_against_a_height_without_a_record_differs(self):
+        a = dump(("s", "tx_version_allowed", "v4", 1, "MISSING:x"), ("s", "tx_version_allowed", "v4", 2, "MISSING:x"))
+        b = dump(("s", "tx_version_allowed", "v4", 1, "true"))
+        diffs, notes = compare(a, b)
+        self.assertEqual((len(diffs), len(notes)), (1, 1))
+
+    def test_no_value_stands_for_a_missing_record(self):
+        a = dump(("s", "expected_bits", "", 1, "0x1"), ("s", "expected_bits", "", 2, "ABSENT"))
+        b = dump(("s", "expected_bits", "", 1, "0x1"))
+        diffs, _ = compare(a, b)
+        self.assertEqual(len(diffs), 1)
+
     def test_missing_is_noted_not_counted(self):
         a = dump(("s", "tx_version_allowed", "v4", 1, "MISSING:no such function"))
         b = dump(("s", "tx_version_allowed", "v4", 1, "true"))

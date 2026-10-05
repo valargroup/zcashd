@@ -7,7 +7,7 @@ Prints every differing series. Change-point quantities are compared at every hei
 side changes, and must start at the same height; other quantities at every height either side
 emitted. A series or height only one side emitted is a difference, so a dump cannot pass by
 leaving values out. A value that one side reports as MISSING (no such function) is listed but
-not counted as a difference.
+not counted as a difference, as long as the other side has a record there too.
 """
 import bisect
 import gzip
@@ -62,14 +62,17 @@ def compare(a, b):
             pairs = [(h, value_at(va, ha, h), value_at(vb, hb, h)) for h in sorted(set(ha) | set(hb)) if h >= lo]
         else:
             heights = sorted(set(va) | set(vb), key=lambda h: (h is None, h))
-            pairs = [(h, va.get(h, "ABSENT"), vb.get(h, "ABSENT")) for h in heights]
+            # None, which no record's (string) value can be, marks a height a side has no record for.
+            pairs = [(h, va.get(h), vb.get(h)) for h in heights]
         bad = [(h, x, y) for h, x, y in pairs if x != y]
-        missing = [p for p in bad if p[1].startswith("MISSING") or p[2].startswith("MISSING")]
+        missing = [p for p in bad if None not in p[1:] and (p[1].startswith("MISSING") or p[2].startswith("MISSING"))]
         bad = [p for p in bad if p not in missing]
         if missing:
             notes.append(f"MISSING on one side: {scenario} {quantity} [{key}] at {len(missing)} point(s)")
         if bad:
-            first = "; ".join(f"h={h}: zcashd={x} zakura={y}" for h, x, y in bad[:6])
+            first = "; ".join(
+                f"h={h}: zcashd={'(no record)' if x is None else x} zakura={'(no record)' if y is None else y}"
+                for h, x, y in bad[:6])
             diffs.append(f"DIFF {scenario} {quantity} [{key}] at {len(bad)}/{len(pairs)} point(s); first: {first}")
     return diffs, notes
 
