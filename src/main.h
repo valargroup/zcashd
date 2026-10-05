@@ -64,6 +64,8 @@ struct CNodeStateStats;
  * Maximum reorg length we will accept before we shut down and alert the user. It matches
  * Zakura's MAX_BLOCK_REORG_HEIGHT, so this node follows any reorg Zakura does. (Blocks are
  * 3 times as frequent from NU7, and ZIP 218 scales the recommended limit up accordingly.)
+ * MIN_BLOCKS_TO_KEEP, WITNESS_CACHE_SIZE and the Orchard wallet's MAX_CHECKPOINTS (in
+ * src/rust/src/wallet.rs) must cover it.
  */
 static const unsigned int MAX_REORG_LENGTH = 1000;
 /** Default for DEFAULT_WHITELISTRELAY. */
@@ -273,9 +275,10 @@ extern bool fPruneMode;
 extern uint64_t nPruneTarget;
 /**
  * Block files containing a block-height within MIN_BLOCKS_TO_KEEP of chainActive.Tip() will
- * not be pruned. ZIP 218 triples it for NU7, so pruned nodes keep about the same time span.
+ * not be pruned, so a pruned node can still disconnect every block of a MAX_REORG_LENGTH
+ * reorg. That is more than the 864 blocks ZIP 218 recommends for NU7.
  */
-static const unsigned int MIN_BLOCKS_TO_KEEP = 864;
+static const unsigned int MIN_BLOCKS_TO_KEEP = MAX_REORG_LENGTH + 1;
 
 static const signed int DEFAULT_CHECKBLOCKS = 288;
 static const unsigned int DEFAULT_CHECKLEVEL = 3;
