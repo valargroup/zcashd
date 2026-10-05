@@ -56,6 +56,11 @@ class CompareTest(unittest.TestCase):
         diffs, _ = compare(a, b)
         self.assertEqual(len(diffs), 1)
 
+    def test_err_differs_even_when_both_sides_report_it(self):
+        failed = dump(("s", "SCENARIO", "", None, "ERR:could not build"))
+        diffs, _ = compare(failed, failed)
+        self.assertEqual(len(diffs), 1)
+
     def test_missing_is_noted_not_counted(self):
         a = dump(("s", "tx_version_allowed", "v4", 1, "MISSING:no such function"))
         b = dump(("s", "tx_version_allowed", "v4", 1, "true"))

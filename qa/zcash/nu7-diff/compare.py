@@ -7,7 +7,8 @@ Prints every differing series. Change-point quantities are compared at every hei
 side changes, and must start at the same height; other quantities at every height either side
 emitted. A series or height only one side emitted is a difference, so a dump cannot pass by
 leaving values out. A value that one side reports as MISSING (no such function) is listed but
-not counted as a difference, as long as the other side has a record there too.
+not counted as a difference, as long as the other side has a record there too. An ERR value (a
+production function or scenario that failed) is a difference even when both sides report it.
 """
 import bisect
 import gzip
@@ -40,6 +41,11 @@ def load(path):
     return recs
 
 
+def is_err(value):
+    """Whether a record's value reports a failure (see SPEC.md); None means no record."""
+    return value is not None and value.startswith("ERR:")
+
+
 def value_at(points, heights, h):
     """The change-point value in effect at height h."""
     i = bisect.bisect_right(heights, h) - 1
@@ -64,8 +70,9 @@ def compare(a, b):
             heights = sorted(set(va) | set(vb), key=lambda h: (h is None, h))
             # None, which no record's (string) value can be, marks a height a side has no record for.
             pairs = [(h, va.get(h), vb.get(h)) for h in heights]
-        bad = [(h, x, y) for h, x, y in pairs if x != y]
-        missing = [p for p in bad if None not in p[1:] and (p[1].startswith("MISSING") or p[2].startswith("MISSING"))]
+        bad = [(h, x, y) for h, x, y in pairs if x != y or is_err(x) or is_err(y)]
+        missing = [p for p in bad if None not in p[1:] and not (is_err(p[1]) or is_err(p[2]))
+                   and (p[1].startswith("MISSING") or p[2].startswith("MISSING"))]
         bad = [p for p in bad if p not in missing]
         if missing:
             notes.append(f"MISSING on one side: {scenario} {quantity} [{key}] at {len(missing)} point(s)")
