@@ -3,16 +3,21 @@
 #include "consensus/upgrades.h"
 #include "consensus/validation.h"
 #include "crypto/equihash.h"
+#include "hash.h"
 #include "keystore.h"
 #include "main.h"
 #include "miner.h"
+#include "net.h"
 #include "pow.h"
 #include "script/sign.h"
 #include "test/test_bitcoin.h"
 
+#include <algorithm>
+#include <list>
 #include <map>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include <boost/test/unit_test.hpp>
@@ -129,25 +134,47 @@ struct Nu7ChainSetup : public TestingSetup {
     }
 
     /**
-     * Adds a transaction to the mempool that spends the coinbase output of the block at
-     * `height` back to coinbaseScript, paying `fee`.
+     * A transaction for the next block that spends the coinbase output of the block at
+     * `height` back to coinbaseScript, paying `fee`, with the default expiry or `expiry`.
      */
-    void AddFeeTransaction(int height, CAmount fee) {
+    CMutableTransaction FeeTransaction(int height, CAmount fee, std::optional<uint32_t> expiry = std::nullopt) {
         const auto& consensus = Params().GetConsensus();
         const CTransaction& prev = coinbaseTxns.at(height - 1);
         const int nextHeight = chainActive.Height() + 1;
-        const uint32_t branchId = CurrentEpochBranchId(nextHeight, consensus);
 
         CMutableTransaction mtx = CreateNewContextualCMutableTransaction(consensus, nextHeight, false);
+        if (expiry.has_value()) {
+            mtx.nExpiryHeight = expiry.value();
+        }
         mtx.vin.emplace_back(COutPoint(prev.GetHash(), 0));
         mtx.vout.emplace_back(prev.vout[0].nValue - fee, coinbaseScript);
         const PrecomputedTransactionData txdata(mtx, {prev.vout[0]});
         BOOST_REQUIRE(SignSignature(
-            keystore, prev.vout[0].scriptPubKey, mtx, txdata, 0, prev.vout[0].nValue, SIGHASH_ALL, branchId));
+            keystore, prev.vout[0].scriptPubKey, mtx, txdata, 0, prev.vout[0].nValue, SIGHASH_ALL,
+            CurrentEpochBranchId(nextHeight, consensus)));
+        return mtx;
+    }
 
+    /** Adds FeeTransaction(height, fee) to the mempool without checking it. */
+    void AddFeeTransaction(int height, CAmount fee) {
+        CMutableTransaction mtx = FeeTransaction(height, fee);
+        const uint32_t branchId = CurrentEpochBranchId(chainActive.Height() + 1, Params().GetConsensus());
         TestMemPoolEntryHelper entry;
         mempool.addUnchecked(
             mtx.GetHash(), entry.Fee(fee).Time(GetTime()).SpendsCoinbase(true).BranchId(branchId).FromTx(mtx));
+    }
+
+    /** Submits `mtx` to the mempool, and returns the reject reason if it is refused. */
+    std::optional<std::string> Submit(const CMutableTransaction& mtx) {
+        LOCK(cs_main);
+        CValidationState state;
+        if (AcceptToMemoryPool(Params(), mempool, state, CTransaction(mtx), false, nullptr)) {
+            return std::nullopt;
+        }
+        int dos = -1;
+        BOOST_CHECK(state.IsInvalid(dos));
+        BOOST_CHECK_EQUAL(dos, 0);
+        return state.GetRejectReason();
     }
 };
 
@@ -155,6 +182,73 @@ struct Nu7ChainSetup : public TestingSetup {
 CAmount NSMValueBalance(const CBlockIndex* pindex) {
     BOOST_REQUIRE(pindex->nChainNSMValueBalance.has_value());
     return pindex->nChainNSMValueBalance.value();
+}
+
+/** Queues a P2P message from `node`, as if it had arrived from the network. */
+void ReceiveRawMessage(CNode& node, const char* command, CDataStream& payload) {
+    CDataStream msg(SER_NETWORK, PROTOCOL_VERSION);
+    CMessageHeader hdr(Params().MessageStart(), command, payload.size());
+    uint256 hash = Hash(payload.begin(), payload.end());
+    memcpy(hdr.pchChecksum, hash.begin(), CMessageHeader::CHECKSUM_SIZE);
+    msg << hdr;
+    msg.insert(msg.end(), payload.begin(), payload.end());
+    LOCK(node.cs_vRecvMsg);
+    BOOST_REQUIRE(node.ReceiveMsgBytes((const char*)&msg[0], msg.size()));
+}
+
+/** The commands of the messages queued to send to `node`. */
+std::vector<std::string> OutboundCommands(CNode& node) {
+    std::vector<std::string> commands;
+    LOCK(node.cs_vSend);
+    for (const CSerializeData& msg : node.vSendMsg) {
+        CDataStream ss(msg, SER_NETWORK, PROTOCOL_VERSION);
+        CMessageHeader hdr(Params().MessageStart());
+        ss >> hdr;
+        commands.push_back(hdr.GetCommand());
+    }
+    return commands;
+}
+
+/** A peer that relays transactions, as after the version handshake (which MSG_WTX inventory needs). */
+std::unique_ptr<CNode> MakePeer(uint32_t ip) {
+    struct in_addr addr;
+    addr.s_addr = ip;
+    auto peer = std::make_unique<CNode>(
+        INVALID_SOCKET, CAddress(CService(CNetAddr(addr), Params().GetDefaultPort())), "", false);
+    peer->nVersion = PROTOCOL_VERSION;
+    {
+        LOCK(peer->cs_vSend);
+        peer->ssSend.SetVersion(PROTOCOL_VERSION);
+    }
+    {
+        LOCK(peer->cs_vRecvMsg);
+        peer->SetRecvVersion(PROTOCOL_VERSION);
+    }
+    {
+        LOCK(peer->cs_filter);
+        peer->fRelayTxes = true;
+    }
+    return peer;
+}
+
+/** Announces `tx` to `peer`, which also puts it in the relay map. */
+void Announce(CNode& peer, const CTransaction& tx) {
+    peer.PushTxInventory(tx.GetWTxId());
+    BOOST_REQUIRE(SendMessages(Params().GetConsensus(), &peer));
+    const auto commands = OutboundCommands(peer);
+    BOOST_REQUIRE(std::find(commands.begin(), commands.end(), "inv") != commands.end());
+}
+
+/** Whether a getdata from `peer` for `tx` is answered with the transaction. */
+bool ServesTx(CNode& peer, const CTransaction& tx) {
+    const size_t queuedBefore = OutboundCommands(peer).size();
+    const WTxId wtxid = tx.GetWTxId();
+    CDataStream payload(SER_NETWORK, PROTOCOL_VERSION);
+    payload << std::vector<CInv>{CInv(MSG_WTX, wtxid.hash, wtxid.authDigest)};
+    ReceiveRawMessage(peer, "getdata", payload);
+    BOOST_REQUIRE(ProcessMessages(Params(), &peer));
+    const auto commands = OutboundCommands(peer);
+    return std::find(commands.begin() + queuedBefore, commands.end(), "tx") != commands.end();
 }
 
 /** The chain supply delta of the tip. */
@@ -281,6 +375,116 @@ BOOST_AUTO_TEST_CASE(failed_block_does_not_stop_reload)
     BOOST_CHECK(chainActive.Tip()->GetBlockHash() == tipHash);
     BOOST_CHECK_EQUAL(NSMValueBalance(chainActive.Tip()), 0);
     BOOST_CHECK(!mapBlockIndex.at(block.GetHash())->nChainNSMValueBalance.has_value());
+}
+
+BOOST_AUTO_TEST_CASE(mempool_refuses_what_zakura_would_reject)
+{
+    // Zakura may be up to RELAY_HEIGHT_MARGIN blocks ahead, so from next height
+    // NU7_HEIGHT - 3 a transaction committing to NU6.3 could reach Zakura after it has
+    // activated NU7. (Without an expiry, it is not refused as expiring soon.)
+    MineTo(NU7_HEIGHT - 5);
+    BOOST_CHECK(Submit(FeeTransaction(1, FEE, 0)) == std::nullopt);
+    MineBlock();
+    BOOST_CHECK(Submit(FeeTransaction(2, FEE, 0)) == std::string("tx-invalid-at-relay-height"));
+
+    // From NU7, transactions committing to NU7 are accepted again.
+    MineTo(NU7_HEIGHT);
+    BOOST_CHECK(Submit(FeeTransaction(3, FEE)) == std::nullopt);
+}
+
+BOOST_AUTO_TEST_CASE(mempool_drops_what_zakura_would_reject)
+{
+    // With the next block at NU7_HEIGHT - 4 a transaction committing to NU6.3 is still
+    // valid at the relay height, NU7_HEIGHT - 1. Assemble that block before submitting the
+    // transaction, so it stays in the mempool.
+    MineTo(NU7_HEIGHT - 5);
+    auto tmpl = TemplateWithCoinbaseDelta(0);
+    const CTransaction tx(FeeTransaction(1, FEE, 0));
+    BOOST_REQUIRE(Submit(CMutableTransaction(tx)) == std::nullopt);
+    auto peer = MakePeer(0xa0b0c001);
+    Announce(*peer, tx);
+    BOOST_CHECK(ServesTx(*peer, tx));
+
+    // Once the block raises the relay height to NU7, Zakura could reject the transaction,
+    // so the mempool drops it and a getdata for it gets notfound.
+    CBlock& block = tmpl->block;
+    Solve(block);
+    CValidationState state;
+    ProcessNewBlock(state, Params(), NULL, &block, true, NULL);
+    BOOST_REQUIRE(chainActive.Tip()->GetBlockHash() == block.GetHash());
+    BOOST_CHECK(!mempool.exists(tx.GetHash()));
+    BOOST_CHECK(!ServesTx(*peer, tx));
+
+    // Invalidating the block lowers the relay height again (the invalid best header it
+    // leaves behind is not Zakura's), so the mempool readmits the transaction and serves it
+    // to a peer it is announced to.
+    {
+        LOCK(cs_main);
+        CValidationState invalidState;
+        BOOST_REQUIRE(InvalidateBlock(invalidState, Params(), chainActive.Tip()));
+    }
+    BOOST_REQUIRE(Submit(CMutableTransaction(tx)) == std::nullopt);
+    auto otherPeer = MakePeer(0xa0b0c002);
+    Announce(*otherPeer, tx);
+    BOOST_CHECK(ServesTx(*otherPeer, tx));
+}
+
+BOOST_AUTO_TEST_CASE(best_header_drops_what_zakura_would_reject)
+{
+    MineTo(NU7_HEIGHT - 5);
+    const CTransaction tx(FeeTransaction(1, FEE, 0));
+    BOOST_REQUIRE(Submit(CMutableTransaction(tx)) == std::nullopt);
+
+    // Zakura's header for NU7_HEIGHT - 4 raises the relay height RELAY_HEIGHT_MARGIN blocks
+    // past its next block, to NU7, before the block arrives, even when a later header in
+    // the same message is rejected.
+    CBlock block;
+    block.nVersion = CBlockHeader::CURRENT_VERSION;
+    block.hashPrevBlock = chainActive.Tip()->GetBlockHash();
+    block.hashMerkleRoot = ArithToUint256(arith_uint256(1));
+    block.nTime = chainActive.Tip()->nTime + 1;
+    block.nBits = chainActive.Tip()->nBits;
+    Solve(block);
+    CBlockHeader stray = block.GetBlockHeader();
+    stray.hashPrevBlock = uint256();
+    const std::vector<CBlockHeader> headers{block.GetBlockHeader(), stray};
+
+    auto peer = MakePeer(0xa0b0c003);
+    CDataStream payload(SER_NETWORK, PROTOCOL_VERSION);
+    WriteCompactSize(payload, headers.size());
+    for (const CBlockHeader& header : headers) {
+        payload << header;
+        WriteCompactSize(payload, 0);
+    }
+    ReceiveRawMessage(*peer, "headers", payload);
+    ProcessMessages(Params(), peer.get());
+    BOOST_REQUIRE_EQUAL(pindexBestHeader->nHeight, NU7_HEIGHT - 4);
+    BOOST_CHECK_EQUAL(chainActive.Height(), NU7_HEIGHT - 5);
+    BOOST_CHECK(!mempool.exists(tx.GetHash()));
+}
+
+BOOST_AUTO_TEST_CASE(relay_map_checks_the_branch)
+{
+    // A transaction the mempool lost some other way before the relay height reached NU7 is
+    // still in the relay map, but getdata no longer serves it.
+    MineTo(NU7_HEIGHT - 5);
+    auto tmpl = TemplateWithCoinbaseDelta(0);
+    const CTransaction tx(FeeTransaction(1, FEE, 0));
+    BOOST_REQUIRE(Submit(CMutableTransaction(tx)) == std::nullopt);
+    auto peer = MakePeer(0xa0b0c004);
+    Announce(*peer, tx);
+    {
+        LOCK(mempool.cs);
+        std::list<CTransaction> removed;
+        mempool.remove(tx, removed, true);
+    }
+
+    CBlock& block = tmpl->block;
+    Solve(block);
+    CValidationState state;
+    ProcessNewBlock(state, Params(), NULL, &block, true, NULL);
+    BOOST_REQUIRE(chainActive.Tip()->GetBlockHash() == block.GetHash());
+    BOOST_CHECK(!ServesTx(*peer, tx));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

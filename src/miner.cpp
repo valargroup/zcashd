@@ -297,6 +297,20 @@ public:
     }
 };
 
+uint64_t CoinbaseSaplingOutputs(const CChainParams& chainparams, const MinerAddress& minerAddress, int nHeight)
+{
+    const auto& consensus = chainparams.GetConsensus();
+    uint64_t outputs = std::holds_alternative<libzcash::SaplingPaymentAddress>(minerAddress) ? 1 : 0;
+    if (nHeight > 0 && consensus.NetworkUpgradeActive(nHeight, Consensus::UPGRADE_CANOPY)) {
+        for (const auto& [fsinfo, fs] : consensus.GetActiveFundingStreams(nHeight)) {
+            if (std::holds_alternative<libzcash::SaplingPaymentAddress>(fs.Recipient(consensus, nHeight))) {
+                outputs++;
+            }
+        }
+    }
+    return outputs;
+}
+
 CMutableTransaction CreateCoinbaseTransaction(
     const CChainParams& chainparams, CAmount nFees, CAmount additionalSubsidy, const MinerAddress& minerAddress, int nHeight)
 {
@@ -348,6 +362,9 @@ void BlockAssembler::resetBlock(const MinerAddress& minerAddress)
     });
     nBlockSigOps = 100;
 
+    // CreateNewBlock reserves room for the coinbase's Sapling outputs.
+    blockShieldedCounts = ShieldedActionCounts();
+
     // These counters do not include coinbase tx
     nBlockTx = 0;
     nFees = 0;
@@ -385,6 +402,9 @@ CBlockTemplate* BlockAssembler::CreateNewBlock(
     CBlockIndex* pindexPrev = chainActive.Tip();
     nHeight = pindexPrev->nHeight + 1;
     uint32_t consensusBranchId = CurrentEpochBranchId(nHeight, chainparams.GetConsensus());
+    // Reserve room for the coinbase's Sapling outputs, which are added after the
+    // transactions are selected.
+    blockShieldedCounts.saplingIOs = CoinbaseSaplingOutputs(chainparams, minerAddress, nHeight);
 
     // -regtest only: allow overriding block.nVersion with
     // -blockversion=N to test forking scenarios
@@ -583,6 +603,17 @@ bool BlockAssembler::TestForBlock(CTxMemPool::txiter iter)
     if (IsExpiredTx(iter->GetTx(), nHeight))
         return false;
 
+    // ZIP 218: from NU7 the block's shielded actions are limited.
+    if (chainparams.GetConsensus().NetworkUpgradeActive(nHeight, Consensus::UPGRADE_NU7)) {
+        ShieldedActionCounts counts = blockShieldedCounts;
+        counts += ShieldedActionCounts(iter->GetTx());
+        if (counts.ExceededLimit().has_value()) {
+            LogPrintf("%s: skipping tx %s: exceeds a ZIP 218 shielded limit.\n",
+                      __func__, iter->GetTx().GetHash().GetHex());
+            return false;
+        }
+    }
+
     if (chainparams.ZIP209Enabled()) {
         // Does this transaction lead to a turnstile violation?
 
@@ -633,6 +664,7 @@ void BlockAssembler::AddToBlock(CTxMemPool::txiter iter)
     nBlockSize += iter->GetTxSize();
     ++nBlockTx;
     nBlockSigOps += iter->GetSigOpCount();
+    blockShieldedCounts += ShieldedActionCounts(iter->GetTx());
     nFees += iter->GetFee();
     inBlock.insert(iter);
 

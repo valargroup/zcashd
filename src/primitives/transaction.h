@@ -17,6 +17,8 @@
 #include "consensus/upgrades.h"
 
 #include <array>
+#include <optional>
+#include <string>
 #include <variant>
 
 #include "zcash/NoteEncryption.hpp"
@@ -956,6 +958,25 @@ struct CMutableTransaction
      * For v1-v4 transactions, this returns the null hash (i.e. all-zeroes).
      */
     uint256 GetAuthDigest() const;
+};
+
+/** The counts that the ZIP 218 per-block shielded limits apply to, for a transaction or a block. */
+struct ShieldedActionCounts {
+    uint64_t orchardActions{0};
+    uint64_t ironwoodActions{0};
+    uint64_t saplingIOs{0};
+    uint64_t sproutJoinSplits{0};
+
+    ShieldedActionCounts() {}
+    explicit ShieldedActionCounts(const CTransaction& tx);
+
+    ShieldedActionCounts& operator+=(const ShieldedActionCounts& other);
+
+    /** The ZIP 218 shielded cost: Orchard and Ironwood actions, Sapling spends and outputs, and twice the JoinSplits. */
+    uint64_t Cost() const;
+
+    /** The reject reason for the first ZIP 218 per-block limit these counts exceed, if any. */
+    std::optional<std::string> ExceededLimit() const;
 };
 
 #endif // BITCOIN_PRIMITIVES_TRANSACTION_H

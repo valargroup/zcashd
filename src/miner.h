@@ -104,6 +104,13 @@ struct CBlockTemplate
 CMutableTransaction CreateCoinbaseTransaction(
     const CChainParams& chainparams, CAmount nFees, CAmount additionalSubsidy, const MinerAddress& minerAddress, int nHeight);
 
+/**
+ * The number of Sapling outputs in the coinbase that CreateCoinbaseTransaction builds for
+ * the block at nHeight: one per Sapling funding stream recipient, and one for a Sapling
+ * miner address. (Coinbase Sapling bundles are not padded.)
+ */
+uint64_t CoinbaseSaplingOutputs(const CChainParams& chainparams, const MinerAddress& minerAddress, int nHeight);
+
 /** Generate a new block, without valid proof-of-work */
 class BlockAssembler
 {
@@ -121,6 +128,8 @@ private:
     uint64_t nBlockSize;
     uint64_t nBlockTx;
     unsigned int nBlockSigOps;
+    // The ZIP 218 counts of the block, including room for the coinbase
+    ShieldedActionCounts blockShieldedCounts;
     CAmount nFees;
     CTxMemPool::setEntries inBlock;
 
