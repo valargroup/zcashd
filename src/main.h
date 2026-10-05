@@ -60,8 +60,14 @@ class PrecomputedTransactionData;
 
 struct CNodeStateStats;
 
-/** Maximum reorg length we will accept before we shut down and alert the user. */
-static const unsigned int MAX_REORG_LENGTH = COINBASE_MATURITY - 1;
+/**
+ * Maximum reorg length we will accept before we shut down and alert the user. It matches
+ * Zakura's MAX_BLOCK_REORG_HEIGHT, so this node follows any reorg Zakura does. (Blocks are
+ * 3 times as frequent from NU7, and ZIP 218 scales the recommended limit up accordingly.)
+ * MIN_BLOCKS_TO_KEEP, WITNESS_CACHE_SIZE and the Orchard wallet's MAX_CHECKPOINTS (in
+ * src/rust/src/wallet.rs) must cover it.
+ */
+static const unsigned int MAX_REORG_LENGTH = 1000;
 /** Default for DEFAULT_WHITELISTRELAY. */
 static const bool DEFAULT_WHITELISTRELAY = true;
 /** Default for DEFAULT_WHITELISTFORCERELAY. */
@@ -108,7 +114,12 @@ static const unsigned int UNDOFILE_CHUNK_SIZE = 0x100000; // 1 MiB
 static const int MAX_SCRIPTCHECK_THREADS = 16;
 /** -par default (number of script-checking threads, 0 = auto) */
 static const int DEFAULT_SCRIPTCHECK_THREADS = 0;
-/** Number of blocks that can be requested at any given time from a single peer. */
+/**
+ * Number of blocks that can be requested at any given time from a single peer. ZIP 218
+ * recommends tripling it for NU7, but Zakura, the sidecar's only peer, serves at most 16
+ * blocks per getdata (its GETDATA_MAX_BLOCK_COUNT) and ignores the rest, so a larger
+ * window would stall until the block download timeout disconnects it.
+ */
 static const int MAX_BLOCKS_IN_TRANSIT_PER_PEER = 16;
 /** Timeout in seconds during which a peer must stall block download progress before being disconnected. */
 static const unsigned int BLOCK_STALLING_TIMEOUT = 2;
@@ -145,7 +156,7 @@ static const unsigned int MAX_HEADERS_RESULTS = 160;
  *  Larger windows tolerate larger download speed differences between peer, but increase the potential
  *  degree of disordering of blocks on disk (which make reindexing and in the future perhaps pruning
  *  harder). We'll probably want to make this a per-peer adaptive value at some point. */
-static const unsigned int BLOCK_DOWNLOAD_WINDOW = 1024;
+static const unsigned int BLOCK_DOWNLOAD_WINDOW = 3072;
 /** Time to wait (in seconds) between writing blocks/block index to disk. */
 static const unsigned int DATABASE_WRITE_INTERVAL = 60 * 60;
 /** Time to wait (in seconds) between flushing chainstate to disk. */
@@ -262,10 +273,14 @@ extern bool fHavePruned;
 extern bool fPruneMode;
 /** Number of MiB of block files that we're trying to stay below. */
 extern uint64_t nPruneTarget;
-/** Block files containing a block-height within MIN_BLOCKS_TO_KEEP of chainActive.Tip() will not be pruned. */
-static const unsigned int MIN_BLOCKS_TO_KEEP = 288;
+/**
+ * Block files containing a block-height within MIN_BLOCKS_TO_KEEP of chainActive.Tip() will
+ * not be pruned, so a pruned node can still disconnect every block of a MAX_REORG_LENGTH
+ * reorg. That is more than the 864 blocks ZIP 218 recommends for NU7.
+ */
+static const unsigned int MIN_BLOCKS_TO_KEEP = MAX_REORG_LENGTH + 1;
 
-static const signed int DEFAULT_CHECKBLOCKS = MIN_BLOCKS_TO_KEEP;
+static const signed int DEFAULT_CHECKBLOCKS = 288;
 static const unsigned int DEFAULT_CHECKLEVEL = 3;
 
 /** Prefer to create v4 transactions. */

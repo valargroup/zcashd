@@ -256,6 +256,7 @@ pub fn write_checkpoint_v3<W: Write>(
 #[allow(clippy::redundant_closure)]
 pub fn read_tree<H: Hashable + HashSer + Ord + Clone, const DEPTH: u8, R: Read>(
     mut reader: R,
+    min_max_checkpoints: usize,
 ) -> io::Result<BridgeTree<H, u32, DEPTH>> {
     let tree_version = reader.read_u8()?;
     let prior_bridges = Vector::read(&mut reader, |r| read_bridge(r, tree_version))?;
@@ -291,7 +292,8 @@ pub fn read_tree<H: Hashable + HashSer + Ord + Clone, const DEPTH: u8, R: Read>(
             format!("Unrecognized tree serialization version: {:?}", flag),
         )),
     }?;
-    let max_checkpoints = read_leu64_usize(&mut reader)?;
+    // A tree written with a smaller checkpoint limit gets `min_max_checkpoints`.
+    let max_checkpoints = read_leu64_usize(&mut reader)?.max(min_max_checkpoints);
 
     BridgeTree::from_parts(
         prior_bridges,
