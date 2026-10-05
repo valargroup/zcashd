@@ -7182,9 +7182,13 @@ bool static LoadBlockIndexDB(const CChainParams& chainparams)
             }
 
             // The NSM value balance is memory only. Recompute it from the persisted
-            // chain supply delta, now that the chain total supply is final.
+            // chain supply delta, now that the chain total supply is final. Skip failed
+            // blocks: ConnectBlock stores the delta before it checks the coinbase, so an
+            // overclaiming block's delta can make the balance negative. (ConnectBlock
+            // recomputes the balance if the block is reconsidered.)
             pindex->nChainNSMValueBalance = std::nullopt;
-            if ((pindex->pprev == nullptr || pindex->pprev->nChainTx) && pindex->nChainSupplyDelta.has_value()) {
+            if (!(pindex->nStatus & BLOCK_FAILED_MASK) &&
+                    (pindex->pprev == nullptr || pindex->pprev->nChainTx) && pindex->nChainSupplyDelta.has_value()) {
                 if (!MoneyDeltaRange(pindex->nChainSupplyDelta.value())) {
                     return error("%s: chain supply delta out of range at height %d", __func__, pindex->nHeight);
                 }

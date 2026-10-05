@@ -64,14 +64,9 @@ struct Nu7ChainSetup : public TestingSetup {
         return std::unique_ptr<CBlockTemplate>(BlockAssembler(Params()).CreateNewBlock(script));
     }
 
-    /** Mines the next block with the mempool's transactions, and requires it to become the tip. */
-    CBlock MineBlock() {
+    /** Solves the Equihash proof of work for `block`. */
+    static void Solve(CBlock& block) {
         const auto& consensus = Params().GetConsensus();
-        auto tmpl = Template();
-        CBlock& block = tmpl->block;
-        unsigned int extraNonce = 0;
-        IncrementExtraNonce(tmpl.get(), chainActive.Tip(), extraNonce, consensus);
-
         eh_HashState eh_state = EhInitialiseState(consensus.nEquihashN, consensus.nEquihashK);
         CEquihashInput I{block};
         CDataStream ss(SER_NETWORK, PROTOCOL_VERSION);
@@ -89,6 +84,15 @@ struct Nu7ChainSetup : public TestingSetup {
                 };
             found = EhBasicSolveUncancellable(consensus.nEquihashN, consensus.nEquihashK, curr_state, validBlock);
         } while (!found);
+    }
+
+    /** Mines the next block with the mempool's transactions, and requires it to become the tip. */
+    CBlock MineBlock() {
+        auto tmpl = Template();
+        CBlock& block = tmpl->block;
+        unsigned int extraNonce = 0;
+        IncrementExtraNonce(tmpl.get(), chainActive.Tip(), extraNonce, Params().GetConsensus());
+        Solve(block);
 
         CValidationState state;
         ProcessNewBlock(state, Params(), NULL, &block, true, NULL);
@@ -104,18 +108,20 @@ struct Nu7ChainSetup : public TestingSetup {
         }
     }
 
-    /**
-     * The reason TestNewBlockAtTipValidity rejects the next block template after its first
-     * coinbase output is changed by delta.
-     */
-    std::string RejectReasonWithCoinbaseDelta(CAmount delta) {
+    /** The next block template, with its first coinbase output changed by delta. */
+    std::unique_ptr<CBlockTemplate> TemplateWithCoinbaseDelta(CAmount delta) {
         auto tmpl = Template();
         CMutableTransaction coinbase(tmpl->block.vtx[0]);
         coinbase.vout[0].nValue += delta;
         tmpl->block.vtx[0] = coinbase;
         unsigned int extraNonce = 0;
         IncrementExtraNonce(tmpl.get(), chainActive.Tip(), extraNonce, Params().GetConsensus());
+        return tmpl;
+    }
 
+    /** The reason TestNewBlockAtTipValidity rejects TemplateWithCoinbaseDelta(delta). */
+    std::string RejectReasonWithCoinbaseDelta(CAmount delta) {
+        auto tmpl = TemplateWithCoinbaseDelta(delta);
         LOCK(cs_main);
         CValidationState state;
         BOOST_CHECK(!TestNewBlockAtTipValidity(state, Params(), tmpl->block, true));
@@ -250,6 +256,31 @@ BOOST_AUTO_TEST_CASE(balance_is_recomputed_on_reload)
     for (const auto& [hash, balance] : balances) {
         BOOST_CHECK_EQUAL(NSMValueBalance(mapBlockIndex.at(hash)), balance);
     }
+}
+
+BOOST_AUTO_TEST_CASE(failed_block_does_not_stop_reload)
+{
+    MineTo(NU7_HEIGHT);
+    BOOST_CHECK_EQUAL(NSMValueBalance(chainActive.Tip()), 0);
+    const uint256 tipHash = chainActive.Tip()->GetBlockHash();
+
+    // A block claiming one zatoshi too many fails in ConnectBlock after its chain supply
+    // delta is stored, and that delta implies an NSM value balance of -1.
+    auto tmpl = TemplateWithCoinbaseDelta(1);
+    CBlock& block = tmpl->block;
+    Solve(block);
+    CValidationState state;
+    ProcessNewBlock(state, Params(), NULL, &block, true, NULL);
+    BOOST_REQUIRE(chainActive.Tip()->GetBlockHash() == tipHash);
+    BOOST_REQUIRE(mapBlockIndex.at(block.GetHash())->nStatus & BLOCK_FAILED_VALID);
+    BOOST_REQUIRE(mapBlockIndex.at(block.GetHash())->nChainSupplyDelta.has_value());
+
+    FlushStateToDisk();
+    UnloadBlockIndex();
+    BOOST_REQUIRE(LoadBlockIndex());
+    BOOST_CHECK(chainActive.Tip()->GetBlockHash() == tipHash);
+    BOOST_CHECK_EQUAL(NSMValueBalance(chainActive.Tip()), 0);
+    BOOST_CHECK(!mapBlockIndex.at(block.GetHash())->nChainNSMValueBalance.has_value());
 }
 
 BOOST_AUTO_TEST_SUITE_END()
