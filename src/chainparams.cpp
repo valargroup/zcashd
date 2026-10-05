@@ -597,8 +597,7 @@ public:
         consensus.vUpgrades[Consensus::UPGRADE_NU6_3].nActivationHeight = 4134000;
         // ZIP 204 assigns NU7 protocol version 170180 on Testnet.
         consensus.vUpgrades[Consensus::UPGRADE_NU7].nProtocolVersion = 170180;
-        consensus.vUpgrades[Consensus::UPGRADE_NU7].nActivationHeight =
-            nu7ActivationHeight.value_or(Consensus::NetworkUpgrade::NO_ACTIVATION_HEIGHT);
+        consensus.vUpgrades[Consensus::UPGRADE_NU7].nActivationHeight = nu7ActivationHeight.value_or(4465026);
         consensus.vUpgrades[Consensus::UPGRADE_ZFUTURE].nProtocolVersion = 0x7FFFFFFF;
         consensus.vUpgrades[Consensus::UPGRADE_ZFUTURE].nActivationHeight =
             Consensus::NetworkUpgrade::NO_ACTIVATION_HEIGHT;

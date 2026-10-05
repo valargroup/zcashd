@@ -33,6 +33,7 @@ Testnet NU7 defaults if it has them, and record what you had to do in `NOTES.<im
 |--------------|-------------------------------------------|-----------------------|
 | `testnet-A1` | configured Testnet, public defaults       | 4_200_000             |
 | `testnet-A2` | configured Testnet, public defaults       | 4_187_001             |
+| `testnet-real` | the implementation's default public Testnet, unchanged | its scheduled NU7 height, 4_465_026 |
 | `regtest-R`  | Regtest, the implementation's default Regtest config, with every upgrade through NU6.3 at height 1 (or the implementation's default Regtest heights if it forces them) and NU7 at 300 | 300 |
 
 If an implementation cannot build a scenario, emit one record
@@ -45,7 +46,7 @@ If an implementation cannot build a scenario, emit one record
 For each of these, iterate EVERY height `h` in the scan range and emit a record ONLY at the first height of
 the range and at every height where the value differs from the value at `h-1`
 ("change points"). Scan ranges:
-- `testnet-A1`, `testnet-A2`: `h` in `[A - 2_000, A + 12_000_000]`
+- `testnet-A1`, `testnet-A2`, `testnet-real`: `h` in `[A - 2_000, A + 12_000_000]`
 - `regtest-R`: `h` in `[1, 2_000_000]`
 
 Quantities (all "for the block at height h"):
@@ -95,7 +96,7 @@ is too slow (budget: each full scan should finish in < 15 minutes).
   circulation (to NSM) by ZIP 235.
 - `miner_fee_share`, same keys: the fee amount the miner may claim.
 
-### D. Difficulty (ZIP 218 + Testnet min-difficulty), `testnet-A1` and `regtest-R`
+### D. Difficulty (ZIP 218 + Testnet min-difficulty), `testnet-A1`, `testnet-real` and `regtest-R`
 
 Build a deterministic synthetic header chain and compute the expected difficulty threshold with the
 implementation's production difficulty code (e.g. `AdjustedDifficulty::new_from_header_time(...)` +
@@ -120,7 +121,7 @@ Also emit the raw per-height `median_time_past` if the implementation exposes it
   implementation's version-vs-upgrade check accepts that version at that height (only if there is a pure
   function; otherwise `MISSING`).
 
-### D2. Difficulty away from the PoW limit, `testnet-A1` only
+### D2. Difficulty away from the PoW limit, `testnet-A1` and `testnet-real`
 
 Section D mostly saturates at the Testnet PoW limit. D2 builds a second chain the same way, but:
 - starting bits `0x1d00ffff`;
