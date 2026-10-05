@@ -4,8 +4,10 @@
 Usage: compare.py [--fail-on-diff] ZCASHD_JSONL ZAKURA_JSONL[.gz]
 
 Prints every differing series. Change-point quantities are compared at every height either
-side changes; other quantities at the heights both sides emitted. A value that one side
-reports as MISSING (no such function) is listed but not counted as a difference.
+side changes, and must start at the same height; other quantities at every height either side
+emitted. A series or height only one side emitted is a difference, so a dump cannot pass by
+leaving values out. A value that one side reports as MISSING (no such function) is listed but
+not counted as a difference.
 """
 import bisect
 import gzip
@@ -44,17 +46,19 @@ def compare(a, b):
     """Returns (differences, notes) between the zcashd dump a and the Zakura dump b."""
     diffs, notes = [], []
     for k in sorted(set(a) ^ set(b)):
-        notes.append(f"only in {'zcashd' if k in a else 'zakura'}: {k}")
+        diffs.append(f"ONLY in {'zcashd' if k in a else 'zakura'}: {k}")
     for k in sorted(set(a) & set(b)):
         scenario, quantity, key = k
         va, vb = a[k], b[k]
         if quantity in RLE and None not in va and None not in vb:
             ha, hb = sorted(va), sorted(vb)
+            if ha[0] != hb[0]:
+                diffs.append(f"DIFF {scenario} {quantity} [{key}]: zcashd starts at h={ha[0]}, zakura at h={hb[0]}")
             lo = max(ha[0], hb[0])
             pairs = [(h, value_at(va, ha, h), value_at(vb, hb, h)) for h in sorted(set(ha) | set(hb)) if h >= lo]
         else:
-            common = sorted(set(va) & set(vb), key=lambda h: (h is None, h))
-            pairs = [(h, va[h], vb[h]) for h in common]
+            heights = sorted(set(va) | set(vb), key=lambda h: (h is None, h))
+            pairs = [(h, va.get(h, "ABSENT"), vb.get(h, "ABSENT")) for h in heights]
         bad = [(h, x, y) for h, x, y in pairs if x != y]
         missing = [p for p in bad if p[1].startswith("MISSING") or p[2].startswith("MISSING")]
         bad = [p for p in bad if p not in missing]

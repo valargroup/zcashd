@@ -449,6 +449,9 @@ jobs:
       - name: Make artifact executable
         run: chmod +x ./src/zcash-gtest
 
+      - name: Test the NU7 dump comparer
+        run: python3 qa/zcash/nu7-diff/test_compare.py
+
       - name: Compare zcashd's NU7 values with Zakura's
         run: ./qa/zcash/nu7-diff/run.sh --fail-on-diff
 
