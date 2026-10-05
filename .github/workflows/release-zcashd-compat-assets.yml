@@ -86,7 +86,7 @@ jobs:
             "${{ github.api_url }}/repos/${{ github.repository }}/releases/tags/$TAG")
           case "$status" in
             200)
-              if jq -r '.assets[].name' release.json | grep -q '\.tar\.gz$'; then
+              if jq -r '.assets[].name' release.json | grep -q '^zcashd-zebra-compat-'; then
                 echo "::error::Release $TAG already has assets, which Zakura may pin. Publish a new tag instead."
                 exit 1
               fi
@@ -218,48 +218,11 @@ jobs:
       - name: Build consolidated manifest and checksums
         shell: bash
         run: |
-          set -euo pipefail
-          mkdir -p ./publish/final
-          RELEASE_TAG="${{ steps.release-tag.outputs.value }}"
-          REPO="${{ github.repository }}"
-          BASE_URL="https://github.com/${REPO}/releases/download/${RELEASE_TAG}"
-
-          RELEASE_TAG="$RELEASE_TAG" BASE_URL="$BASE_URL" REPOSITORY="$REPO" python3 - <<'PY'
-          import glob
-          import json
-          import os
-          from pathlib import Path
-
-          release_tag = os.environ["RELEASE_TAG"]
-          base_url = os.environ["BASE_URL"]
-          repository = os.environ["REPOSITORY"]
-          files = sorted(glob.glob("./publish/**/*.metadata.json", recursive=True))
-          if not files:
-            raise SystemExit("No metadata files found.")
-
-          entries = []
-          for path in files:
-            item = json.loads(Path(path).read_text(encoding="utf-8"))
-            item["runtime"]["url"] = f"{base_url}/{item['runtime']['archive']}"
-            item["debug"]["url"] = f"{base_url}/{item['debug']['archive']}"
-            entries.append(item)
-
-          output = {
-            "schema_version": 1,
-            "release_tag": release_tag,
-            "repository": repository,
-            "artifacts": entries,
-          }
-
-          Path("./publish/final").mkdir(parents=True, exist_ok=True)
-          Path(f"./publish/final/zcashd-zebra-compat-manifest-{release_tag}.json").write_text(
-            json.dumps(output, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-          )
-          PY
-
-          find ./publish -type f -name '*.tar.gz' -exec cp {} ./publish/final/ \;
-          (cd ./publish/final && sha256sum ./* > SHA256SUMS.txt)
+          ./zcutil/consolidate-zcashd-compat-release.sh \
+            --input-dir ./publish \
+            --output-dir ./publish/final \
+            --release-tag "${{ steps.release-tag.outputs.value }}" \
+            --repository "${{ github.repository }}"
 
       # A release candidate is a prerelease, so it never becomes the latest release.
       - name: Upload assets to release
@@ -267,7 +230,4 @@ jobs:
         with:
           tag_name: ${{ steps.release-tag.outputs.value }}
           prerelease: ${{ contains(steps.release-tag.outputs.value, '-rc') }}
-          files: |
-            ./publish/final/*.tar.gz
-            ./publish/final/zcashd-zebra-compat-manifest-*.json
-            ./publish/final/SHA256SUMS.txt
+          files: ./publish/final/*
