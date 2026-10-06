@@ -366,8 +366,8 @@ struct CNodeState {
     bool fSyncStarted;
     //! The getheaders request we are currently waiting on, if any.
     std::optional<GetHeadersRequest> pendingGetHeaders;
-    //! The most recent inv-triggered getheaders request deferred while another request is pending.
-    std::optional<uint256> deferredGetHeadersStop;
+    //! Whether a block was announced while another getheaders was pending; see MaybePushDeferredGetHeaders.
+    bool fDeferredGetHeaders;
     //! When we last received a headers message from this peer, in microseconds.
     int64_t nLastHeadersActivity;
     //! Whether the first IBD headers poll has been logged for this connection.
@@ -388,6 +388,7 @@ struct CNodeState {
         hashLastUnknownBlock.SetNull();
         pindexLastCommonBlock = NULL;
         fSyncStarted = false;
+        fDeferredGetHeaders = false;
         nLastHeadersActivity = GetTimeMicros();
         fLoggedIbdPoll = false;
         nStallingSince = 0;
@@ -434,7 +435,7 @@ static void QueueOrPushInvGetHeaders(CNode* pto, CNodeState& state, const CBlock
     EXCLUSIVE_LOCKS_REQUIRED(cs_main)
 {
     if (state.pendingGetHeaders) {
-        state.deferredGetHeadersStop = hashStop;
+        state.fDeferredGetHeaders = true;
         LogPrint("net", "deferring getheaders %s for peer=%d while another getheaders is pending\n",
                  hashStop.ToString(), pto->id);
         return;
@@ -442,24 +443,27 @@ static void QueueOrPushInvGetHeaders(CNode* pto, CNodeState& state, const CBlock
     PushTrackedGetHeaders(pto, state, locator, hashStop);
 }
 
+/**
+ * Once no other getheaders is pending, asks for every header after our best one if a block was
+ * announced while one was.
+ *
+ * Block announcements arrive in no guaranteed order, so the last one can be an ancestor of a
+ * block announced earlier. Requesting only up to it, or skipping the request once its header is
+ * known, would leave that newer block unrequested.
+ */
 static void MaybePushDeferredGetHeaders(CNode* pto, CNodeState& state)
     EXCLUSIVE_LOCKS_REQUIRED(cs_main)
 {
-    if (!state.deferredGetHeadersStop || state.pendingGetHeaders) {
+    if (!state.fDeferredGetHeaders || state.pendingGetHeaders) {
         return;
     }
-
-    uint256 hashStop = *state.deferredGetHeadersStop;
-    state.deferredGetHeadersStop.reset();
-    if (mapBlockIndex.count(hashStop)) {
-        return;
-    }
+    state.fDeferredGetHeaders = false;
 
     if (pindexBestHeader == NULL) {
         pindexBestHeader = chainActive.Tip();
     }
-    LogPrint("net", "deferred getheaders (%d) %s to peer=%d\n", pindexBestHeader->nHeight, hashStop.ToString(), pto->id);
-    PushTrackedGetHeaders(pto, state, chainActive.GetLocator(pindexBestHeader), hashStop);
+    LogPrint("net", "deferred getheaders (%d) to peer=%d\n", pindexBestHeader->nHeight, pto->id);
+    PushTrackedGetHeaders(pto, state, chainActive.GetLocator(pindexBestHeader), uint256());
 }
 
 static bool HeadersMatchPendingGetHeaders(const CNodeState& state, const std::vector<CBlockHeader>& headers)

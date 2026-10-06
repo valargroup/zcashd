@@ -19,6 +19,8 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <algorithm>
+#include <iterator>
 #include <memory>
 
 namespace {
@@ -219,6 +221,37 @@ std::vector<CBlockHeader> SolvedHeaders(int count)
     }
     return headers;
 }
+
+/**
+ * Answers the last getheaders queued for `node` as a peer whose best chain is `chain` would:
+ * with the headers after the first locator entry found in `chain`, through the stop hash.
+ */
+void AnswerGetHeaders(CNode& node, const std::vector<CBlockHeader>& chain)
+{
+    std::vector<GetHeadersPayload> requests = GetHeadersMessages(node);
+    BOOST_REQUIRE(!requests.empty());
+    const GetHeadersPayload& request = requests.back();
+
+    auto fork = chain.end();
+    for (const uint256& hash : request.locator.vHave) {
+        fork = std::find_if(chain.begin(), chain.end(),
+            [&](const CBlockHeader& header) { return header.GetHash() == hash; });
+        if (fork != chain.end()) {
+            break;
+        }
+    }
+    BOOST_REQUIRE(fork != chain.end());
+
+    std::vector<CBlockHeader> headers;
+    for (auto it = std::next(fork); it != chain.end() && headers.size() < MAX_HEADERS_RESULTS; ++it) {
+        headers.push_back(*it);
+        if (it->GetHash() == request.hashStop) {
+            break;
+        }
+    }
+    ReceiveHeaders(node, headers);
+    BOOST_REQUIRE(ProcessMessages(Params(), &node));
+}
 #endif // ENABLE_MINING
 
 } // namespace
@@ -309,6 +342,28 @@ BOOST_AUTO_TEST_CASE(inv_request_is_tracked_and_replayed)
     messages = GetHeadersMessages(*peer);
     BOOST_REQUIRE_EQUAL(messages.size(), 3);
     CheckSameGetHeaders(messages[1], messages[2]);
+}
+
+BOOST_AUTO_TEST_CASE(invs_during_pending_request_defer_one_request)
+{
+    auto peer = MakePeer();
+    StartInitialGetHeaders(*peer);
+    ReceiveInv(*peer, {CInv(MSG_BLOCK, InsecureRand256())});
+    BOOST_REQUIRE(ProcessMessages(Params(), peer.get()));
+    ReceiveInv(*peer, {CInv(MSG_BLOCK, InsecureRand256())});
+    BOOST_REQUIRE(ProcessMessages(Params(), peer.get()));
+    BOOST_REQUIRE_EQUAL(GetHeadersMessages(*peer).size(), 1);
+
+    ReceiveHeaders(*peer, {});
+    BOOST_REQUIRE(ProcessMessages(Params(), peer.get()));
+    std::vector<GetHeadersPayload> messages = GetHeadersMessages(*peer);
+    BOOST_REQUIRE_EQUAL(messages.size(), 2);
+    BOOST_CHECK(messages.back().hashStop.IsNull());
+
+    // The peer no longer has the announced blocks, which must not trigger further requests.
+    ReceiveHeaders(*peer, {});
+    BOOST_REQUIRE(ProcessMessages(Params(), peer.get()));
+    BOOST_CHECK_EQUAL(GetHeadersMessages(*peer).size(), 2);
 }
 
 BOOST_AUTO_TEST_CASE(ibd_poll_fires_after_headers_inactivity)
@@ -500,6 +555,58 @@ BOOST_FIXTURE_TEST_CASE(full_new_headers_without_pending_still_continues, TestCh
     BOOST_CHECK(messages.back().hashStop.IsNull());
     BOOST_REQUIRE(!messages.back().locator.IsNull());
     BOOST_CHECK_EQUAL(messages.back().locator.vHave.front().ToString(), headers.back().GetHash().ToString());
+}
+
+BOOST_FIXTURE_TEST_CASE(deferred_request_fetches_newest_of_reordered_invs, RegtestingSetup)
+{
+    const CBlockHeader genesis = chainActive.Genesis()->GetBlockHeader();
+    std::vector<CBlockHeader> stale = SolvedHeaders(2);
+    std::vector<CBlockHeader> fork = SolvedHeaders(3);
+
+    auto peer = MakePeer();
+    StartInitialGetHeaders(*peer);
+    AnswerGetHeaders(*peer, {genesis, stale[0], stale[1]});
+    BOOST_REQUIRE_EQUAL(pindexBestHeader->GetBlockHash().ToString(), stale[1].GetHash().ToString());
+
+    // The peer replaces its branch with a longer one, and announces the new blocks out of order
+    // while our getheaders for the first of them is pending.
+    const std::vector<CBlockHeader> peerChain = {genesis, fork[0], fork[1], fork[2]};
+    ReceiveInv(*peer, {CInv(MSG_BLOCK, fork[0].GetHash())});
+    BOOST_REQUIRE(ProcessMessages(Params(), peer.get()));
+    ReceiveInv(*peer, {CInv(MSG_BLOCK, fork[2].GetHash())});
+    BOOST_REQUIRE(ProcessMessages(Params(), peer.get()));
+    ReceiveInv(*peer, {CInv(MSG_BLOCK, fork[1].GetHash())});
+    BOOST_REQUIRE(ProcessMessages(Params(), peer.get()));
+    BOOST_REQUIRE_EQUAL(GetHeadersMessages(*peer).size(), 2);
+
+    AnswerGetHeaders(*peer, peerChain);
+    BOOST_REQUIRE_EQUAL(GetHeadersMessages(*peer).size(), 3);
+    AnswerGetHeaders(*peer, peerChain);
+
+    BOOST_CHECK_EQUAL(pindexBestHeader->GetBlockHash().ToString(), fork[2].GetHash().ToString());
+    BOOST_CHECK_EQUAL(GetHeadersMessages(*peer).size(), 3);
+}
+
+BOOST_FIXTURE_TEST_CASE(known_last_inv_does_not_drop_deferred_request, RegtestingSetup)
+{
+    const CBlockHeader genesis = chainActive.Genesis()->GetBlockHeader();
+    std::vector<CBlockHeader> chain = SolvedHeaders(3);
+
+    // While the initial getheaders is pending, the peer announces its two newest blocks out of order.
+    auto peer = MakePeer();
+    StartInitialGetHeaders(*peer);
+    ReceiveInv(*peer, {CInv(MSG_BLOCK, chain[2].GetHash())});
+    BOOST_REQUIRE(ProcessMessages(Params(), peer.get()));
+    ReceiveInv(*peer, {CInv(MSG_BLOCK, chain[1].GetHash())});
+    BOOST_REQUIRE(ProcessMessages(Params(), peer.get()));
+    BOOST_REQUIRE_EQUAL(GetHeadersMessages(*peer).size(), 1);
+
+    // Its answer predates the newest block, but includes the one announced last.
+    AnswerGetHeaders(*peer, {genesis, chain[0], chain[1]});
+    BOOST_REQUIRE_EQUAL(GetHeadersMessages(*peer).size(), 2);
+    AnswerGetHeaders(*peer, {genesis, chain[0], chain[1], chain[2]});
+
+    BOOST_CHECK_EQUAL(pindexBestHeader->GetBlockHash().ToString(), chain[2].GetHash().ToString());
 }
 
 BOOST_FIXTURE_TEST_CASE(each_block_is_requested_in_its_own_getdata, RegtestingSetup)
