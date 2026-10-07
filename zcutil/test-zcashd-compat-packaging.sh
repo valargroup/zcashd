@@ -58,8 +58,12 @@ mkdir -p "$WORK/archive"
 tar -xzf "$PACKAGED/$BASENAME.tar.gz" -C "$WORK/archive" ./bin/zcashd
 cmp "$PACKAGED/$BASENAME" "$WORK/archive/bin/zcashd" || fail "standalone executable differs from the archived ./bin/zcashd"
 cmp -s "$PACKAGED/$BASENAME" "$FIXTURE/src/zcashd" && fail "standalone executable was not stripped"
-objcopy --dump-section .gnu_debuglink="$WORK/debuglink" "$PACKAGED/$BASENAME" 2> /dev/null \
+# Without an output operand objcopy rewrites its input, so write the copy elsewhere
+# and check that inspecting the release executable left its bytes alone.
+objcopy --dump-section .gnu_debuglink="$WORK/debuglink" "$PACKAGED/$BASENAME" "$WORK/debuglink-inspected" 2> /dev/null \
   || fail "standalone executable has no .gnu_debuglink section"
+(cd "$PACKAGED" && sha256sum -c --quiet "$BASENAME.sha256") || fail "inspecting the debuglink rewrote the standalone executable"
+cmp "$PACKAGED/$BASENAME" "$WORK/archive/bin/zcashd" || fail "inspecting the debuglink rewrote the standalone executable"
 "$PACKAGED/$BASENAME" | grep -q 'version v0.0.0-fixture' || fail "standalone executable does not run"
 
 python3 - "$PACKAGED/$BASENAME.metadata.json" "$PACKAGED" "$BASENAME" <<'PY' || fail "package metadata is wrong"
