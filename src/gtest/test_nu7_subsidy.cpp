@@ -100,6 +100,20 @@ TEST(NU7Subsidy, MainnetSchedule) {
     EXPECT_EQ(StreamValue(params, Consensus::FS_FPF_ZCG_H3, 6132390), 0);
     EXPECT_EQ(StreamValue(params, Consensus::FS_CCF_H3, 6132390), 0);
     EXPECT_EQ(params.NSMReissuanceHeight(), 8939664);
+
+    const auto& stream = *params.vFundingStreams[Consensus::FS_FPF_ZCG_H3];
+    const KeyIO keyIO(Params(CBaseChainParams::MAIN));
+    const CScript oldRecipient = GetScriptForDestination(
+        keyIO.DecodeDestination("t3cFfPt1Bcvgez9ZbMBFWeZsskxTkPzGCow"));
+    const CScript newRecipient = GetScriptForDestination(
+        keyIO.DecodeDestination("t1MkHnkxVjNpNbCrSs3AJ8J7ZSp6NTYiUcG"));
+    // ZIP 2008 switches recipients at the first address period after activation.
+    for (int height : {nu7 - 1, nu7, 3612389}) {
+        EXPECT_EQ(std::get<CScript>(stream.Recipient(params, height)), oldRecipient) << height;
+    }
+    for (int height : {3612390, 6132389}) {
+        EXPECT_EQ(std::get<CScript>(stream.Recipient(params, height)), newRecipient) << height;
+    }
 }
 
 TEST(NU7Subsidy, TestnetSchedule) {
