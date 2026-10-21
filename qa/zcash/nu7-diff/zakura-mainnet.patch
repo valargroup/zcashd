@@ -25,7 +25,7 @@ index 0f74bb1ae..8f1fb0c6f 100644
          difficulty_chain(
              net,
 @@ -672,7 +672,7 @@ fn run_scenario(sc: &Scenario, net: &Network, out: &mut Vec<Rec>, notes: &mut Ve
- 
+
          // D2: near the target spacing and away from the PoW limit, with a slow and then a
          // fast stretch on each side of NU7 to reach the adjustment bounds.
 -        if is_testnet {
