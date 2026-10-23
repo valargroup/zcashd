@@ -4,6 +4,13 @@ release-notes at release time)
 Notable changes
 ===============
 
+Sidecar sync after burst mining
+------------------------------
+
+The sidecar now fetches headers through its peer's tip after block announcements
+arrive while a header request is pending. Out-of-order announcements could
+previously leave it one or more blocks behind until another block was announced.
+
 NU7 consensus support
 ---------------------
 
