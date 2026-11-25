@@ -23,12 +23,9 @@ from decimal import Decimal
 
 
 IRONWOOD_TREE_EMPTY_ROOT = "ae2935f1dfd8a24aed7c70df7de3a668eb7a49b1319880dde2bbd9031ae5d82f"
-# Must match IRONWOOD_WALLET_UNSUPPORTED in src/wallet/wallet_tx_builder.cpp. The
-# wording is permanent unsupport by design; it must never say "not yet available".
-IRONWOOD_WALLET_UNSUPPORTED = (
-    "zcashd does not support the Ironwood pool, and Orchard payments (including spends of "
-    "existing Orchard notes) are unsupported from NU6.3. Use transparent or Sapling funds "
-    "with zcashd, or a Z3-stack wallet for shielded payments."
+HISTORICAL_ORCHARD_UNSUPPORTED = (
+    "Historical Orchard notes cannot be spent from NU6.3. For Ironwood, use "
+    "z_shieldcoinbase to shield rewards or z_sendmany to pay transparent recipients."
 )
 # NU5 activates before NU6.3 so the test can create Orchard notes pre-NU6.3 and
 # then prove they are frozen by the wallet guardrails post-activation. The gap
@@ -153,11 +150,6 @@ class IronwoodRpcSurfaceTest(BitcoinTestFramework):
         assert_equal(node.getblockcount(), tip_height)
         assert_equal(node.getblock(tip_hash)['finalironwoodroot'], IRONWOOD_TREE_EMPTY_ROOT)
 
-        # Wallet guardrails (permanent behavior): any post-NU6.3 wallet operation
-        # involving Orchard fails at preparation time with the documented
-        # permanent-unsupported error, never as a proving failure or an
-        # unbalanced bundle.
-
         # Sending TO an Orchard receiver fails (z_sendmany prepares inside the
         # async operation, so the error surfaces via the operation status).
         # Spend a whole coinbase UTXO (amount + fee = 10) so the transaction has
@@ -170,7 +162,7 @@ class IronwoodRpcSurfaceTest(BitcoinTestFramework):
             1,
             fee,
             'AllowRevealedSenders')
-        wait_and_assert_operationid_status(node, opid, 'failed', IRONWOOD_WALLET_UNSUPPORTED)
+        wait_and_assert_operationid_status(node, opid, 'failed', HISTORICAL_ORCHARD_UNSUPPORTED)
 
         # Spending FROM existing Orchard funds fails, even to unshield them.
         # This is the permanent fund freeze called out in the release notes.
@@ -181,18 +173,21 @@ class IronwoodRpcSurfaceTest(BitcoinTestFramework):
             1,
             None,
             'AllowRevealedRecipients')
-        wait_and_assert_operationid_status(node, opid, 'failed', IRONWOOD_WALLET_UNSUPPORTED)
+        wait_and_assert_operationid_status(node, opid, 'failed', HISTORICAL_ORCHARD_UNSUPPORTED)
         balances = node.z_getbalanceforaccount(acct)['pools']
         assert_equal(balances['orchard']['valueZat'], int(orchard_funds * 100000000))
 
-        # z_shieldcoinbase and z_mergetoaddress prepare synchronously in the RPC
-        # handler, so the same guardrail surfaces as an immediate RPC error.
-        assert_raises_message(
-            JSONRPCException,
-            IRONWOOD_WALLET_UNSUPPORTED,
-            node.z_shieldcoinbase,
-            '*',
-            orchard_ua)
+        # The same receiver gets a new Ironwood note without changing the historical balance.
+        shield = node.z_shieldcoinbase('*', orchard_ua, None, 1)
+        txid = wait_and_assert_operationid_status(node, shield['opid'])
+        node.generate(1)
+        self.sync_all()
+        tx = node.getrawtransaction(txid, 1)
+        assert_equal(tx['version'], 6)
+        assert_equal(tx['orchard']['actions'], [])
+        balances = node.z_getbalanceforaccount(acct)['pools']
+        assert_equal(balances['ironwood']['valueZat'], -tx['ironwood']['valueBalanceZat'])
+        assert_equal(balances['orchard']['valueZat'], int(orchard_funds * 100000000))
         # z_mergetoaddress does not merge coinbase UTXOs, and all of the wallet's
         # transparent funds so far are coinbase, so create a regular UTXO first
         # (regtest permits transparent coinbase spends); otherwise the RPC fails
@@ -201,7 +196,7 @@ class IronwoodRpcSurfaceTest(BitcoinTestFramework):
         node.generate(1)
         assert_raises_message(
             JSONRPCException,
-            IRONWOOD_WALLET_UNSUPPORTED,
+            HISTORICAL_ORCHARD_UNSUPPORTED,
             node.z_mergetoaddress,
             ['ANY_TADDR'],
             orchard_ua,

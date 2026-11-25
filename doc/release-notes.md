@@ -59,7 +59,7 @@ Action required for Sprout users BEFORE NU7 activation
 Wallet changes from NU7
 -----------------------
 
-- Wallet transactions are v5, even with `-preferredtxversion=4`.
+- Wallet transactions using Ironwood are v6. Other wallet transactions are v5, even with `-preferredtxversion=4`.
 - The default expiry delta becomes 120 blocks, the same time as 40 blocks at
   the old spacing. `-txexpirydelta` still overrides it.
 - Sprout spends and the Sprout-to-Sapling migration are refused with an error.
@@ -122,8 +122,8 @@ Other fixes
   limit, the sidecar waited for the download timeout on each remaining block,
   and each wait was longer than the last.
 
-NU6.3 (Ironwood) consensus support; no wallet support, ever
------------------------------------------------------------
+NU6.3 (Ironwood) consensus support
+----------------------------------
 
 This release adds full consensus and node support for the NU6.3 network
 upgrade, which introduces the Ironwood shielded pool (testnet activation
@@ -135,38 +135,38 @@ and `getblock`, `finalironwoodroot` in `getblock`, an ironwood section in
 `z_gettreestate` and `z_getsubtreesbyindex`, and an "ironwood" bundle in
 verbose `getrawtransaction`/`decoderawtransaction` output for v6 transactions.
 
-zcashd will NEVER support the Ironwood pool in its wallet, and will never
-construct v6 transactions. This is a permanent decision, not a deferral.
-Shielded wallet functionality beyond Sapling is out of scope for zcashd;
-users who need it should migrate to a Z3-stack wallet. zcashd wallets remain
-fully supported for transparent and Sapling funds. Block production for
-post-NU6.3 shielded coinbase is handled by Zebra; from NU6.3 activation,
-zcashd's internal miner refuses to start with an Orchard `-mineraddress`
-(use a transparent or Sapling address, or mine with Zebra).
+Ironwood wallet shielding and transparent payouts
+--------------------------------------------------
 
-Action required for Orchard users BEFORE NU6.3 activation
----------------------------------------------------------
+From NU6.3, `z_shieldcoinbase` can spend mature transparent mining rewards into
+Ironwood. Ironwood uses the Orchard receiver in a Unified Address. The wallet
+tracks balances and notes in the two pools separately. Existing Orchard notes
+remain unavailable for spending through this wallet after NU6.3.
 
-From NU6.3 activation, the Orchard protocol itself no longer permits payments
-to third-party addresses, and the zcashd wallet rejects ALL transactions that
-would spend or receive Orchard funds, including unshielding. This means:
+For example, create a wallet-owned sweep address with `z_getaddressforaccount` using the
+receiver list `["orchard"]`. Supply the account's actual address and the
+transparent addresses and amounts for the payout job in these commands:
 
-- **Orchard funds held in a zcashd wallet become unspendable through zcashd
-  once NU6.3 activates.** Move any Orchard funds (for example with `z_sendmany`
-  to a transparent or Sapling address, or migrate to a Z3-stack wallet) BEFORE
-  the activation height, on both testnet and mainnet.
+```sh
+zcash-cli z_shieldcoinbase "$MINING_ADDRESS" "$SWEEP_ADDRESS" null 50
+zcash-cli z_getoperationresult '["<shield-operation-id>"]'
+zcash-cli z_getbalanceforaccount "$ACCOUNT"
+zcash-cli z_sendmany "$SWEEP_ADDRESS" '[{"address":"<worker-1-taddr>","amount":1.25},{"address":"<worker-2-taddr>","amount":0.75}]' 1 null AllowRevealedRecipients
+zcash-cli z_getoperationresult '["<payout-operation-id>"]'
+```
 
-- **Stop publishing unified addresses that contain an Orchard receiver.**
-  After activation, an Ironwood-capable wallet paying a zcashd-generated
-  unified address will send funds to the Orchard receiver's corresponding
-  Ironwood address. zcashd cannot detect, display, or spend Ironwood funds;
-  such payments will appear to vanish. Generate replacement addresses without
-  an Orchard receiver (e.g. `z_getaddressforaccount` with `["sapling"]` or
-  `["p2pkh"]` receiver types), or migrate to a Z3-stack wallet.
+Poll each operation until it finishes. Wait for the shield to confirm before
+paying recipients. `remainingUTXOs` in the shielding result counts eligible
+rewards left for a subsequent sweep. A payout can also have one destination.
+The wallet pays the specified amounts, deducts the fee from the sweep account,
+and returns change to its internal Ironwood receiver. Restoring an older wallet
+backup requires the original blocks to rebuild the notes and their witnesses.
 
-Wallet operations that would involve Orchard or Ironwood at NU6.3 heights
-(`z_sendmany`, `z_shieldcoinbase`, `z_mergetoaddress`) fail at preparation
-time with a clear error explaining these alternatives.
+Size batches using the serialized transaction limit of 2,000,000 bytes, the
+wallet's maximum fee, and its Orchard action limit (which also applies to
+Ironwood notes). A payout with many recipients or many small input notes can
+reach different limits. From NU7, a block can contain at most 330 Ironwood
+actions. Check the returned operation result before retrying a batch.
 
 P2P sidecar hard-lock
 ---------------------

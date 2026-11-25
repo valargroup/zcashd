@@ -71,6 +71,7 @@ struct MerkleFrontiers {
     SproutMerkleTree sprout;
     SaplingMerkleTree sapling;
     OrchardMerkleFrontier orchard;
+    IronwoodMerkleFrontier ironwood;
 };
 
 // These functions dispatch to one or all registered wallets

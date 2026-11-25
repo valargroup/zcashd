@@ -12,9 +12,8 @@
 using namespace libzcash;
 
 const std::string IRONWOOD_WALLET_UNSUPPORTED =
-    "zcashd does not support the Ironwood pool, and Orchard payments (including spends of "
-    "existing Orchard notes) are unsupported from NU6.3. Use transparent or Sapling funds "
-    "with zcashd, or a Z3-stack wallet for shielded payments.";
+    "Historical Orchard notes cannot be spent from NU6.3. For Ironwood, use "
+    "z_shieldcoinbase to shield rewards or z_sendmany to pay transparent recipients.";
 
 int GetAnchorHeight(const CChain& chain, uint32_t anchorConfirmations)
 {
@@ -421,7 +420,8 @@ WalletTxBuilder::PrepareTransaction(
         const CChain& chain,
         const TransactionStrategy& strategy,
         const std::optional<CAmount>& fee,
-        uint32_t anchorConfirmations) const
+        uint32_t anchorConfirmations,
+        bool enableIronwood) const
 {
     if (fee.has_value()) {
         if (maxTxFee < fee.value()) {
@@ -439,13 +439,24 @@ WalletTxBuilder::PrepareTransaction(
     }
     int anchorHeight = GetAnchorHeight(chain, anchorConfirmations);
     bool afterNU5 = consensus.NetworkUpgradeActive(anchorHeight, Consensus::UPGRADE_NU5);
-    bool allowOrchard =
-        !consensus.NetworkUpgradeActive(chain.Height() + 1, Consensus::UPGRADE_NU6_3);
+    const bool afterNU63 = consensus.NetworkUpgradeActive(chain.Height() + 1, Consensus::UPGRADE_NU6_3);
+    const bool useIronwood = afterNU63 && enableIronwood;
+    const bool allowOrchard = !afterNU63 || useIronwood;
     SpendableInputs selectable = spendable;
-    if (!allowOrchard) {
-        selectable.orchardNoteMetadata.clear();
+    auto& notes = selectable.orchardNoteMetadata;
+    notes.erase(std::remove_if(notes.begin(), notes.end(), [&](const OrchardNoteMetadata& note) {
+        return !allowOrchard || note.IsIronwood() != useIronwood;
+    }), notes.end());
+    if (useIronwood && std::holds_alternative<std::vector<Payment>>(payments)) {
+        // A payout debits only the sweep account's confirmed Ironwood notes.
+        selectable.saplingNoteEntries.clear();
+        selectable.sproutNoteEntries.clear();
+        selectable.utxos.clear();
+        notes.erase(std::remove_if(notes.begin(), notes.end(), [&](const OrchardNoteMetadata& note) {
+            return note.GetConfirmations() < static_cast<int>(std::max<uint32_t>(1, anchorConfirmations));
+        }), notes.end());
     }
-    auto consensusBranchId = CurrentEpochBranchId(chain.Height(), consensus);
+    auto consensusBranchId = CurrentEpochBranchId(chain.Height() + 1, consensus);
     auto selected = examine(payments, match {
             [&](const std::vector<Payment>& payments) {
                 return ResolveInputsAndPayments(
@@ -482,13 +493,15 @@ WalletTxBuilder::PrepareTransaction(
         // intentional NU6.3 wallet restriction rather than "insufficient funds".
         // This keeps Orchard-only and Orchard-dependent accounts fail-closed
         // without hiding the actual reason their visible balance cannot be spent.
-        if (!allowOrchard && spendable.GetOrchardTotal() > 0) {
+        const bool historicalOrchard = std::any_of(spendable.orchardNoteMetadata.begin(),
+            spendable.orchardNoteMetadata.end(), [](const auto& note) { return !note.IsIronwood(); });
+        if (afterNU63 && historicalOrchard && !(useIronwood && spendable.hasReceivedIronwood)) {
             const auto* invalidFunds = std::get_if<InvalidFundsError>(&selected.error());
             if (invalidFunds != nullptr) {
                 const auto* insufficient =
                     std::get_if<InsufficientFundsError>(&invalidFunds->reason);
                 if (insufficient != nullptr) {
-                    auto total = spendable.Total();
+                    auto total = useIronwood ? spendable.GetOrchardTotal() : spendable.Total();
                     auto required = insufficient->required;
                     if (total == required
                         || (total > required
@@ -503,14 +516,8 @@ WalletTxBuilder::PrepareTransaction(
     }
     const auto& resolvedSelection = selected.value();
 
-    // zcashd has permanently descoped Ironwood wallet support, and from NU6.3 the
-    // Orchard pool rejects the third-party outputs wallet transactions require, so
-    // reject any Orchard involvement (spends, payments, or change) at preparation
-    // time rather than during proving. Orchard change is normally visible via
-    // HasOrchardRecipient (change is resolved as an internal payment), but the
-    // change address is checked directly so this gate does not depend on that
-    // modeling detail.
-    if (consensus.NetworkUpgradeActive(chain.Height() + 1, Consensus::UPGRADE_NU6_3)) {
+    // Historical Orchard funds and unsupported operations stay outside the Ironwood builder.
+    if (afterNU63 && !useIronwood) {
         bool orchardChange =
             resolvedSelection.GetChangeAddress().has_value() &&
             examine(resolvedSelection.GetChangeAddress().value(), match {
@@ -531,6 +538,13 @@ WalletTxBuilder::PrepareTransaction(
     // outputs, so a transaction with more could never be mined. Change is among the
     // resolved payments, and the builder pads a bundle to two outputs.
     if (nu7Active) {
+        const auto ironwoodSpends = resolvedSelection.GetInputs().orchardNoteMetadata.size();
+        // Both supported flows create at most one shielded output. Beyond the
+        // two-action padding minimum, the payout's note count sets its size.
+        if (useIronwood && ironwoodSpends > ORCHARD_PROTOCOL_BLOCK_ACTION_LIMIT) {
+            return tl::make_unexpected(ExcessShieldedActionsError(
+                ironwoodSpends, ORCHARD_PROTOCOL_BLOCK_ACTION_LIMIT, true));
+        }
         uint64_t saplingSpends = resolvedSelection.GetInputs().saplingNoteEntries.size();
         uint64_t saplingOutputs = 0;
         for (const auto& payment : resolvedSelection.GetPayments().GetResolvedPayments()) {
@@ -547,7 +561,7 @@ WalletTxBuilder::PrepareTransaction(
         }
     }
 
-    auto ovks = SelectOVKs(wallet, selector, spendable);
+    auto ovks = SelectOVKs(wallet, selector, useIronwood ? resolvedSelection.GetInputs() : spendable);
 
     return TransactionEffects(
             anchorConfirmations,
@@ -557,7 +571,8 @@ WalletTxBuilder::PrepareTransaction(
             resolvedSelection.GetFee(),
             ovks.first,
             ovks.second,
-            anchorHeight);
+            anchorHeight,
+            useIronwood);
 }
 
 const SpendableInputs& InputSelection::GetInputs() const {
@@ -1037,7 +1052,10 @@ TransactionBuilderResult TransactionEffects::ApproveAndBuild(
     }
 
     int nextBlockHeight = chain.Height() + 1;
-    if (InvolvesOrchard() &&
+    if (useIronwood && InvolvesOrchard() && anchorConfirmations == 0) {
+        return TransactionBuilderResult("Ironwood payouts require a confirmed anchor (minconf at least 1).");
+    }
+    if (InvolvesOrchard() && useIronwood !=
         params.GetConsensus().NetworkUpgradeActive(nextBlockHeight, Consensus::UPGRADE_NU6_3))
     {
         return TransactionBuilderResult(IRONWOOD_WALLET_UNSUPPORTED);
@@ -1052,7 +1070,11 @@ TransactionBuilderResult TransactionEffects::ApproveAndBuild(
         LOCK(cs_main);
         auto anchorBlockIndex = chain[this->anchorHeight];
         assert(anchorBlockIndex != nullptr);
-        orchardAnchor = anchorBlockIndex->hashFinalOrchardRoot;
+        if (useIronwood && !params.GetConsensus().NetworkUpgradeActive(anchorHeight, Consensus::UPGRADE_NU6_3)) {
+            orchardAnchor = IronwoodMerkleFrontier::empty_root();
+        } else {
+            orchardAnchor = useIronwood ? anchorBlockIndex->hashFinalIronwoodRoot : anchorBlockIndex->hashFinalOrchardRoot;
+        }
     }
 
     // Track the total of notes that we've added to the builder. This
@@ -1108,7 +1130,9 @@ TransactionBuilderResult TransactionEffects::ApproveAndBuild(
             return TransactionBuilderResult("Insufficient Sapling witnesses.");
         }
 
-        if (orchardAnchor.has_value()) {
+        // An Ironwood shield has no spend witnesses and can target the activation block,
+        // before the wallet has its first Ironwood checkpoint.
+        if (orchardAnchor && !(useIronwood && spendable.orchardNoteMetadata.empty())) {
             orchardSpendInfo = wallet.GetOrchardSpendInfo(
                     spendable.orchardNoteMetadata,
                     orchardAnchor.value(),
@@ -1116,7 +1140,8 @@ TransactionBuilderResult TransactionEffects::ApproveAndBuild(
         }
     }
 
-    auto builder = TransactionBuilder(params, nextBlockHeight, orchardAnchor, saplingAnchor, &wallet);
+    auto pool = InvolvesOrchard() && useIronwood ? orchard::OrchardValuePool::Ironwood : orchard::OrchardValuePool::Orchard;
+    auto builder = TransactionBuilder(params, nextBlockHeight, orchardAnchor, saplingAnchor, &wallet, nullptr, nullptr, pool);
     builder.SetFee(fee);
 
     // Add Orchard spends
@@ -1178,7 +1203,7 @@ TransactionBuilderResult TransactionEffects::ApproveAndBuild(
                         r.amount,
                         r.memo))
                 {
-                    result = TransactionBuilderResult(IRONWOOD_WALLET_UNSUPPORTED);
+                    result = TransactionBuilderResult("Failed to add the shielded output.");
                 }
             },
         });
@@ -1271,6 +1296,15 @@ TransactionBuilderResult TransactionEffects::ApproveAndBuild(
 void TransactionEffects::LockSpendable(CWallet& wallet) const
 {
     LOCK2(cs_main, wallet.cs_wallet);
+    for (const auto& note : spendable.orchardNoteMetadata) {
+        if (note.IsIronwood() && (wallet.IsIronwoodNoteLocked(note.GetOutPoint()) ||
+                                 wallet.IsOrchardSpent(note.GetOutPoint(), std::nullopt, true))) {
+            throw std::runtime_error("An Ironwood note selected for this payout is already spent or reserved.");
+        }
+    }
+    for (const auto& note : spendable.orchardNoteMetadata) {
+        if (note.IsIronwood()) wallet.LockIronwoodNote(note.GetOutPoint());
+    }
     for (auto utxo : spendable.utxos) {
         COutPoint outpt(utxo.tx->GetHash(), utxo.i);
         wallet.LockCoin(outpt);
@@ -1287,6 +1321,9 @@ void TransactionEffects::LockSpendable(CWallet& wallet) const
 void TransactionEffects::UnlockSpendable(CWallet& wallet) const
 {
     LOCK2(cs_main, wallet.cs_wallet);
+    for (const auto& note : spendable.orchardNoteMetadata) {
+        if (note.IsIronwood()) wallet.UnlockIronwoodNote(note.GetOutPoint());
+    }
     for (auto utxo : spendable.utxos) {
         COutPoint outpt(utxo.tx->GetHash(), utxo.i);
         wallet.UnlockCoin(outpt);

@@ -2770,10 +2770,10 @@ UniValue z_listunspent(const UniValue& params, bool fHelp)
             "[                             (array of json object)\n"
             "  {\n"
             "    \"txid\" : \"txid\",                   (string) the transaction id \n"
-            "    \"pool\" : \"sprout|sapling|orchard\",   (string) The shielded value pool\n"
+            "    \"pool\" : \"sprout|sapling|orchard|ironwood\",   (string) The shielded value pool\n"
             "    \"jsindex\" (sprout) : n,            (numeric) the joinsplit index\n"
             "    \"jsoutindex\" (sprout) : n,         (numeric) the output index of the joinsplit\n"
-            "    \"outindex\" (sapling, orchard) : n, (numeric) the Sapling output or Orchard action index\n"
+            "    \"outindex\" (sapling, orchard, ironwood) : n, (numeric) the Sapling output or Orchard action index\n"
             "    \"confirmations\" : n,               (numeric) the number of confirmations\n"
             "    \"spendable\" : true|false,          (boolean) true if note can be spent by wallet, false if address is watchonly\n"
             "    \"account\" : n,                     (numeric, optional) the unified account ID, if applicable\n"
@@ -2918,7 +2918,7 @@ UniValue z_listunspent(const UniValue& params, bool fHelp)
     for (auto & entry : orchardEntries) {
         UniValue obj(UniValue::VOBJ);
         obj.pushKV("txid", entry.GetOutPoint().hash.ToString());
-        obj.pushKV("pool", ADDR_TYPE_ORCHARD);
+        obj.pushKV("pool", entry.IsIronwood() ? "ironwood" : ADDR_TYPE_ORCHARD);
         obj.pushKV("outindex", (int)entry.GetOutPoint().n);
         obj.pushKV("confirmations", entry.GetConfirmations());
 
@@ -3723,7 +3723,7 @@ UniValue z_listreceivedbyaddress(const UniValue& params, bool fHelp)
             "\nResult (output indices for only one value pool will be present):\n"
             "[\n"
             "  {\n"
-            "    \"pool\": \"pool\"                (string) one of (\"transparent\", \"sprout\", \"sapling\", \"orchard\")\n"
+            "    \"pool\": \"pool\"                (string) one of (\"transparent\", \"sprout\", \"sapling\", \"orchard\", \"ironwood\")\n"
             "    \"txid\": \"txid\",               (string) the transaction id\n"
             "    \"amount\": xxxxx,              (numeric) the amount of value in the note\n"
             "    \"amountZat\" : xxxx            (numeric) The amount in " + MINOR_CURRENCY_UNIT + "\n"
@@ -3735,7 +3735,7 @@ UniValue z_listreceivedbyaddress(const UniValue& params, bool fHelp)
             "    \"blocktime\": xxx,             (numeric) The transaction time in seconds since epoch (midnight Jan 1 1970 GMT).\n"
             "    \"jsindex\" (sprout) : n,       (numeric) the joinsplit index\n"
             "    \"jsoutindex\" (sprout) : n,    (numeric) the output index of the joinsplit\n"
-            "    \"outindex\" (sapling, orchard) : n, (numeric) the Sapling output index, or the Orchard action index\n"
+            "    \"outindex\" (sapling, orchard, ironwood) : n, (numeric) the Sapling output index, or the Orchard action index\n"
             "    \"change\": true|false,         (boolean) true if the output was received to a change address\n"
             "  },\n"
             "...\n"
@@ -3865,7 +3865,7 @@ UniValue z_listreceivedbyaddress(const UniValue& params, bool fHelp)
             auto op = entry.GetOutPoint();
 
             UniValue obj(UniValue::VOBJ);
-            obj.pushKV("pool", "orchard");
+            obj.pushKV("pool", entry.IsIronwood() ? "ironwood" : "orchard");
             obj.pushKV("txid", op.hash.ToString());
             obj.pushKV("amount", ValueFromAmount(entry.GetNoteValue()));
             obj.pushKV("amountZat", CAmount(entry.GetNoteValue()));
@@ -4116,6 +4116,7 @@ UniValue z_getbalanceforviewingkey(const UniValue& params, bool fHelp)
     CAmount sproutBalance = 0;
     CAmount saplingBalance = 0;
     CAmount orchardBalance = 0;
+    CAmount ironwoodBalance = 0;
     for (const auto& t : spendableInputs.utxos) {
         transparentBalance += t.Value();
     }
@@ -4126,7 +4127,7 @@ UniValue z_getbalanceforviewingkey(const UniValue& params, bool fHelp)
         saplingBalance += t.note.value();
     }
     for (const auto& t : spendableInputs.orchardNoteMetadata) {
-        orchardBalance += t.GetNoteValue();
+        (t.IsIronwood() ? ironwoodBalance : orchardBalance) += t.GetNoteValue();
     }
 
     UniValue pools(UniValue::VOBJ);
@@ -4141,6 +4142,7 @@ UniValue z_getbalanceforviewingkey(const UniValue& params, bool fHelp)
     renderBalance("sprout", sproutBalance);
     renderBalance("sapling", saplingBalance);
     renderBalance("orchard", orchardBalance);
+    renderBalance("ironwood", ironwoodBalance);
 
     UniValue result(UniValue::VOBJ);
     result.pushKV("pools", pools);
@@ -4157,7 +4159,7 @@ UniValue z_getbalanceforaccount(const UniValue& params, bool fHelp)
     if (fHelp || params.size() < 1 || params.size() > 3)
         throw runtime_error(
             "z_getbalanceforaccount account ( minconf asOfHeight )\n"
-            "\nReturns the account's spendable balance for each value pool (\"transparent\", \"sapling\", and \"orchard\")."
+            "\nReturns the account's spendable balance for each value pool (\"transparent\", \"sapling\", \"orchard\", and \"ironwood\")."
             "\nArguments:\n"
             "1. account      (numeric) The account number.\n"
             "2. minconf      (numeric, optional, default=1) Only include transactions confirmed at least this many times.\n"
@@ -4215,6 +4217,7 @@ UniValue z_getbalanceforaccount(const UniValue& params, bool fHelp)
     CAmount transparentBalance = 0;
     CAmount saplingBalance = 0;
     CAmount orchardBalance = 0;
+    CAmount ironwoodBalance = 0;
     for (const auto& t : spendableInputs.utxos) {
         transparentBalance += t.Value();
     }
@@ -4222,7 +4225,7 @@ UniValue z_getbalanceforaccount(const UniValue& params, bool fHelp)
         saplingBalance += t.note.value();
     }
     for (const auto& t : spendableInputs.orchardNoteMetadata) {
-        orchardBalance += t.GetNoteValue();
+        (t.IsIronwood() ? ironwoodBalance : orchardBalance) += t.GetNoteValue();
     }
 
     UniValue pools(UniValue::VOBJ);
@@ -4236,6 +4239,7 @@ UniValue z_getbalanceforaccount(const UniValue& params, bool fHelp)
     renderBalance("transparent", transparentBalance);
     renderBalance("sapling", saplingBalance);
     renderBalance("orchard", orchardBalance);
+    renderBalance("ironwood", ironwoodBalance);
 
     UniValue result(UniValue::VOBJ);
     result.pushKV("pools", pools);
@@ -4316,8 +4320,8 @@ UniValue z_viewtransaction(const UniValue& params, bool fHelp)
             "  \"txid\" : \"transactionid\",   (string) The transaction id\n"
             "  \"spends\" : [\n"
             "    {\n"
-            "      \"pool\" : \"sprout|sapling|orchard\",      (string) The shielded value pool\n"
-            "      \"type\" : \"sprout|sapling|orchard\",      (string) The shielded value pool (DEPRECATED legacy attribute)\n"
+            "      \"pool\" : \"sprout|sapling|orchard|ironwood\",      (string) The shielded value pool\n"
+            "      \"type\" : \"sprout|sapling|orchard|ironwood\",      (string) The shielded value pool (DEPRECATED legacy attribute)\n"
             "      \"js\" : n,                       (numeric, sprout) the index of the JSDescription within vJoinSplit\n"
             "      \"jsSpend\" : n,                  (numeric, sprout) the index of the spend within the JSDescription\n"
             "      \"spend\" : n,                    (numeric, sapling) the index of the spend within vShieldedSpend\n"
@@ -4335,8 +4339,8 @@ UniValue z_viewtransaction(const UniValue& params, bool fHelp)
             "  ],\n"
             "  \"outputs\" : [\n"
             "    {\n"
-            "      \"pool\" : \"sprout|sapling|orchard\",      (string) The shielded value pool\n"
-            "      \"type\" : \"sprout|sapling|orchard\",      (string) The shielded value pool (DEPRECATED legacy attribute)\n"
+            "      \"pool\" : \"sprout|sapling|orchard|ironwood\",      (string) The shielded value pool\n"
+            "      \"type\" : \"sprout|sapling|orchard|ironwood\",      (string) The shielded value pool (DEPRECATED legacy attribute)\n"
             "      \"js\" : n,                       (numeric, sprout) the index of the JSDescription within vJoinSplit\n"
             "      \"jsOutput\" : n,                 (numeric, sprout) the index of the output within the JSDescription\n"
             "      \"output\" : n,                   (numeric, sapling) the index of the output within the vShieldedOutput\n"
@@ -4577,66 +4581,69 @@ UniValue z_viewtransaction(const UniValue& params, bool fHelp)
     }
 
     std::vector<uint256> ovksVector(ovks.begin(), ovks.end());
-    OrchardActions orchardActions = wtx.RecoverOrchardActions(ovksVector);
+    for (bool ironwood : {false, true}) {
+        const std::string poolName = ironwood ? "ironwood" : ADDR_TYPE_ORCHARD;
+        OrchardActions orchardActions = wtx.RecoverOrchardActions(ovksVector, ironwood);
 
-    // Orchard spends
-    for (auto & pair  : orchardActions.GetSpends()) {
-        auto actionIdx = pair.first;
-        OrchardActionSpend orchardActionSpend = pair.second;
-        auto outpoint = orchardActionSpend.GetOutPoint();
-        auto receivedAt = orchardActionSpend.GetReceivedAt();
-        auto noteValue = orchardActionSpend.GetNoteValue();
+        // Orchard spends
+        for (auto & pair  : orchardActions.GetSpends()) {
+            auto actionIdx = pair.first;
+            OrchardActionSpend orchardActionSpend = pair.second;
+            auto outpoint = orchardActionSpend.GetOutPoint();
+            auto receivedAt = orchardActionSpend.GetReceivedAt();
+            auto noteValue = orchardActionSpend.GetNoteValue();
 
-        std::optional<std::string> addrStr;
-        auto addr = pwalletMain->GetPaymentAddressForRecipient(txid, receivedAt);
-        if (addr.second != RecipientType::WalletInternalAddress) {
-            addrStr = keyIO.EncodePaymentAddress(addr.first);
+            std::optional<std::string> addrStr;
+            auto addr = pwalletMain->GetPaymentAddressForRecipient(txid, receivedAt);
+            if (addr.second != RecipientType::WalletInternalAddress) {
+                addrStr = keyIO.EncodePaymentAddress(addr.first);
+            }
+
+            UniValue entry(UniValue::VOBJ);
+            entry.pushKV("pool", poolName);
+            if (fEnableAddrTypeField) {
+                entry.pushKV("type", poolName); //deprecated
+            }
+            entry.pushKV("action", (int) actionIdx);
+            entry.pushKV("txidPrev", outpoint.hash.GetHex());
+            entry.pushKV("actionPrev", (int) outpoint.n);
+            if (addrStr.has_value()) {
+                entry.pushKV("address", addrStr.value());
+            }
+            entry.pushKV("value", ValueFromAmount(noteValue));
+            entry.pushKV("valueZat", noteValue);
+            spends.push_back(entry);
         }
 
-        UniValue entry(UniValue::VOBJ);
-        entry.pushKV("pool", ADDR_TYPE_ORCHARD);
-        if (fEnableAddrTypeField) {
-            entry.pushKV("type", ADDR_TYPE_ORCHARD); //deprecated
-        }
-        entry.pushKV("action", (int) actionIdx);
-        entry.pushKV("txidPrev", outpoint.hash.GetHex());
-        entry.pushKV("actionPrev", (int) outpoint.n);
-        if (addrStr.has_value()) {
-            entry.pushKV("address", addrStr.value());
-        }
-        entry.pushKV("value", ValueFromAmount(noteValue));
-        entry.pushKV("valueZat", noteValue);
-        spends.push_back(entry);
-    }
+        // Orchard outputs
+        for (const auto& [actionIdx, orchardActionOutput]  : orchardActions.GetOutputs()) {
+            auto noteValue = orchardActionOutput.GetNoteValue();
+            auto recipient = orchardActionOutput.GetRecipient();
 
-    // Orchard outputs
-    for (const auto& [actionIdx, orchardActionOutput]  : orchardActions.GetOutputs()) {
-        auto noteValue = orchardActionOutput.GetNoteValue();
-        auto recipient = orchardActionOutput.GetRecipient();
+            // Show the address that was cached at transaction construction as the
+            // recipient.
+            std::optional<std::string> addrStr;
+            auto addr = pwalletMain->GetPaymentAddressForRecipient(txid, recipient);
+            if (addr.second != RecipientType::WalletInternalAddress) {
+                addrStr = keyIO.EncodePaymentAddress(addr.first);
+            }
 
-        // Show the address that was cached at transaction construction as the
-        // recipient.
-        std::optional<std::string> addrStr;
-        auto addr = pwalletMain->GetPaymentAddressForRecipient(txid, recipient);
-        if (addr.second != RecipientType::WalletInternalAddress) {
-            addrStr = keyIO.EncodePaymentAddress(addr.first);
+            UniValue entry(UniValue::VOBJ);
+            entry.pushKV("pool", poolName);
+            if (fEnableAddrTypeField) {
+                entry.pushKV("type", poolName); //deprecated
+            }
+            entry.pushKV("action", (int) actionIdx);
+            entry.pushKV("outgoing", orchardActionOutput.IsOutgoing());
+            entry.pushKV("walletInternal", addr.second == RecipientType::WalletInternalAddress);
+            if (addrStr.has_value()) {
+                entry.pushKV("address", addrStr.value());
+            }
+            entry.pushKV("value", ValueFromAmount(noteValue));
+            entry.pushKV("valueZat", noteValue);
+            AddMemo(entry, orchardActionOutput.GetMemo());
+            outputs.push_back(entry);
         }
-
-        UniValue entry(UniValue::VOBJ);
-        entry.pushKV("pool", ADDR_TYPE_ORCHARD);
-        if (fEnableAddrTypeField) {
-            entry.pushKV("type", ADDR_TYPE_ORCHARD); //deprecated
-        }
-        entry.pushKV("action", (int) actionIdx);
-        entry.pushKV("outgoing", orchardActionOutput.IsOutgoing());
-        entry.pushKV("walletInternal", addr.second == RecipientType::WalletInternalAddress);
-        if (addrStr.has_value()) {
-            entry.pushKV("address", addrStr.value());
-        }
-        entry.pushKV("value", ValueFromAmount(noteValue));
-        entry.pushKV("valueZat", noteValue);
-        AddMemo(entry, orchardActionOutput.GetMemo());
-        outputs.push_back(entry);
     }
 
     entry.pushKV("spends", spends);
@@ -4868,6 +4875,7 @@ UniValue z_sendmany(const UniValue& params, bool fHelp)
             "\naddresses flows to a new transparent address, while change generated from a"
             "\nlegacy Sapling address returns to itself. When sending from a unified address,"
             "\nchange is returned to the internal-only address for the associated unified account."
+            "\nFrom NU6.3, an Ironwood sweep account can pay multiple transparent recipients with AllowRevealedRecipients.\n"
             "\nWhen spending coinbase UTXOs, only shielded recipients are permitted and change is not allowed;"
             "\nthe entire value of the coinbase UTXO(s) must be consumed."
             + HelpRequiringPassphrase() + "\n"
@@ -5238,6 +5246,7 @@ UniValue z_shieldcoinbase(const UniValue& params, bool fHelp)
     if (fHelp || params.size() < 2 || params.size() > 6)
         throw runtime_error(
             "z_shieldcoinbase \"fromaddress\" \"tozaddress\" ( fee ) ( limit ) ( memo ) ( privacyPolicy )\n"
+            "\nFrom NU6.3, use a wallet-owned Unified Address with an Orchard receiver to shield to Ironwood.\n"
             "\nShield transparent coinbase funds by sending to a shielded zaddr.  This is an asynchronous operation and utxos"
             "\nselected for shielding will be locked.  If there is an error, they are unlocked.  The RPC call `listlockunspent`"
             "\ncan be used to return a list of locked utxos.  The number of coinbase utxos selected for shielding can be limited"
@@ -5354,6 +5363,16 @@ UniValue z_shieldcoinbase(const UniValue& params, bool fHelp)
     auto destaddress = keyIO.DecodePaymentAddress(destStr);
     if (!destaddress.has_value()) {
         throw JSONRPCError(RPC_INVALID_PARAMETER, string("Invalid parameter, unknown address format: ") + destStr);
+    }
+
+    if (consensus.NetworkUpgradeActive(nextBlockHeight, Consensus::UPGRADE_NU6_3)) {
+        if (const auto* ua = std::get_if<libzcash::UnifiedAddress>(&*destaddress)) {
+            const auto receiver = ua->GetOrchardReceiver();
+            if (receiver && !pwalletMain->GetUFVKMetadataForReceiver(*receiver)) {
+                throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY,
+                    "Use a wallet-owned Unified Address when shielding coinbase to Ironwood.");
+            }
+        }
     }
 
     std::optional<CAmount> nFee;
@@ -5935,6 +5954,7 @@ UniValue z_getnotescount(const UniValue& params, bool fHelp)
             "  \"sprout\"      (numeric) the number of Sprout notes in the wallet\n"
             "  \"sapling\"     (numeric) the number of Sapling notes in the wallet\n"
             "  \"orchard\"     (numeric) the number of Orchard notes in the wallet\n"
+            "  \"ironwood\"    (numeric) the number of Ironwood notes in the wallet\n"
             "}\n"
             "\nExamples:\n"
             + HelpExampleCli("z_getnotescount", "0")
@@ -5950,10 +5970,12 @@ UniValue z_getnotescount(const UniValue& params, bool fHelp)
     int sprout = 0;
     int sapling = 0;
     int orchard = 0;
+    int ironwood = 0;
     for (auto& wtx : pwalletMain->mapWallet) {
         if (wtx.second.GetDepthInMainChain(asOfHeight) >= nMinDepth) {
             sprout += wtx.second.mapSproutNoteData.size();
             sapling += wtx.second.mapSaplingNoteData.size();
+            ironwood += wtx.second.ironwoodTxMeta.GetMyActionIVKs().size();
             orchard += wtx.second.orchardTxMeta.GetMyActionIVKs().size();
         }
     }
@@ -5961,6 +5983,7 @@ UniValue z_getnotescount(const UniValue& params, bool fHelp)
     ret.pushKV("sprout", sprout);
     ret.pushKV("sapling", sapling);
     ret.pushKV("orchard", orchard);
+    ret.pushKV("ironwood", ironwood);
 
     return ret;
 }

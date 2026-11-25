@@ -224,7 +224,7 @@ bool CWalletDB::EraseSaplingExtendedFullViewingKey(
 bool CWalletDB::WriteOrchardWitnesses(const OrchardWallet& wallet) {
     nWalletDBUpdateCounter++;
     return Write(
-            std::string("orchard_note_commitment_tree"),
+            std::string(wallet.IsIronwood() ? "ironwood_note_commitment_tree" : "orchard_note_commitment_tree"),
             OrchardWalletNoteCommitmentTreeWriter(wallet));
 }
 
@@ -895,9 +895,9 @@ ReadKeyValue(CWallet* pwallet, CDataStream& ssKey, CDataStream& ssValue,
 
             pwallet->LoadRecipientMapping(txid, RecipientMapping(ua.value(), recipient));
         }
-        else if (strType == "orchard_note_commitment_tree")
+        else if (strType == "orchard_note_commitment_tree" || strType == "ironwood_note_commitment_tree")
         {
-            auto loader = pwallet->GetOrchardNoteCommitmentTreeLoader();
+            auto loader = pwallet->GetOrchardNoteCommitmentTreeLoader(strType == "ironwood_note_commitment_tree");
             ssValue >> loader;
         }
     } catch (...)

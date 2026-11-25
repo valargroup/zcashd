@@ -27,6 +27,7 @@ private:
     CAmount noteValue;
     std::optional<libzcash::Memo> memo;
     int confirmations;
+    bool ironwood{false};
 public:
     OrchardNoteMetadata(
         OrchardOutPoint op,
@@ -42,6 +43,9 @@ public:
     const libzcash::OrchardRawAddress& GetAddress() const {
         return address;
     }
+
+    bool IsIronwood() const { return ironwood; }
+    void SetIronwood() { ironwood = true; }
 
     void SetConfirmations(int c) {
         confirmations = c;
@@ -191,20 +195,21 @@ public:
 class OrchardWallet
 {
 private:
+    bool ironwood;
     std::unique_ptr<OrchardWalletPtr, decltype(&orchard_wallet_free)> inner;
 
     friend class ::orchard::UnauthorizedBundle;
     friend class OrchardWalletNoteCommitmentTreeWriter;
     friend class OrchardWalletNoteCommitmentTreeLoader;
 public:
-    OrchardWallet() : inner(orchard_wallet_new(), orchard_wallet_free) {}
-    OrchardWallet(OrchardWallet&& wallet_data) : inner(std::move(wallet_data.inner)) {}
-    OrchardWallet& operator=(OrchardWallet&& wallet)
-    {
-        if (this != &wallet) {
-            inner = std::move(wallet.inner);
-        }
-        return *this;
+    explicit OrchardWallet(bool ironwood = false) :
+        ironwood(ironwood), inner(orchard_wallet_new(), orchard_wallet_free) {}
+    OrchardWallet(OrchardWallet&&) = default;
+    OrchardWallet& operator=(OrchardWallet&&) = default;
+
+    bool IsIronwood() const { return ironwood; }
+    const OrchardBundle& BundleFor(const CTransaction& tx) const {
+        return ironwood ? tx.GetIronwoodBundle() : tx.GetOrchardBundle();
     }
 
     // OrchardWallet should never be copied
@@ -227,7 +232,8 @@ public:
      * provided frontier as its latest state. This will fail with an assertion error
      * if any checkpoints exist in the tree.
      */
-    void InitNoteCommitmentTree(const OrchardMerkleFrontier& frontier) {
+    template <typename Frontier>
+    void InitNoteCommitmentTree(const Frontier& frontier) {
         assert(!GetLastCheckpointHeight().has_value());
         assert(frontier.inner->init_wallet(
             reinterpret_cast<merkle_frontier::OrchardWallet*>(inner.get())));
@@ -286,7 +292,7 @@ public:
         if (orchard_wallet_add_notes_from_bundle(
                 inner.get(),
                 tx.GetHash().begin(),
-                tx.GetOrchardBundle().inner->as_ptr(),
+                BundleFor(tx).inner->as_ptr(),
                 &txMeta,
                 PushOrchardActionIVK,
                 PushSpendActionIdx
@@ -313,7 +319,7 @@ public:
         return orchard_wallet_load_bundle(
                 inner.get(),
                 tx.GetHash().begin(),
-                tx.GetOrchardBundle().inner->as_ptr(),
+                BundleFor(tx).inner->as_ptr(),
                 rawHints.data(),
                 rawHints.size(),
                 txMeta.vActionsSpendingMyNotes.data(),
@@ -335,7 +341,7 @@ public:
                     (uint32_t) nBlockHeight,
                     txidx,
                     tx.GetHash().begin(),
-                    tx.GetOrchardBundle().inner->as_ptr()
+                    BundleFor(tx).inner->as_ptr()
                     )) {
                 return false;
             }
@@ -415,13 +421,14 @@ public:
         reinterpret_cast<std::vector<OrchardNoteMetadata>*>(orchardNotesRet)->push_back(noteMeta);
     }
 
-    void GetFilteredNotes(
+    bool GetFilteredNotes(
         std::vector<OrchardNoteMetadata>& orchardNotesRet,
         const std::optional<libzcash::OrchardIncomingViewingKey>& ivk,
         bool ignoreMined,
         bool requireSpendingKey) const {
 
-        orchard_wallet_get_filtered_notes(
+        const auto first = orchardNotesRet.size();
+        const bool hasReceived = orchard_wallet_get_filtered_notes(
             inner.get(),
             ivk.has_value() ? ivk.value().inner.get() : nullptr,
             ignoreMined,
@@ -429,6 +436,12 @@ public:
             &orchardNotesRet,
             PushOrchardNoteMeta
             );
+        if (ironwood) {
+            for (size_t i = first; i < orchardNotesRet.size(); ++i) {
+                orchardNotesRet[i].SetIronwood();
+            }
+        }
+        return hasReceived;
     }
 
     static void PushTxId(void* txidsRet, unsigned char txid[32]) {
@@ -507,7 +520,7 @@ public:
         OrchardActions result;
         orchard_wallet_get_txdata(
                 inner.get(),
-                tx.GetOrchardBundle().inner->as_ptr(),
+                BundleFor(tx).inner->as_ptr(),
                 reinterpret_cast<const unsigned char*>(ovks.data()),
                 ovks.size(),
                 &result,

@@ -1214,6 +1214,7 @@ TEST(WalletTests, NavigateFromSaplingNullifierToNote) {
         .sprout = sproutFrontier,
         .sapling = testNote.tree,
         .orchard = orchardFrontier,
+        .ironwood = {},
     };
 
     // Verify dummy note is unspent
@@ -1605,6 +1606,7 @@ TEST(WalletTests, CachedWitnessesChainTip) {
             .sprout = frontiers.sprout,
             .sapling = frontiers.sapling,
             .orchard = frontiers.orchard,
+            .ironwood = frontiers.ironwood,
         };
         wallet.IncrementNoteWitnesses(Params().GetConsensus(), &index2, &block2, frontiers2, true, false);
 
@@ -1749,6 +1751,7 @@ TEST(WalletTests, CachedWitnessesCleanIndex) {
         .sprout = frontiers.sprout,
         .sapling = frontiers.sapling,
         .orchard = frontiers.orchard,
+        .ironwood = frontiers.ironwood,
     };
     std::vector<std::optional<SproutWitness>> sproutWitnesses;
     std::vector<std::optional<SaplingWitness>> saplingWitnesses;
@@ -2069,7 +2072,7 @@ TEST(WalletTests, SetBestChainIgnoresTxsWithoutShieldedData) {
     EXPECT_CALL(walletdb, WriteTx(wtxSaplingTransparent))
         .Times(0);
     EXPECT_CALL(walletdb, WriteOrchardWitnesses)
-        .WillOnce(Return(true));
+        .Times(2).WillRepeatedly(Return(true));
     EXPECT_CALL(walletdb, WriteWitnessCacheSize(0))
         .WillOnce(Return(true));
     EXPECT_CALL(walletdb, WriteBestBlock(loc))
@@ -2201,6 +2204,7 @@ TEST(WalletTests, UpdatedSaplingNoteData) {
         .sprout = sproutFrontier,
         .sapling = testNote.tree,
         .orchard = orchardFrontier,
+        .ironwood = {},
     };
 
     // Wallet contains extfvk1 but not extfvk2

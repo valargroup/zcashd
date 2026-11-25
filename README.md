@@ -3,7 +3,7 @@ Zcash v1.0.0-compat
 ===========
 
 This repository hosts a `zcashd` wallet compatibility shim for legacy users of
-the `zcashd` wallet software for Transparent and Sapling transactions. `zcashd`
+the `zcashd` wallet software for transparent and Sapling transactions, and for shielding mining rewards into Ironwood and paying transparent recipients. `zcashd`
 used to be the main consensus node of Zcash, but is now deprecated in favor of
 [Zakura](https://github.com/zakura-core/zakura/) and
 [Zebra](https://github.com/ZcashFoundation/zebra).

@@ -143,6 +143,17 @@ tl::expected<uint256, InputSelectionError>
 AsyncRPCOperation_sendmany::main_impl(CWallet& wallet) {
     auto spendable = builder_.FindAllSpendableInputs(wallet, ztxoSelector_, mindepth_);
 
+    const auto* ua = std::get_if<UnifiedAddress>(&ztxoSelector_.GetPattern());
+    const auto* account = std::get_if<AccountZTXOPattern>(&ztxoSelector_.GetPattern());
+    const auto receiverTypes = ua ? ua->GetKnownReceiverTypes()
+        : account ? account->GetReceiverTypes() : std::set<ReceiverType>{};
+    const bool ironwoodPayout = receiverTypes.count(ReceiverType::Orchard) &&
+        (receiverTypes.size() == 1 || spendable.hasReceivedIronwood) &&
+        std::all_of(recipients_.begin(), recipients_.end(), [](const Payment& payment) {
+            const auto& to = payment.GetAddress();
+            return std::holds_alternative<CKeyID>(to) || std::holds_alternative<CScriptID>(to);
+        });
+
     auto preparedTx = builder_.PrepareTransaction(
             wallet,
             ztxoSelector_,
@@ -151,7 +162,8 @@ AsyncRPCOperation_sendmany::main_impl(CWallet& wallet) {
             chainActive,
             strategy_,
             fee_,
-            anchordepth_);
+            anchordepth_,
+            ironwoodPayout);
 
     return preparedTx
         .map([&](const TransactionEffects& effects) {

@@ -164,6 +164,7 @@ private:
     //       be recalculated if the state of the chain has changed significantly between the time of
     //       preparation and the time of approval.
     int anchorHeight;
+    bool useIronwood;
 
 public:
     TransactionEffects(
@@ -174,7 +175,8 @@ public:
         CAmount fee,
         uint256 internalOVK,
         uint256 externalOVK,
-        int anchorHeight) :
+        int anchorHeight,
+        bool useIronwood = false) :
             anchorConfirmations(anchorConfirmations),
             spendable(spendable),
             payments(payments),
@@ -182,7 +184,7 @@ public:
             fee(fee),
             internalOVK(internalOVK),
             externalOVK(externalOVK),
-            anchorHeight(anchorHeight) {}
+            anchorHeight(anchorHeight), useIronwood(useIronwood) {}
 
     /**
      * Returns the strongest `PrivacyPolicy` that is compatible with the transaction’s effects.
@@ -345,17 +347,13 @@ public:
         side(side), orchardNotes(orchardNotes), maxNotes(maxNotes) { }
 };
 
-/// Error when a transaction would involve the Orchard pool at NU6.3 heights or later.
-/// zcashd has permanently descoped Ironwood wallet support, and from NU6.3 the Orchard
-/// pool rejects the third-party outputs that wallet transactions require, so any Orchard
-/// involvement (spends, payments, or change) is rejected at preparation time.
+/// The selected historical Orchard notes or requested pool transfer cannot be spent by this wallet.
 class IronwoodUnsupportedError {
 public:
     IronwoodUnsupportedError() { }
 };
 
-/// The user-facing message for `IronwoodUnsupportedError`. The wording must convey
-/// permanent unsupport (never "not yet available"): the wallet descope is final.
+/// Explanation returned by operations outside the supported Ironwood wallet flows.
 extern const std::string IRONWOOD_WALLET_UNSUPPORTED;
 
 /// Error when a transaction would spend Sprout notes at NU7 heights or later. ZIP 2003
@@ -365,15 +363,17 @@ public:
     SproutUnsupportedError() { }
 };
 
-/// Error when a transaction would have more Sapling spends and outputs than a block may
+/// Error when a transaction would have more shielded actions than a block may
 /// hold from NU7 (ZIP 218), so it could never be mined.
 class ExcessShieldedActionsError {
 public:
-    uint64_t saplingIOs;
+    uint64_t actions;
     uint64_t limit;
 
-    ExcessShieldedActionsError(uint64_t saplingIOs, uint64_t limit):
-        saplingIOs(saplingIOs), limit(limit) { }
+    bool ironwood;
+
+    ExcessShieldedActionsError(uint64_t actions, uint64_t limit, bool ironwood = false):
+        actions(actions), limit(limit), ironwood(ironwood) { }
 };
 
 typedef std::variant<
@@ -485,7 +485,8 @@ public:
             const TransactionStrategy& strategy,
             /// A fixed fee is used if provided, otherwise it is calculated based on ZIP 317.
             const std::optional<CAmount>& fee,
-            uint32_t anchorConfirmations) const;
+            uint32_t anchorConfirmations,
+            bool enableIronwood = false) const;
 };
 
 #endif

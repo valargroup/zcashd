@@ -270,8 +270,9 @@ typedef void (*push_note_callback_t)(void* resultVector, const RawOrchardNoteMet
  * If `ivk` is null, all notes belonging to the wallet will be returned.  The
  * `RawOrchardNoteMetadata::addr` pointers for values provided to the callback must be
  * manually freed by the caller.
+ * Returns whether the key has received any notes, including ones excluded by the flags.
  */
-void orchard_wallet_get_filtered_notes(
+bool orchard_wallet_get_filtered_notes(
         const OrchardWalletPtr* wallet,
         const OrchardIncomingViewingKeyPtr* ivk,
         bool ignoreMined,
