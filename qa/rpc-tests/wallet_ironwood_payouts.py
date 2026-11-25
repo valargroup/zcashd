@@ -229,6 +229,8 @@ debug_enable_at_height = 0
         ready(nodes.enter_context(node_process([args.zakurad, "-c", config, "start"], zlog)), zakura, zlog)
         sidecar = nodes.enter_context(ExitStack())
         start_wallet(sidecar, args.zcashd, flags)
+        # s-nomp only pays from a shielded address that the wallet reports as its own.
+        assert wallet("z_validateaddress", sweep)["ismine"]
         mine(100)
         try:
             wallet("z_shieldcoinbase", mining, sweep)

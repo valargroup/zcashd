@@ -280,7 +280,15 @@ public:
     UniValue operator()(const libzcash::UnifiedAddress &uaddr) const {
         UniValue obj(UniValue::VOBJ);
         pushAddressType(obj, "unified");
-        // TODO: More information.
+#ifdef ENABLE_WALLET
+        if (pwalletMain) {
+            // Like the other address types, ismine means the wallet can spend,
+            // so a watch-only UFVK's address is not mine. Pool software such
+            // as s-nomp refuses a payout address without ismine.
+            obj.pushKV("ismine",
+                GetSourceForPaymentAddress(pwalletMain)(uaddr) == PaymentAddressSource::MnemonicHDSeed);
+        }
+#endif
         return obj;
     }
 };

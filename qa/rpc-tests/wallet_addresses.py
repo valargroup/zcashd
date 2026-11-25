@@ -88,8 +88,16 @@ class WalletAddressesTest(BitcoinTestFramework):
         for addr_type, addr in types_and_addresses:
             res = self.nodes[0].z_validateaddress(addr)
             assert res['isvalid']
-            # assert res['ismine'] # this isn't present for unified addresses
+            assert res['ismine']
             assert_equal(res['address_type'], addr_type)
+
+        # Another wallet's unified address is valid but not ours.
+        foreign_account = self.nodes[1].z_getnewaccount()['account']
+        foreign = self.nodes[1].z_getaddressforaccount(foreign_account)['address']
+        res = self.nodes[0].z_validateaddress(foreign)
+        assert res['isvalid']
+        assert_equal(res['address_type'], 'unified')
+        assert_equal(res['ismine'], False)
 
         # We should see the following sources:
         # - imported_watchonly (for the previously-imported t-addr)
@@ -149,7 +157,7 @@ class WalletAddressesTest(BitcoinTestFramework):
         for addr_type, addr in types_and_addresses:
             res = self.nodes[0].z_validateaddress(addr)
             assert res['isvalid']
-            # assert res['ismine'] # this isn't present for unified addresses
+            assert res['ismine']
             assert_equal(res['address_type'], addr_type)
 
         # We should see the same sources (address generation does not change across the NU5 boundary).

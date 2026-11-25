@@ -162,7 +162,9 @@ The wallet pays the specified amounts, deducts the fee from the sweep account,
 and returns change to its internal Ironwood receiver. Restoring an older wallet
 backup requires the original blocks to rebuild the notes and their witnesses.
 
-With stock s-nomp, set `zAddress` to the sweep UA. Its two-argument
+With stock s-nomp, set `zAddress` to the sweep UA. `z_validateaddress` now
+reports `ismine` for Unified Addresses (true when the wallet holds the spending
+key), which s-nomp requires before it starts payment processing. s-nomp's two-argument
 `z_sendmany` refill permits revealed recipients when spending Ironwood
 to transparent addresses. This call requires ten confirmations. An explicit
 privacy policy still applies.
