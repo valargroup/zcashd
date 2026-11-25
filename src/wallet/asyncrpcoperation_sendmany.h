@@ -34,7 +34,8 @@ public:
         unsigned int anchorDepth,
         TransactionStrategy strategy,
         std::optional<CAmount> fee,
-        UniValue contextInfo = NullUniValue);
+        UniValue contextInfo = NullUniValue,
+        bool defaultIronwoodPayoutPolicy = false);
 
     virtual ~AsyncRPCOperation_sendmany();
 
@@ -57,6 +58,7 @@ private:
     ZTXOSelector ztxoSelector_;
     std::vector<Payment> recipients_;
     TransactionStrategy strategy_;
+    bool defaultIronwoodPayoutPolicy_;
     int mindepth_{1};
     unsigned int anchordepth_{nAnchorConfirmations};
     std::optional<CAmount> fee_;

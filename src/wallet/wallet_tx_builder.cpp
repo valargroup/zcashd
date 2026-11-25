@@ -12,7 +12,7 @@
 using namespace libzcash;
 
 const std::string IRONWOOD_WALLET_UNSUPPORTED =
-    "Historical Orchard notes cannot be spent from NU6.3. For Ironwood, use "
+    "This transfer to an Orchard receiver is unsupported from NU6.3. For Ironwood, use "
     "z_shieldcoinbase to shield rewards or z_sendmany to pay transparent recipients.";
 
 int GetAnchorHeight(const CChain& chain, uint32_t anchorConfirmations)
@@ -100,35 +100,36 @@ CalcZIP317Fee(
     return CalculateConventionalFee(logicalActionCount);
 }
 
-static tl::expected<ResolvedPayment, AddressResolutionError>
+static tl::expected<ResolvedPayment, InputSelectionError>
 ResolvePayment(
         const Payment& payment,
-        bool canResolveOrchard,
+        bool orchardCompatible,
+        bool allowOrchard,
         const TransactionStrategy& strategy,
         CAmount& maxSaplingAvailable,
         CAmount& maxOrchardAvailable,
         uint32_t& orchardOutputs)
 {
     return examine(payment.GetAddress(), match {
-        [&](const CKeyID& p2pkh) -> tl::expected<ResolvedPayment, AddressResolutionError> {
+        [&](const CKeyID& p2pkh) -> tl::expected<ResolvedPayment, InputSelectionError> {
             if (strategy.AllowRevealedRecipients()) {
                 return {{std::nullopt, p2pkh, payment.GetAmount(), payment.GetMemo(), false}};
             } else {
                 return tl::make_unexpected(AddressResolutionError::TransparentRecipientNotAllowed);
             }
         },
-        [&](const CScriptID& p2sh) -> tl::expected<ResolvedPayment, AddressResolutionError> {
+        [&](const CScriptID& p2sh) -> tl::expected<ResolvedPayment, InputSelectionError> {
             if (strategy.AllowRevealedRecipients()) {
                 return {{std::nullopt, p2sh, payment.GetAmount(), payment.GetMemo(), false}};
             } else {
                 return tl::make_unexpected(AddressResolutionError::TransparentRecipientNotAllowed);
             }
         },
-        [&](const SproutPaymentAddress&) -> tl::expected<ResolvedPayment, AddressResolutionError> {
+        [&](const SproutPaymentAddress&) -> tl::expected<ResolvedPayment, InputSelectionError> {
             return tl::make_unexpected(AddressResolutionError::SproutRecipientsNotSupported);
         },
         [&](const SaplingPaymentAddress& addr)
-            -> tl::expected<ResolvedPayment, AddressResolutionError> {
+            -> tl::expected<ResolvedPayment, InputSelectionError> {
             if (strategy.AllowRevealedAmounts() || payment.GetAmount() <= maxSaplingAvailable) {
                 if (!strategy.AllowRevealedAmounts()) {
                     maxSaplingAvailable -= payment.GetAmount();
@@ -138,8 +139,11 @@ ResolvePayment(
                 return tl::make_unexpected(AddressResolutionError::RevealingSaplingAmountNotAllowed);
             }
         },
-        [&](const UnifiedAddress& ua) -> tl::expected<ResolvedPayment, AddressResolutionError> {
-            if (canResolveOrchard
+        [&](const UnifiedAddress& ua) -> tl::expected<ResolvedPayment, InputSelectionError> {
+            if (!allowOrchard && ua.GetOrchardReceiver() && ua.GetKnownReceiverTypes().size() == 1) {
+                return tl::make_unexpected(IronwoodUnsupportedError::UnsupportedReceiver);
+            }
+            if (orchardCompatible && allowOrchard
                 && ua.GetOrchardReceiver().has_value()
                 && (strategy.AllowRevealedAmounts() || payment.GetAmount() <= maxOrchardAvailable)
                 ) {
@@ -234,7 +238,7 @@ ResolveNetPayment(
         bool allowOrchard,
         uint32_t consensusBranchId)
 {
-    bool canResolveOrchard = afterNU5 && allowOrchard && !selector.SelectsSprout();
+    bool orchardCompatible = afterNU5 && !selector.SelectsSprout();
     CAmount maxSaplingAvailable = spendable.GetSaplingTotal();
     CAmount maxOrchardAvailable = spendable.GetOrchardTotal();
     uint32_t orchardOutputs{0};
@@ -250,27 +254,27 @@ ResolveNetPayment(
             CAmount tempMaxOrchard = maxOrchardAvailable;
             return ResolvePayment(
                     Payment(netpay.first, spendable.Total() - initialFee, netpay.second),
-                    canResolveOrchard,
+                    orchardCompatible,
+                    allowOrchard,
                     strategy,
                     tempMaxSapling,
                     tempMaxOrchard,
                     orchardOutputs)
-                .map_error([](const auto& error) -> InputSelectionError { return error; })
                 .and_then([&](const auto& rpayment) {
                     auto finalFee = fee.value_or(CalcZIP317Fee(wallet, spendable, {rpayment}, std::nullopt, consensusBranchId));
                     return ValidateAmount(spendable, finalFee)
                         .and_then([&](void) {
                             return ResolvePayment(
                                     Payment(netpay.first, spendable.Total() - finalFee, netpay.second),
-                                    canResolveOrchard,
+                                    orchardCompatible,
+                                    allowOrchard,
                                     strategy,
                                     maxSaplingAvailable,
                                     maxOrchardAvailable,
                                     orchardOutputs)
                                 .map([&](const auto& actualPayment) {
                                     return std::make_pair(actualPayment, finalFee);
-                                })
-                                .map_error([](const auto& error) -> InputSelectionError { return error; });
+                                });
                         });
                 });
         });
@@ -507,7 +511,7 @@ WalletTxBuilder::PrepareTransaction(
                         || (total > required
                             && total - required > DefaultDustThreshold()))
                     {
-                        return tl::make_unexpected(IronwoodUnsupportedError());
+                        return tl::make_unexpected(IronwoodUnsupportedError::HistoricalOrchardSpend);
                     }
                 }
             }
@@ -530,7 +534,7 @@ WalletTxBuilder::PrepareTransaction(
             || resolvedSelection.GetPayments().HasOrchardRecipient()
             || orchardChange)
         {
-            return tl::make_unexpected(IronwoodUnsupportedError());
+            return tl::make_unexpected(IronwoodUnsupportedError::UnsupportedReceiver);
         }
     }
 
@@ -788,11 +792,11 @@ WalletTxBuilder::ResolveInputsAndPayments(
 
     // we can only select Orchard addresses if we’re not sending from Sprout, since there is no tx
     // version where both Sprout and Orchard are valid.
-    bool canResolveOrchard = afterNU5 && allowOrchard && !selector.SelectsSprout();
+    bool orchardCompatible = afterNU5 && !selector.SelectsSprout();
     std::vector<ResolvedPayment> resolvedPayments;
     std::optional<AddressResolutionError> resolutionError;
     for (const auto& payment : payments) {
-        auto res = ResolvePayment(payment, canResolveOrchard, strategy, maxSaplingAvailable, maxOrchardAvailable, orchardOutputs);
+        auto res = ResolvePayment(payment, orchardCompatible, allowOrchard, strategy, maxSaplingAvailable, maxOrchardAvailable, orchardOutputs);
         (void)res.map([&](const ResolvedPayment& rpayment) { resolvedPayments.emplace_back(rpayment); });
         if (!res.has_value()) {
             return tl::make_unexpected(res.error());
@@ -1058,7 +1062,7 @@ TransactionBuilderResult TransactionEffects::ApproveAndBuild(
     if (InvolvesOrchard() && useIronwood !=
         params.GetConsensus().NetworkUpgradeActive(nextBlockHeight, Consensus::UPGRADE_NU6_3))
     {
-        return TransactionBuilderResult(IRONWOOD_WALLET_UNSUPPORTED);
+        return TransactionBuilderResult("The target height crossed NU6.3 during transaction construction. Retry the operation.");
     }
 
     // Allow Orchard recipients by setting an Orchard anchor.

@@ -173,6 +173,33 @@ TEST(WalletTests, WalletNetworkSerialization) {
     EXPECT_EQ(restored.LoadWallet(fFirstRunRet), DB_WRONG_NETWORK);
 }
 
+TEST(WalletTests, OlderWalletCanRewriteAnIronwoodRecordWithoutItsTrailingHints) {
+    CMutableTransaction tx;
+    tx.fOverwintered = true;
+    tx.nVersionGroupId = ZIP248_VERSION_GROUP_ID;
+    tx.nVersion = ZIP248_TX_VERSION;
+    tx.nConsensusBranchId = NetworkUpgradeInfo[Consensus::UPGRADE_NU6_3].nBranchId;
+    CWalletTx original(nullptr, CTransaction(tx));
+    original.mapValue["ironwoodmeta"] = "1";
+
+    CDataStream record(SER_DISK, CLIENT_VERSION);
+    record << original;
+    // Old writers preserved unrecognized map keys and ended immediately after Orchard.
+    CDataStream suffix(SER_DISK, CLIENT_VERSION);
+    suffix << original.ironwoodTxMeta;
+    record.resize(record.size() - suffix.size());
+
+    CWalletTx restored;
+    record >> restored;
+    EXPECT_EQ(restored.GetHash(), original.GetHash());
+    EXPECT_TRUE(restored.missingIronwoodTxMeta);
+    CDataStream rewritten(SER_DISK, CLIENT_VERSION);
+    rewritten << restored;
+    CWalletTx beforeRescan;
+    rewritten >> beforeRescan;
+    EXPECT_TRUE(beforeRescan.missingIronwoodTxMeta);
+}
+
 TEST(WalletTests, SproutNoteDataSerialisation) {
     auto sk = libzcash::SproutSpendingKey::random();
     auto wtx = GetValidSproutReceive(sk, 10, true);
@@ -955,6 +982,27 @@ protected:
     void TearDown() override { DisconnectMockUIInterface(); }
     MockUIInterface mock_;
 };
+
+TEST_F(OrchardDivergenceTest, StaleIronwoodCheckpointRequestsCleanShutdown) {
+    auto consensus = RegtestActivateNU5();
+    consensus.vUpgrades[Consensus::UPGRADE_NU6_3].nActivationHeight = 0;
+    TestWallet wallet(Params());
+    MerkleFrontiers frontiers;
+    CBlock block;
+    CBlockIndex index(block);
+    LOCK2(cs_main, wallet.cs_wallet);
+    index.nHeight = 1;
+    wallet.IncrementNoteWitnesses(consensus, &index, &block, frontiers, true, false);
+    EXPECT_FALSE(ShutdownRequested());
+
+    // Skip a height so the next checkpoint cannot extend the Ironwood tree.
+    index.nHeight = 3;
+    EXPECT_CALL(mock_, ThreadSafeMessageBox(
+        ::testing::_, ::testing::_, CClientUIInterface::MSG_ERROR)).WillOnce(::testing::Return(false));
+    wallet.IncrementNoteWitnesses(consensus, &index, &block, frontiers, true, false);
+    EXPECT_TRUE(ShutdownRequested());
+    RegtestDeactivateNU5();
+}
 
 // Regression test for #5960. When the re-enabled forward consistency check connects a
 // block near the tip and finds the wallet's Orchard note commitment tree root

@@ -496,6 +496,7 @@ public:
     mapSaplingNoteData_t mapSaplingNoteData;
     OrchardWalletTxMeta orchardTxMeta;
     OrchardWalletTxMeta ironwoodTxMeta;
+    bool missingIronwoodTxMeta{false}; // An older wallet rewrote the marked record without its trailing hints.
 
     std::vector<std::pair<std::string, std::string> > vOrderForm;
     unsigned int fTimeReceivedIsTxTime;
@@ -547,6 +548,7 @@ public:
     void Init(const CWallet* pwalletIn)
     {
         pwallet = pwalletIn;
+        missingIronwoodTxMeta = false;
         mapValue.clear();
         mapSproutNoteData.clear();
         mapSaplingNoteData.clear();
@@ -588,7 +590,7 @@ public:
         {
             mapValue["fromaccount"] = "";
 
-            if (!ironwoodTxMeta.empty()) {
+            if (!ironwoodTxMeta.empty() || missingIronwoodTxMeta) {
                 mapValue["ironwoodmeta"] = "1";
             }
             WriteOrderPos(nOrderPos, mapValue);
@@ -615,7 +617,10 @@ public:
         if (fOverwintered && nVersion >= ZIP225_TX_VERSION) {
             READWRITE(orchardTxMeta);
             if (mapValue.count("ironwoodmeta")) {
-                READWRITE(ironwoodTxMeta);
+                if constexpr (std::is_same_v<Operation, CSerActionUnserialize>) {
+                    missingIronwoodTxMeta = s.empty();
+                }
+                if (!missingIronwoodTxMeta) READWRITE(ironwoodTxMeta);
             }
         }
 
@@ -1943,8 +1948,10 @@ public:
          std::vector<uint256> commitments,
          std::vector<std::optional<SproutWitness>>& witnesses,
          uint256 &final_anchor);
-    /** Restore the new pool's history up to the saved wallet tip on a wallet upgrade. */
+    /** Rebuild Ironwood history through the saved wallet tip after an upgrade or inconsistent checkpoint. */
     bool BackfillIronwood(const CBlockIndex& last);
+    /** Check the saved checkpoint, consensus root, and confirmed unspent note witnesses. */
+    bool IronwoodHistoryMatches(const CBlockIndex& last) const;
     std::optional<int> ScanForWalletTransactions(
         CBlockIndex* pindexStart,
         bool fUpdate,

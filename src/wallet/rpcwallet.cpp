@@ -4026,8 +4026,10 @@ UniValue z_getbalance(const UniValue& params, bool fHelp)
             for (const auto& t : spendableInputs.saplingNoteEntries) {
                 nBalance += t.note.value();
             }
+            const bool ironwoodActive = Params().GetConsensus().NetworkUpgradeActive(
+                chainActive.Height() + 1, Consensus::UPGRADE_NU6_3);
             for (const auto& t : spendableInputs.orchardNoteMetadata) {
-                nBalance += t.GetNoteValue();
+                if (t.IsIronwood() || !ironwoodActive) nBalance += t.GetNoteValue();
             }
         },
     });
@@ -4875,7 +4877,7 @@ UniValue z_sendmany(const UniValue& params, bool fHelp)
             "\naddresses flows to a new transparent address, while change generated from a"
             "\nlegacy Sapling address returns to itself. When sending from a unified address,"
             "\nchange is returned to the internal-only address for the associated unified account."
-            "\nFrom NU6.3, an Ironwood sweep account can pay multiple transparent recipients with AllowRevealedRecipients.\n"
+            "\nFrom NU6.3, an Ironwood payout from a Unified Address to transparent addresses defaults to AllowRevealedRecipients when privacyPolicy is omitted.\n"
             "\nWhen spending coinbase UTXOs, only shielded recipients are permitted and change is not allowed;"
             "\nthe entire value of the coinbase UTXO(s) must be consumed."
             + HelpRequiringPassphrase() + "\n"
@@ -4897,7 +4899,7 @@ UniValue z_sendmany(const UniValue& params, bool fHelp)
             "3. minconf               (numeric, optional, default=" + strprintf("%u", DEFAULT_NOTE_CONFIRMATIONS) + ") Only use funds confirmed at least this many times.\n"
             "4. fee                   (numeric, optional, default=null) The fee amount in " + CURRENCY_UNIT + " to attach to this transaction. The default behavior\n"
             "                         is to use a fee calculated according to ZIP 317.\n"
-            "5. privacyPolicy         (string, optional, default=\"LegacyCompat\") Policy for what information leakage is acceptable.\n"
+            "5. privacyPolicy         (string, optional) Policy for what information leakage is acceptable.\n"
             "                         One of the following strings:\n"
             "                               - \"FullPrivacy\": Only allow fully-shielded transactions (involving a single shielded value pool).\n"
             "                               - \"LegacyCompat\": If the transaction involves any Unified Addresses, this is equivalent to\n"
@@ -5099,7 +5101,8 @@ UniValue z_sendmany(const UniValue& params, bool fHelp)
     std::shared_ptr<AsyncRPCQueue> q = getAsyncRPCQueue();
     std::shared_ptr<AsyncRPCOperation> operation(
             new AsyncRPCOperation_sendmany(
-                std::move(builder), ztxoSelector, recipients, nMinDepth, nAnchorDepth, strategy, nFee, contextInfo)
+                std::move(builder), ztxoSelector, recipients, nMinDepth, nAnchorDepth, strategy, nFee, contextInfo,
+                params.size() < 5 && sender && std::holds_alternative<UnifiedAddress>(*sender))
             );
     q->addOperation(operation);
     AsyncRPCOperationId operationId = operation->getId();

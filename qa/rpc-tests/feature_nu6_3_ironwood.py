@@ -23,8 +23,9 @@ from decimal import Decimal
 
 
 IRONWOOD_TREE_EMPTY_ROOT = "ae2935f1dfd8a24aed7c70df7de3a668eb7a49b1319880dde2bbd9031ae5d82f"
-HISTORICAL_ORCHARD_UNSUPPORTED = (
-    "Historical Orchard notes cannot be spent from NU6.3. For Ironwood, use "
+HISTORICAL_ORCHARD_UNSUPPORTED = "Historical Orchard notes cannot be spent from NU6.3."
+ORCHARD_RECIPIENT_UNSUPPORTED = (
+    "This transfer to an Orchard receiver is unsupported from NU6.3. For Ironwood, use "
     "z_shieldcoinbase to shield rewards or z_sendmany to pay transparent recipients."
 )
 # NU5 activates before NU6.3 so the test can create Orchard notes pre-NU6.3 and
@@ -162,7 +163,7 @@ class IronwoodRpcSurfaceTest(BitcoinTestFramework):
             1,
             fee,
             'AllowRevealedSenders')
-        wait_and_assert_operationid_status(node, opid, 'failed', HISTORICAL_ORCHARD_UNSUPPORTED)
+        wait_and_assert_operationid_status(node, opid, 'failed', ORCHARD_RECIPIENT_UNSUPPORTED)
 
         # Spending FROM existing Orchard funds fails, even to unshield them.
         # This is the permanent fund freeze called out in the release notes.
@@ -196,7 +197,7 @@ class IronwoodRpcSurfaceTest(BitcoinTestFramework):
         node.generate(1)
         assert_raises_message(
             JSONRPCException,
-            HISTORICAL_ORCHARD_UNSUPPORTED,
+            ORCHARD_RECIPIENT_UNSUPPORTED,
             node.z_mergetoaddress,
             ['ANY_TADDR'],
             orchard_ua,

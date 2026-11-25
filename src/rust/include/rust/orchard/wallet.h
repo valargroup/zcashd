@@ -417,6 +417,9 @@ bool orchard_wallet_load_note_commitment_tree(
 bool orchard_wallet_unspent_notes_are_spendable(
         const OrchardWalletPtr* wallet);
 
+/** Check witnesses for unspent notes in this confirmed transaction. */
+bool orchard_wallet_tx_notes_have_witnesses(const OrchardWalletPtr* wallet, const unsigned char* txid);
+
 #ifdef __cplusplus
 }
 #endif

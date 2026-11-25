@@ -48,9 +48,11 @@ AsyncRPCOperation_sendmany::AsyncRPCOperation_sendmany(
         unsigned int anchorDepth,
         TransactionStrategy strategy,
         std::optional<CAmount> fee,
-        UniValue contextInfo) :
+        UniValue contextInfo,
+        bool defaultIronwoodPayoutPolicy) :
         builder_(std::move(builder)), ztxoSelector_(ztxoSelector), recipients_(recipients),
-        mindepth_(minDepth), anchordepth_(anchorDepth), strategy_(strategy), fee_(fee),
+        strategy_(strategy), defaultIronwoodPayoutPolicy_(defaultIronwoodPayoutPolicy),
+        mindepth_(minDepth), anchordepth_(anchorDepth), fee_(fee),
         contextinfo_(contextInfo)
 {
     assert(!fee_.has_value() || fee_.value() >= 0);
@@ -154,16 +156,18 @@ AsyncRPCOperation_sendmany::main_impl(CWallet& wallet) {
             return std::holds_alternative<CKeyID>(to) || std::holds_alternative<CScriptID>(to);
         });
 
-    auto preparedTx = builder_.PrepareTransaction(
-            wallet,
-            ztxoSelector_,
-            spendable,
-            recipients_,
-            chainActive,
-            strategy_,
-            fee_,
-            anchordepth_,
-            ironwoodPayout);
+    auto strategy = strategy_;
+    auto preparedTx = [&]() {
+        LOCK(cs_main);
+        // Resolve the omitted RPC policy at the same target height as note selection.
+        // PrepareTransaction restricts these payouts to Ironwood inputs and shielded change.
+        if (defaultIronwoodPayoutPolicy_ && ironwoodPayout &&
+            Params().GetConsensus().NetworkUpgradeActive(chainActive.Height() + 1, Consensus::UPGRADE_NU6_3)) {
+            strategy = TransactionStrategy(PrivacyPolicy::AllowRevealedRecipients);
+        }
+        return builder_.PrepareTransaction(wallet, ztxoSelector_, spendable, recipients_, chainActive,
+                                           strategy, fee_, anchordepth_, ironwoodPayout);
+    }();
 
     return preparedTx
         .map([&](const TransactionEffects& effects) {
@@ -195,7 +199,7 @@ AsyncRPCOperation_sendmany::main_impl(CWallet& wallet) {
                         Params(),
                         wallet,
                         chainActive,
-                        strategy_);
+                        strategy);
                 auto tx = buildResult.GetTxOrThrow();
                 LogPrint("zrpc", "%s, conventional fee: %s\n", getId(), FormatMoney(tx.GetConventionalFee()));
 

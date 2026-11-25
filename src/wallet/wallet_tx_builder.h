@@ -348,9 +348,9 @@ public:
 };
 
 /// The selected historical Orchard notes or requested pool transfer cannot be spent by this wallet.
-class IronwoodUnsupportedError {
-public:
-    IronwoodUnsupportedError() { }
+enum class IronwoodUnsupportedError {
+    HistoricalOrchardSpend,
+    UnsupportedReceiver,
 };
 
 /// Explanation returned by operations outside the supported Ironwood wallet flows.

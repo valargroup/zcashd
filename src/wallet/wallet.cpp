@@ -1408,6 +1408,7 @@ void CWallet::ChainTipAdded(const CBlockIndex *pindex,
             chainParams.GetConsensus(),
             pindex, pblock,
             frontiers, performOrchardWalletUpdates, performConsistencyCheck);
+    if (ShutdownRequested()) return;
     UpdateSaplingNullifierNoteMapForBlock(pblock);
 
     // SetBestChain() can be expensive for large wallets, so do only
@@ -2809,7 +2810,7 @@ static void OrchardNoteCommitmentTreeDiverged(int nHeight, const char* pool = "O
     uiInterface.ThreadSafeMessageBox(
         _("Error: The wallet's note commitment tree has become inconsistent "
           "with the block chain. The zcashd node will now shut down; please restart "
-          "with the -rescan option to rebuild the wallet's Orchard note commitment "
+          "with the -rescan option to rebuild the wallet's shielded note commitment "
           "tree."),
         "", CClientUIInterface::MSG_ERROR);
     StartShutdown();
@@ -2955,12 +2956,10 @@ void CWallet::IncrementNoteWitnesses(
     }
 
     if (performOrchardWalletUpdates && consensus.NetworkUpgradeActive(pindex->nHeight, Consensus::UPGRADE_NU6_3)) {
-        if (!ironwoodWallet.GetLastCheckpointHeight()) {
-            ironwoodWallet.InitNoteCommitmentTree(frontiers.ironwood);
-        }
-        assert(ironwoodWallet.CheckpointNoteCommitmentTree(pindex->nHeight));
-        assert(ironwoodWallet.AppendNoteCommitments(pindex->nHeight, *pblock));
-        if (performConsistencyCheck && ironwoodWallet.GetLatestAnchor() != pindex->hashFinalIronwoodRoot) {
+        if ((!ironwoodWallet.GetLastCheckpointHeight() && !ironwoodWallet.InitNoteCommitmentTree(frontiers.ironwood)) ||
+            !ironwoodWallet.CheckpointNoteCommitmentTree(pindex->nHeight) ||
+            !ironwoodWallet.AppendNoteCommitments(pindex->nHeight, *pblock) ||
+            (performConsistencyCheck && ironwoodWallet.GetLatestAnchor() != pindex->hashFinalIronwoodRoot)) {
             OrchardNoteCommitmentTreeDiverged(pindex->nHeight, "Ironwood");
             return;
         }
@@ -2970,7 +2969,7 @@ void CWallet::IncrementNoteWitnesses(
     // update the Orchard note commitment tree.
     if (performOrchardWalletUpdates && consensus.NetworkUpgradeActive(pindex->nHeight, Consensus::UPGRADE_NU5)) {
         if (!orchardWallet.GetLastCheckpointHeight().has_value()) {
-            orchardWallet.InitNoteCommitmentTree(frontiers.orchard);
+            assert(orchardWallet.InitNoteCommitmentTree(frontiers.orchard));
         }
         assert(orchardWallet.CheckpointNoteCommitmentTree(pindex->nHeight));
 
@@ -3576,6 +3575,7 @@ bool CWallet::UpdatedNoteData(const CWalletTx& wtxIn, CWalletTx& wtx)
     bool ironwoodChanged = !wtxIn.ironwoodTxMeta.empty() && wtxIn.ironwoodTxMeta != wtx.ironwoodTxMeta;
     if (ironwoodChanged) {
         wtx.ironwoodTxMeta = wtxIn.ironwoodTxMeta;
+        wtx.missingIronwoodTxMeta = false;
     }
     return !unchangedSproutFlag || !unchangedSaplingFlag || !unchangedOrchardFlag || ironwoodChanged;
 }
@@ -4740,12 +4740,27 @@ void CWallet::WitnessNoteCommitment(std::vector<uint256> commitments,
     }
 }
 
+bool CWallet::IronwoodHistoryMatches(const CBlockIndex& last) const
+{
+    LOCK2(cs_main, cs_wallet);
+    if (ironwoodWallet.GetLastCheckpointHeight() != last.nHeight ||
+        ironwoodWallet.GetLatestAnchor() != last.hashFinalIronwoodRoot) return false;
+    for (const auto& [txid, wtx] : mapWallet) {
+        if (wtx.ironwoodTxMeta.empty() && !wtx.missingIronwoodTxMeta) continue;
+        // Hints can reach disk before their block checkpoint. Normal replay
+        // will position those notes. Mempool notes have no witnesses yet.
+        if (wtx.GetDepthInMainChain(last.nHeight) > 0 &&
+            (wtx.missingIronwoodTxMeta || !ironwoodWallet.TxNotesHaveWitnesses(txid))) return false;
+    }
+    return true;
+}
+
 bool CWallet::BackfillIronwood(const CBlockIndex& last)
 {
     LOCK2(cs_main, cs_wallet);
     const auto& consensus = Params().GetConsensus();
     auto activation = consensus.GetActivationHeight(Consensus::UPGRADE_NU6_3);
-    if (!activation || last.nHeight < *activation || ironwoodWallet.GetLastCheckpointHeight()) {
+    if (!activation || last.nHeight < *activation) {
         return true;
     }
 
@@ -4759,7 +4774,8 @@ bool CWallet::BackfillIronwood(const CBlockIndex& last)
         !pcoinsTip->GetIronwoodAnchorAt(first->pprev->hashFinalIronwoodRoot, frontier)) {
         return false;
     }
-    ironwoodWallet.InitNoteCommitmentTree(frontier);
+    ironwoodWallet.Reset();
+    if (!ironwoodWallet.InitNoteCommitmentTree(frontier)) return false;
     CWalletDB walletdb(strWalletFile, "r+", false);
     for (auto index = first; index; index = chainActive.Next(index)) {
         CBlock block;
@@ -4777,7 +4793,7 @@ bool CWallet::BackfillIronwood(const CBlockIndex& last)
             !ironwoodWallet.AppendNoteCommitments(index->nHeight, block)) return false;
         if (index == &last) break;
     }
-    return ironwoodWallet.GetLatestAnchor() == last.hashFinalIronwoodRoot;
+    return IronwoodHistoryMatches(last);
 }
 
 /**
@@ -4915,6 +4931,7 @@ std::optional<int> CWallet::ScanForWalletTransactions(
             // (#5960), and running the check would reintroduce the per-block cost #6052
             // removed; see IncrementNoteWitnesses.
             ChainTipAdded(pindex, &block, frontiers, performOrchardWalletUpdates, false);
+            if (ShutdownRequested()) return std::nullopt;
 
             pindex = chainActive.Next(pindex);
             if (GetTime() >= nNow + 60) {
@@ -5997,6 +6014,13 @@ bool CWallet::CommitTransaction(CWalletTx& wtxNew, std::optional<std::reference_
     {
         LOCK2(cs_main, cs_wallet);
         LogPrintf("CommitTransaction:\n%s", wtxNew.ToString()); /* Continued */
+        const bool ironwood = wtxNew.GetIronwoodBundle().GetNumActions() > 0;
+        // Reject an unrelayable Ironwood payout before recording its pending spends.
+        // Both locks remain held until the wallet records an accepted transaction.
+        if (ironwood && fBroadcastTransactions && !wtxNew.AcceptToMemoryPool(state, false)) {
+            LogPrintf("CommitTransaction(): Ironwood transaction rejected: %s\n", state.GetRejectReason());
+            return false;
+        }
         {
             // This is only to keep the database open to defeat the auto-flush for the
             // duration of this scope.  This is the only place where this optimization
@@ -6010,7 +6034,7 @@ bool CWallet::CommitTransaction(CWalletTx& wtxNew, std::optional<std::reference_
 
             // Record pending Ironwood spends before releasing the selected notes.
             // A second payout can arrive before the mempool notification does.
-            if (wtxNew.GetIronwoodBundle().GetNumActions() > 0) {
+            if (ironwood) {
                 if (auto meta = ironwoodWallet.AddNotesIfInvolvingMe(wtxNew)) {
                     wtxNew.SetOrchardTxMeta(*meta, true);
                 }
@@ -6036,7 +6060,7 @@ bool CWallet::CommitTransaction(CWalletTx& wtxNew, std::optional<std::reference_
         if (fBroadcastTransactions)
         {
             // Broadcast
-            if (!wtxNew.AcceptToMemoryPool(state, false))
+            if (!ironwood && !wtxNew.AcceptToMemoryPool(state, false))
             {
                 // This must not fail. The transaction has already been signed and recorded.
                 LogPrintf("CommitTransaction(): Error: Transaction not valid, %s\n", state.GetRejectReason());
@@ -6885,8 +6909,9 @@ bool CWallet::InitLoadWallet(const CChainParams& params, bool clearWitnessCaches
         CBlockLocator locator;
         if (walletdb.ReadBestBlock(locator)) {
             pindexRescan = FindForkInGlobalIndex(chainActive, locator);
-            if (pindexRescan && !fFirstRun && !walletInstance->ironwoodWallet.GetLastCheckpointHeight() &&
-                Params().GetConsensus().NetworkUpgradeActive(pindexRescan->nHeight, Consensus::UPGRADE_NU6_3)) {
+            if (pindexRescan && !fFirstRun &&
+                params.GetConsensus().NetworkUpgradeActive(pindexRescan->nHeight, Consensus::UPGRADE_NU6_3) &&
+                !walletInstance->IronwoodHistoryMatches(*pindexRescan)) {
                 uiInterface.InitMessage(_("Scanning wallet history for Ironwood payments..."));
                 if (!walletInstance->BackfillIronwood(*pindexRescan)) {
                     return UIError(_("Could not rebuild Ironwood wallet history. Restore full block data and restart with -rescan."));

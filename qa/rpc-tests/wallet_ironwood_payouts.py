@@ -27,7 +27,7 @@ UPGRADES = [
 ]
 LOCKBOX = "t2RnBRiqrN1nW4ecZs1Fj3WWjNdnSs4kiX8"
 NU63_HEIGHT = 108
-NU7_HEIGHT = 120
+NU7_HEIGHT = 135
 
 
 class RpcError(Exception):
@@ -119,7 +119,7 @@ def exercise(args, root):
         log = root / "wallet.log"
         cmd = [binary, "-regtest", f"-datadir={datadir}", f"-exportdir={root}",
                f"-rpcport={wallet_port}", f"-connect=127.0.0.1:{peer}", "-listen=0",
-               "-walletrequirebackup=0", "-allowdeprecated=getnewaddress", "-maxtipage=3153600000",
+               "-walletrequirebackup=0", "-allowdeprecated=getnewaddress", "-allowdeprecated=z_getbalance", "-maxtipage=3153600000",
                "-regtestwalletsetbestchaineveryblock", "-regtestprotectcoinbase", "-regtestacceptunvalidatedpow", "-txindex=1", *extra]
         ready(stack.enter_context(node_process(cmd, log)), wallet, log)
 
@@ -208,11 +208,11 @@ debug_enable_at_height = 0
         wait_for(lambda: wallet("getbestblockhash") == block and
                  wallet("getblockchaininfo")["fullyNotified"], "wallet to reconnect block")
 
-    def payout(outputs, policy="AllowRevealedRecipients", source=None):
+    def payout(outputs, *options, source=None):
         return wallet("z_sendmany", source or sweep, [{"address": addr, "amount": amount} for addr, amount in outputs],
-                      1, None, policy)
+                      *options)
 
-    def check_payout(tx, outputs):
+    def check_payout(tx, outputs, fee_zat=None):
         assert not tx["vin"]
         actual = {v["scriptPubKey"]["addresses"][0]: int(v["value"] * COIN) for v in tx["vout"]}
         for v in tx["vout"]:
@@ -221,7 +221,7 @@ debug_enable_at_height = 0
         assert actual == {addr: int(Decimal(str(amount)) * COIN) for addr, amount in outputs}
         # One shielded spend and change pad to two actions. Transparent outputs
         # contribute another logical action per standard P2PKH destination.
-        fee = 5000 * (len(tx["ironwood"]["actions"]) + len(outputs))
+        fee = fee_zat if fee_zat is not None else 5000 * (len(tx["ironwood"]["actions"]) + len(outputs))
         assert tx["ironwood"]["valueBalanceZat"] == sum(actual.values()) + fee
 
     with ExitStack() as nodes:
@@ -247,8 +247,12 @@ debug_enable_at_height = 0
         assert historical["version"] == 5 and historical["orchard"]["actions"]
         frozen = -historical["orchard"]["valueBalanceZat"]
         assert wallet("z_getbalanceforaccount", account)["pools"]["orchard"]["valueZat"] == frozen
+        assert wallet("z_getbalance", sweep) * COIN == frozen
+        private = result(payout([(first, 1)]))
+        assert private["status"] == "failed" and "AllowRevealedRecipients" in private["error"]["message"], private
         mine(NU63_HEIGHT - 1 - zakura("getblockcount"))
-        unsupported = result(payout([(first, 1)]))
+        assert wallet("z_getbalance", sweep) == 0
+        unsupported = result(payout([(first, 1)], 1, None, "AllowRevealedRecipients"))
         assert unsupported["status"] == "failed" and "Historical Orchard" in unsupported["error"]["message"]
         one = wallet("z_shieldcoinbase", mining, sweep, None, 1)
         assert one["shieldingUTXOs"] == 1 and one["remainingUTXOs"] == NU63_HEIGHT - 103
@@ -256,6 +260,8 @@ debug_enable_at_height = 0
         assert not shield["vout"] and len(shield["vin"]) == 1
         received = check_shield(shield, one)
         wait_for(lambda: balance() == received, "confirmed Ironwood balance")
+        assert wallet("z_getbalance", sweep) * COIN == received
+        assert wallet("z_getbalance", sweep, 8) == 0
         disconnect_and_reconnect(wallet("getbestblockhash"))
         assert balance() == received
         mine(2)
@@ -296,11 +302,33 @@ debug_enable_at_height = 0
         start_wallet(sidecar, args.zcashd, flags)
         wait_for(lambda: balance() == received, "backup to recover shielded funds")
         wait_for(lambda: any(p.get("version", 0) for p in wallet("getpeerinfo")), "restored wallet to reconnect")
+        if args.previous_zcashd:
+            # The old binary advances the saved wallet tip without updating
+            # the existing Ironwood tree. Upgrading must rebuild its witnesses.
+            sidecar.close()
+            start_wallet(sidecar, args.previous_zcashd, [f for f in flags if not f.startswith("-nuparams=77190ad9")])
+            mine(1)
+            sidecar.close()
+            start_wallet(sidecar, args.zcashd, flags)
+            assert wallet("z_getbalance", sweep) * COIN == received
+            wait_for(lambda: any(p.get("version", 0) for p in wallet("getpeerinfo")), "upgraded wallet to reconnect")
         outputs = [(first, 1)]
+        mine(NU63_HEIGHT + 8 - zakura("getblockcount"))
+        immature = result(payout(outputs))
+        assert immature["status"] == "failed" and "Insufficient funds" in immature["error"]["message"], immature
+        # The two-argument z_sendmany uses ten confirmations, even though z_getbalance defaults to one.
+        mine(1)
+        mixed_recipients = result(payout([(first, 1), (sapling, 1)]))
+        assert (mixed_recipients["status"] == "failed" and
+                "AllowRevealedRecipients" in mixed_recipients["error"]["message"]), mixed_recipients
         tx = confirm(payout(outputs))
         check_payout(tx, outputs)
         remaining = received - tx["ironwood"]["valueBalanceZat"]
         assert balance() == remaining
+        unsupported = result(wallet("z_sendmany", first, [{"address": sweep, "amount": 0.99985}],
+                                    1, 0.00015, "AllowRevealedSenders"))
+        assert (unsupported["status"] == "failed" and
+                "transfer to an Orchard receiver" in unsupported["error"]["message"]), unsupported
         sapling_op = wallet("z_shieldcoinbase", mining, sapling, None, 1)
         sapling_result = result(sapling_op["opid"])
         assert sapling_result["status"] == "success", sapling_result
@@ -311,14 +339,15 @@ debug_enable_at_height = 0
         assert sapling_reserve > 0
         mine(NU7_HEIGHT - zakura("getblockcount") + 1)
         # Prove both directions on the new branch ID as well.
-        sweep_result = wallet("z_shieldcoinbase", mining, sweep, None, 1)
+        sweep_result = wallet("z_shieldcoinbase", "*", sweep, None, 1)
         before = remaining + check_shield(confirm(sweep_result["opid"]), sweep_result)
         assert balance() == before
         outputs = [(first, 2), (second, 1)]
-        private = result(payout(outputs, "FullPrivacy"))
-        assert private["status"] == "failed" and "AllowRevealedRecipients" in private["error"]["message"]
+        for policy in ("FullPrivacy", "LegacyCompat"):
+            private = result(payout(outputs, 1, None, policy))
+            assert private["status"] == "failed" and "AllowRevealedRecipients" in private["error"]["message"], private
         # The notes cover the requested amount exactly, leaving no funds for the fee.
-        insufficient = result(payout([(first, float(Decimal(before) / COIN))], source=mixed))
+        insufficient = result(payout([(first, float(Decimal(before) / COIN))], 1, source=mixed))
         assert insufficient["status"] == "failed" and "Insufficient funds" in insufficient["error"]["message"]
         # 60,000 standard transparent outputs exceed the two-megabyte transaction limit.
         oversized = [(b58encode_chk(b"\x1d\x25" + n.to_bytes(20, "big")), 0.0001) for n in range(60_000)]
@@ -329,8 +358,11 @@ debug_enable_at_height = 0
         else:
             raise AssertionError("Wallet accepted an oversized batch")
         assert balance() == before
-        tx = confirm(payout(outputs))
-        check_payout(tx, outputs)
+        assert wallet("z_getbalance", sweep, 8) * COIN < before
+        mine(7)
+        assert wallet("z_getbalance", sweep, 8) * COIN == before
+        tx = confirm(payout(outputs, 8, 0.0004, "AllowRevealedRecipients"))
+        check_payout(tx, outputs, fee_zat=40_000)
         remaining = before - tx["ironwood"]["valueBalanceZat"]
         wait_for(lambda: balance() == remaining, "change to be credited exactly once")
         disconnect_and_reconnect(wallet("getbestblockhash"))
@@ -342,9 +374,20 @@ debug_enable_at_height = 0
         start_wallet(sidecar, args.zcashd, [*flags, "-rescan"])
         assert balance() == remaining
         wait_for(lambda: any(p.get("version", 0) for p in wallet("getpeerinfo")), "rescanned wallet to reconnect")
+        # A fixed fee must cover the batch's logical actions under the default relay policy.
+        mine(8)
+        workers = [(addr, 0.001) for addr, _ in oversized[:80]]
+        underpaid = result(payout(workers, 8, 0.0001, "AllowRevealedRecipients"))
+        assert underpaid["status"] == "failed" and "unpaid action limit exceeded" in underpaid["error"]["message"], underpaid
+        assert balance() == remaining
+        large = confirm(payout(workers, 8, 0.0041, "AllowRevealedRecipients"))
+        assert len(large["ironwood"]["actions"]) == 2
+        check_payout(large, workers, fee_zat=410_000)
+        remaining -= large["ironwood"]["valueBalanceZat"]
+        assert balance() == remaining
         # Both operations request almost all remaining notes and cannot both succeed.
         almost_all = float(Decimal(remaining - 500000) / COIN)
-        ops = [payout([(first, almost_all)], source=mixed), payout([(second, almost_all)])]
+        ops = [payout([(first, almost_all)], 1, source=mixed), payout([(second, almost_all)], 1)]
         results = [result(op) for op in ops]
         assert sorted(item["status"] for item in results) == ["failed", "success"], results
         winner = next(item["result"]["txid"] for item in results if item["status"] == "success")

@@ -230,8 +230,10 @@ void ThrowInputSelectionError(
                     err.maxNotes,
                     err.orchardNotes));
         },
-        [](const IronwoodUnsupportedError&) {
-            throw JSONRPCError(RPC_INVALID_PARAMETER, IRONWOOD_WALLET_UNSUPPORTED);
+        [](const IronwoodUnsupportedError& err) {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, err == IronwoodUnsupportedError::HistoricalOrchardSpend
+                ? "Historical Orchard notes cannot be spent from NU6.3."
+                : IRONWOOD_WALLET_UNSUPPORTED);
         },
         [](const SproutUnsupportedError&) {
             throw JSONRPCError(

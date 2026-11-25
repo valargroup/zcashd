@@ -162,6 +162,21 @@ The wallet pays the specified amounts, deducts the fee from the sweep account,
 and returns change to its internal Ironwood receiver. Restoring an older wallet
 backup requires the original blocks to rebuild the notes and their witnesses.
 
+With stock s-nomp, set `zAddress` to the sweep UA. Its two-argument
+`z_sendmany` refill permits revealed recipients when spending Ironwood
+to transparent addresses. This call requires ten confirmations. An explicit
+privacy policy still applies.
+Pools using the deprecated `z_getbalance` RPC must start the wallet with
+`-allowdeprecated=z_getbalance`. On the Orchard-only sweep UA this RPC
+reports confirmed Ironwood funds from NU6.3 and accepts a minimum confirmation
+count. Historical Orchard remains visible in `z_getbalanceforaccount`.
+
+Miningcore can use `"*"` for the shielding source and request eight
+confirmations and an explicit fee for payouts. With default relay policy,
+a fixed fee must cover all logical actions, including each standard
+transparent output and the padded Ironwood actions. For example, a batch of
+80 standard P2PKH outputs and two Ironwood actions needs 410,000 zatoshis.
+
 Size batches using the serialized transaction limit of 2,000,000 bytes, the
 wallet's maximum fee, and its Orchard action limit (which also applies to
 Ironwood notes). A payout with many recipients or many small input notes can

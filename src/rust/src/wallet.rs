@@ -2,7 +2,7 @@ use bridgetree::{self, BridgeTree};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use incrementalmerkletree::Position;
 use libc::c_uchar;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{btree_map::Entry, BTreeMap, BTreeSet};
 use std::convert::TryInto;
 use std::io;
 use std::ptr;
@@ -176,6 +176,8 @@ pub struct Wallet {
 pub enum WalletError {
     OutOfOrder(LastObserved, BlockHeight, usize),
     NoteCommitmentTreeFull,
+    DuplicateNotePosition(TxId),
+    DuplicateMinedSpend(OutPoint),
 }
 
 #[allow(dead_code)]
@@ -279,7 +281,9 @@ impl Wallet {
             }
         }
 
-        self.commitment_tree.checkpoint(block_height.into());
+        if !self.commitment_tree.checkpoint(block_height.into()) {
+            return false;
+        }
         self.last_checkpoint = Some(block_height);
         true
     }
@@ -592,16 +596,13 @@ impl Wallet {
         let my_notes_for_tx = self.wallet_received_notes.get(txid);
         if my_notes_for_tx.is_some() {
             tracing::trace!("Tx is ours, marking as mined");
-            assert!(self
-                .wallet_note_positions
-                .insert(
-                    *txid,
-                    NotePositions {
-                        tx_height: block_height,
-                        note_positions: BTreeMap::default(),
-                    },
-                )
-                .is_none());
+            let Entry::Vacant(entry) = self.wallet_note_positions.entry(*txid) else {
+                return Err(WalletError::DuplicateNotePosition(*txid));
+            };
+            entry.insert(NotePositions {
+                tx_height: block_height,
+                note_positions: BTreeMap::default(),
+            });
         }
 
         for (action_idx, action) in bundle.actions().iter().enumerate() {
@@ -633,16 +634,13 @@ impl Wallet {
             // For nullifiers that are ours that we detect as spent by this action,
             // we will record that input as being mined.
             if let Some(outpoint) = self.nullifiers.get(action.nullifier()) {
-                assert!(self
-                    .mined_notes
-                    .insert(
-                        *outpoint,
-                        InPoint {
-                            txid: *txid,
-                            action_idx,
-                        },
-                    )
-                    .is_none());
+                let Entry::Vacant(entry) = self.mined_notes.entry(*outpoint) else {
+                    return Err(WalletError::DuplicateMinedSpend(*outpoint));
+                };
+                entry.insert(InPoint {
+                    txid: *txid,
+                    action_idx,
+                });
             }
         }
 
@@ -737,12 +735,10 @@ impl Wallet {
             .ok_or(SpendRetrievalError::NoteNotPositioned(outpoint))?;
         tracing::trace!("Found position for note: {:?}", position);
 
-        assert_eq!(
-            self.commitment_tree
-                .get_marked_leaf(*position)
-                .expect("This note has been marked as one of ours."),
-            &MerkleHashOrchard::from_cmx(&dnote.note.commitment().into()),
-        );
+        let commitment = MerkleHashOrchard::from_cmx(&dnote.note.commitment().into());
+        if self.commitment_tree.get_marked_leaf(*position) != Some(&commitment) {
+            return Err(SpendRetrievalError::NoteNotPositioned(outpoint));
+        }
 
         let path = self
             .commitment_tree
@@ -1429,6 +1425,22 @@ pub extern "C" fn orchard_wallet_init_from_frontier(
         );
         false
     }
+}
+
+/// Check the witnesses for a transaction known by the caller to be mined at the saved checkpoint.
+#[no_mangle]
+pub extern "C" fn orchard_wallet_tx_notes_have_witnesses(
+    wallet: *const Wallet,
+    txid: *const [u8; 32],
+) -> bool {
+    let wallet = unsafe { wallet.as_ref() }.expect("wallet must be supplied");
+    let txid = TxId::from_bytes(*unsafe { txid.as_ref() }.expect("txid must be supplied"));
+    wallet.wallet_received_notes.get(&txid).is_none_or(|notes| {
+        notes.decrypted_notes.keys().all(|&action_idx| {
+            let outpoint = OutPoint { txid, action_idx };
+            wallet.mined_notes.contains_key(&outpoint) || wallet.get_spend_info(outpoint, 0).is_ok()
+        })
+    })
 }
 
 #[no_mangle]

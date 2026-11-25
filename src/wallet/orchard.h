@@ -229,14 +229,13 @@ public:
 
     /**
      * Overwrite the first bridge of the Orchard note commitment tree to have the
-     * provided frontier as its latest state. This will fail with an assertion error
+     * provided frontier as its latest state. Returns false
      * if any checkpoints exist in the tree.
      */
     template <typename Frontier>
-    void InitNoteCommitmentTree(const Frontier& frontier) {
-        assert(!GetLastCheckpointHeight().has_value());
-        assert(frontier.inner->init_wallet(
-            reinterpret_cast<merkle_frontier::OrchardWallet*>(inner.get())));
+    bool InitNoteCommitmentTree(const Frontier& frontier) {
+        return !GetLastCheckpointHeight() && frontier.inner->init_wallet(
+            reinterpret_cast<merkle_frontier::OrchardWallet*>(inner.get()));
     }
 
     /**
@@ -527,6 +526,10 @@ public:
                 PushSpendAction,
                 PushOutputAction);
         return result;
+    }
+
+    bool TxNotesHaveWitnesses(const uint256& txid) const {
+        return orchard_wallet_tx_notes_have_witnesses(inner.get(), txid.begin());
     }
 
     bool UnspentNotesAreSpendable() const {
