@@ -438,7 +438,6 @@ jobs:
     needs: [setup, build]
     # The pinned Zakura release requires glibc 2.39.
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6.0.3
 
@@ -449,13 +448,7 @@ jobs:
           path: ./src
 
       - name: Make artifact executable
-        run: chmod +x ./src/zcash-gtest
-
-      - name: Test the NU7 dump comparer
-        run: python3 qa/zcash/nu7-diff/test_compare.py
-
-      - name: Compare zcashd's NU7 values with Zakura's
-        run: ./qa/zcash/nu7-diff/run.sh --fail-on-diff
+        run: chmod +x ./src/zcashd ./src/zcash-gtest
 
       - name: Install pinned regtest peer and pre-feature wallet
         working-directory: ${{ runner.temp }}
@@ -471,14 +464,20 @@ jobs:
           tar -xzf zakura.tar.gz ./bin/zakurad
           chmod +x previous-zcashd
       - name: Shield rewards, restore the wallet, and confirm pool payouts
+        timeout-minutes: 30
         run: |
-          chmod +x ./src/zcashd
           python3 qa/rpc-tests/wallet_ironwood_payouts.py \
             --zcashd ./src/zcashd --zakurad "$RUNNER_TEMP/bin/zakurad" \
             --previous-zcashd "$RUNNER_TEMP/previous-zcashd" --workdir "$RUNNER_TEMP/payouts"
       - name: Show regtest diagnostics on failure
         if: failure()
         run: tail -n 60 "$RUNNER_TEMP"/payouts/{wallet.log,wallet/regtest/debug.log,zakura.log} || true
+
+      - name: Test the NU7 dump comparer
+        run: python3 qa/zcash/nu7-diff/test_compare.py
+
+      - name: Compare zcashd's NU7 values with Zakura's
+        run: ./qa/zcash/nu7-diff/run.sh --fail-on-diff
 
   test-rust:
     name: Rust test tier ${{ matrix.tier }} platform ${{ matrix.platform }}
