@@ -505,13 +505,14 @@ debug_enable_at_height = 0
         assert balance() == 0
         # The mixed address still spends Sapling after another address on this account
         # has received and exhausted its Ironwood. Keep the usual explicit privacy policy.
+        mixed_fee = 6 * MARGINAL_FEE
         mixed_payment = mine_wallet_transaction(payout(
-            [(second, 0.1)], 1, 0.0003, "AllowRevealedRecipients", source=mixed))
+            [(second, 0.1)], 1, float(Decimal(mixed_fee) / COIN), "AllowRevealedRecipients", source=mixed))
         assert mixed_payment["vShieldedSpend"] and not mixed_payment["vin"]
         assert not mixed_payment.get("ironwood", {}).get("actions")
         assert [(v["scriptPubKey"]["addresses"], v["value"]) for v in mixed_payment["vout"]] == [
             ([second], Decimal("0.1"))]
-        assert mixed_payment["valueBalanceZat"] == 10_000_000 + 30_000
+        assert mixed_payment["valueBalanceZat"] == 10_000_000 + mixed_fee
         assert wallet("z_getbalanceforaccount", account)["pools"]["sapling"]["valueZat"] == (
             sapling_reserve - mixed_payment["valueBalanceZat"])
 
