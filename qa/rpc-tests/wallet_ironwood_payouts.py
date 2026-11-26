@@ -131,13 +131,6 @@ def exercise(args, root):
         ready(proc, wallet, log)
         return proc
 
-    # A second wallet supplies receivers outside the mining wallet's accounts.
-    with ExitStack() as receiver:
-        start_wallet(receiver, args.zcashd, ["-wallet=receiver.dat", "-mocktime=1296688000"])
-        receiver_account = wallet("z_getnewaccount")["account"]
-        foreign_mixed = wallet("z_getaddressforaccount", receiver_account, ["sapling", "orchard"])["address"]
-        foreign_orchard = wallet("z_getaddressforaccount", receiver_account, ["orchard"])["address"]
-
     # Create the backup before either operation. An older compat binary also tests
     # loading wallet.dat records written by a version without Ironwood support.
     with ExitStack() as initial:
@@ -150,6 +143,16 @@ def exercise(args, root):
         mixed = wallet("z_getaddressforaccount", account, ["sapling", "orchard"])["address"]
         sapling = wallet("z_getaddressforaccount", account, ["sapling"])["address"]
         backup = Path(wallet("backupwallet", "beforeIronwood"))
+
+    # A second wallet supplies receivers outside the mining wallet's accounts. It starts
+    # after the backup: a datadir this build has already initialised gives the older
+    # binary's backup a genesis locator, and restoring that into a fresh datadir hits a
+    # startup race in that binary (ThreadStartWalletNotifier's pindexFork assertion).
+    with ExitStack() as receiver:
+        start_wallet(receiver, args.zcashd, ["-wallet=receiver.dat", "-mocktime=1296688000"])
+        receiver_account = wallet("z_getnewaccount")["account"]
+        foreign_mixed = wallet("z_getaddressforaccount", receiver_account, ["sapling", "orchard"])["address"]
+        foreign_orchard = wallet("z_getaddressforaccount", receiver_account, ["orchard"])["address"]
 
     config = root / "zakurad.toml"
     heights = "\n".join(f'"{name}" = {height}' for name, height in activation.items())
