@@ -657,6 +657,47 @@ AddChangePayment(
     return {};
 }
 
+/// With no fee given, a send whose notes cover the amount but not the conventional fee pays what
+/// is left over as its fee, if the unpaid actions that leaves fit `-txunpaidactionlimit`, the
+/// limit this node's mempool applies when the wallet commits it. Pool software such as s-nomp
+/// sends a balance minus a fixed reserve; Sapling sends of that shape already reach the mempool
+/// because their fee estimate does not count output padding. The default limit of 0 keeps the
+/// full conventional fee.
+static std::optional<std::tuple<SpendableInputs, CAmount, std::optional<ChangeAddress>>>
+SelectWithinUnpaidActionLimit(
+        const CWallet& wallet,
+        const SpendableInputs& spendable,
+        Payments& resolved,
+        CAmount sendAmount,
+        CAmount dustThreshold,
+        bool allowOrchard,
+        uint32_t consensusBranchId)
+{
+    if (nTxUnpaidActionLimit <= 0) {
+        return std::nullopt;
+    }
+    SpendableInputs selected = spendable;
+    if (!selected.LimitToAmount(sendAmount, dustThreshold, resolved.GetRecipientPools(), allowOrchard)) {
+        return std::nullopt;
+    }
+    CAmount fee = selected.Total() - sendAmount;
+    if (fee <= 0) {
+        return std::nullopt;
+    }
+    // The same count as CTxMemPoolEntry::GetUnpaidActionCount: the conventional fee is
+    // MARGINAL_FEE per logical action, with at least GRACE_ACTIONS.
+    CAmount conventionalFee =
+        GetConstrainedFee(wallet, selected, resolved.GetResolvedPayments(), std::nullopt, consensusBranchId);
+    if (fee >= conventionalFee) {
+        return std::nullopt;
+    }
+    CAmount unpaidActions = conventionalFee / MARGINAL_FEE - fee / MARGINAL_FEE;
+    if (unpaidActions > nTxUnpaidActionLimit) {
+        return std::nullopt;
+    }
+    return std::make_tuple(selected, fee, std::optional<ChangeAddress>());
+}
+
 /// On the initial call, we haven’t yet selected inputs, so we assume the outputs dominate the
 /// actions.
 ///
@@ -735,6 +776,10 @@ WalletTxBuilder::IterateLimit(
                     changeAmount > 0 ? changeAddr : std::nullopt,
                     consensusBranchId);
         } else {
+            if (auto underpaid = SelectWithinUnpaidActionLimit(
+                    wallet, spendable, resolved, sendAmount, dustThreshold, allowOrchard, consensusBranchId)) {
+                return underpaid.value();
+            }
             return tl::make_unexpected(
                     ReportInvalidFunds(
                             spendableMut,

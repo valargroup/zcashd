@@ -421,6 +421,20 @@ debug_enable_at_height = 0
         assert balance() == remaining - spent["ironwood"]["valueBalanceZat"]
         pools = wallet("z_getbalanceforaccount", account)["pools"]
         assert pools["orchard"]["valueZat"] == frozen and pools["sapling"]["valueZat"] == sapling_reserve
+        # s-nomp moves its whole sweep balance with the 2-argument z_sendmany and leaves
+        # 0.0001 ZEC for the fee, less than the conventional fee for its spends and one
+        # transparent output. That is refused by default and pays the 0.0001 ZEC when the
+        # operator allows the unpaid actions, as a Sapling sweep of that shape already does.
+        mine(10)
+        swept = balance()
+        snomp = [(first, float(Decimal(swept - 10_000) / COIN))]
+        refused = result(payout(snomp))
+        assert refused["status"] == "failed" and "Insufficient funds" in refused["error"]["message"], refused
+        sidecar.close()
+        start_wallet(sidecar, args.zcashd, [*flags, "-txunpaidactionlimit=50"])
+        wait_for(lambda: any(p.get("version", 0) for p in wallet("getpeerinfo")), "wallet to reconnect")
+        check_payout(confirm(payout(snomp)), snomp, fee_zat=10_000)
+        assert balance() == 0
 
 
 def main(argv=None):

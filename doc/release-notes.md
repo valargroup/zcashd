@@ -167,7 +167,12 @@ reports `ismine` for Unified Addresses (true when the wallet holds the spending
 key), which s-nomp requires before it starts payment processing. s-nomp's two-argument
 `z_sendmany` refill permits revealed recipients when spending Ironwood
 to transparent addresses. This call requires ten confirmations. An explicit
-privacy policy still applies.
+privacy policy still applies. s-nomp leaves 0.0001 ZEC for the fee, less than
+the conventional fee for the notes it spends and its transparent output. With
+no fee given, the wallet pays what is left when the unpaid actions fit
+`-txunpaidactionlimit`, as a Sapling sweep of that shape already does; set it to
+at least the number of notes a sweep spends. The default of 0 refuses the
+payout with "Insufficient funds".
 Pools using the deprecated `z_getbalance` RPC must start the wallet with
 `-allowdeprecated=z_getbalance`. On the Orchard-only sweep UA this RPC
 reports confirmed Ironwood funds from NU6.3 and accepts a minimum confirmation
