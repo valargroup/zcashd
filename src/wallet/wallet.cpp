@@ -4755,6 +4755,13 @@ bool CWallet::IronwoodHistoryMatches(const CBlockIndex& last) const
     return true;
 }
 
+bool CWallet::IronwoodTracksOrchard() const
+{
+    LOCK(cs_wallet);
+    auto ironwood = ironwoodWallet.GetLastCheckpointHeight();
+    return ironwood.has_value() && ironwood == orchardWallet.GetLastCheckpointHeight();
+}
+
 bool CWallet::BackfillIronwood(const CBlockIndex& last)
 {
     LOCK2(cs_main, cs_wallet);
@@ -6910,13 +6917,25 @@ bool CWallet::InitLoadWallet(const CChainParams& params, bool clearWitnessCaches
         if (walletdb.ReadBestBlock(locator)) {
             pindexRescan = FindForkInGlobalIndex(chainActive, locator);
             if (pindexRescan && !fFirstRun &&
-                params.GetConsensus().NetworkUpgradeActive(pindexRescan->nHeight, Consensus::UPGRADE_NU6_3) &&
-                !walletInstance->IronwoodHistoryMatches(*pindexRescan)) {
-                uiInterface.InitMessage(_("Scanning wallet history for Ironwood payments..."));
-                if (!walletInstance->BackfillIronwood(*pindexRescan)) {
-                    return UIError(_("Could not rebuild Ironwood wallet history. Restore full block data and restart with -rescan."));
+                params.GetConsensus().NetworkUpgradeActive(pindexRescan->nHeight, Consensus::UPGRADE_NU6_3)) {
+                // After an unclean shutdown the saved wallet tip can be ahead of the
+                // restored chain, or on a stale fork. The wallet notifier then resumes
+                // from that tip, or the rescan below rewinds to pindexRescan. Moving the
+                // saved tip back here would leave the Orchard tree and Sapling witnesses
+                // past it, so only rebuild Ironwood when the wallet stopped at pindexRescan.
+                bool walletAtRescanPoint =
+                    !locator.vHave.empty() && locator.vHave[0] == pindexRescan->GetBlockHash();
+                if (walletAtRescanPoint && !walletInstance->IronwoodHistoryMatches(*pindexRescan)) {
+                    uiInterface.InitMessage(_("Scanning wallet history for Ironwood payments..."));
+                    if (!walletInstance->BackfillIronwood(*pindexRescan)) {
+                        return UIError(_("Could not rebuild Ironwood wallet history. Restore full block data and restart with -rescan."));
+                    }
+                    walletInstance->SetBestChain(chainActive.GetLocator(pindexRescan));
+                } else if (!walletAtRescanPoint && !walletInstance->IronwoodTracksOrchard()) {
+                    // An older binary last wrote this wallet, so its Ironwood history must be
+                    // rebuilt, but that needs the wallet's saved tip on the active chain.
+                    return UIError(_("The wallet's Ironwood history is behind its saved tip, which is not on the restored chain. Restart with -rescan."));
                 }
-                walletInstance->SetBestChain(chainActive.GetLocator(pindexRescan));
             }
         }
     }

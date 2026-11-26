@@ -120,8 +120,10 @@ def exercise(args, root):
         cmd = [binary, "-regtest", f"-datadir={datadir}", f"-exportdir={root}",
                f"-rpcport={wallet_port}", f"-connect=127.0.0.1:{peer}", "-listen=0",
                "-walletrequirebackup=0", "-allowdeprecated=getnewaddress", "-allowdeprecated=z_getbalance", "-maxtipage=3153600000",
-               "-regtestwalletsetbestchaineveryblock", "-regtestprotectcoinbase", "-regtestacceptunvalidatedpow", "-txindex=1", *extra]
-        ready(stack.enter_context(node_process(cmd, log)), wallet, log)
+               "-regtestwalletsetbestchaineveryblock", "-regtestshieldcoinbase", "-regtestacceptunvalidatedpow", "-txindex=1", *extra]
+        proc = stack.enter_context(node_process(cmd, log))
+        ready(proc, wallet, log)
+        return proc
 
     # Create the backup before either operation. An older compat binary also tests
     # loading wallet.dat records written by a version without Ironwood support.
@@ -239,6 +241,12 @@ debug_enable_at_height = 0
         else:
             raise AssertionError("Wallet selected an immature reward")
         mine(1)
+        try:
+            wallet("sendmany", "", {first: 1})
+        except RpcError as error:
+            assert "Coinbase funds can only be sent to a zaddr" in str(error), error
+        else:
+            raise AssertionError("Wallet spent coinbase to a transparent address")
         legacy = wallet("z_shieldcoinbase", mining, sweep, None, 1)
         legacy_result = result(legacy["opid"])
         assert legacy_result["status"] == "success", legacy_result
@@ -376,6 +384,18 @@ debug_enable_at_height = 0
         start_wallet(sidecar, args.zcashd, [*flags, "-rescan"])
         assert balance() == remaining
         wait_for(lambda: any(p.get("version", 0) for p in wallet("getpeerinfo")), "rescanned wallet to reconnect")
+        # After a hard kill the saved wallet tip is ahead of the node's last flushed
+        # block index. The restart must resume from that tip, not rewind it.
+        sidecar.close()
+        proc = start_wallet(sidecar, args.zcashd, flags)
+        mine(3)
+        proc.kill()
+        proc.wait()
+        sidecar.close()
+        start_wallet(sidecar, args.zcashd, flags)
+        wait_for(lambda: wallet("getbestblockhash") == zakura("getbestblockhash") and
+                 wallet("getblockchaininfo")["fullyNotified"], "wallet to resume after a hard kill")
+        assert balance() == remaining
         # A fixed fee must cover the batch's logical actions under the default relay policy.
         mine(8)
         workers = [(addr, 0.001) for addr, _ in oversized[:80]]

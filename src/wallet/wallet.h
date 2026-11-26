@@ -1952,6 +1952,11 @@ public:
     bool BackfillIronwood(const CBlockIndex& last);
     /** Check the saved checkpoint, consensus root, and confirmed unspent note witnesses. */
     bool IronwoodHistoryMatches(const CBlockIndex& last) const;
+    /**
+     * True when the Ironwood tree is checkpointed at the same height as the Orchard tree,
+     * which SetBestChain writes together; false means an older binary wrote the wallet.
+     */
+    bool IronwoodTracksOrchard() const;
     std::optional<int> ScanForWalletTransactions(
         CBlockIndex* pindexStart,
         bool fUpdate,
