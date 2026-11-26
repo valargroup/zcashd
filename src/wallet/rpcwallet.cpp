@@ -4877,7 +4877,10 @@ UniValue z_sendmany(const UniValue& params, bool fHelp)
             "\naddresses flows to a new transparent address, while change generated from a"
             "\nlegacy Sapling address returns to itself. When sending from a unified address,"
             "\nchange is returned to the internal-only address for the associated unified account."
-            "\nFrom NU6.3, an Ironwood payout from an Orchard-only Unified Address to transparent addresses defaults to AllowRevealedRecipients when privacyPolicy is omitted.\n"
+            "\nFrom NU6.3, an Orchard-only Unified Address pays from its Ironwood funds. It can pay transparent addresses and Unified Addresses\n"
+            "with an Orchard receiver, which receive Ironwood outputs, but not Sapling addresses or Unified Addresses without an Orchard receiver.\n"
+            "When privacyPolicy is omitted, a payout with a transparent recipient defaults to AllowRevealedRecipients; a payout to Unified\n"
+            "Addresses only is fully shielded.\n"
             "From NU6.3, transparent funds sent to one of this wallet's Unified Addresses with an Orchard receiver fund Ironwood, with any change\n"
             "returned to a transparent address. With -allowdeprecated=legacy_privacy, an omitted privacyPolicy allows this.\n"
             "\nWhen spending coinbase UTXOs, only shielded recipients are permitted and change is not allowed;"
@@ -5117,13 +5120,25 @@ UniValue z_sendmany(const UniValue& params, bool fHelp)
 
     // Only the dedicated sweep address opts into Ironwood. Mixed addresses keep
     // their usual funding and privacy rules even after this account receives Ironwood.
+    // A payout pays transparent addresses and Unified Addresses through their Orchard
+    // receivers; PrepareTransaction refuses recipients that would need a Sapling output.
+    // Paying only Unified Addresses is fully shielded, so the usual default policy applies.
+    // Paying any transparent recipient defaults to AllowRevealedRecipients.
     std::optional<TransactionStrategy> ironwoodPayoutStrategy;
     const auto* ua = sender ? std::get_if<UnifiedAddress>(&*sender) : nullptr;
-    if (ua && ua->GetReceiversAsParsed().size() == 1 && ua->GetOrchardReceiver() &&
-        std::all_of(recipientAddrs.begin(), recipientAddrs.end(), [](const PaymentAddress& addr) {
-            return std::holds_alternative<CKeyID>(addr) || std::holds_alternative<CScriptID>(addr);
-        })) {
-        ironwoodPayoutStrategy = params.size() < 5
+    if (ua && ua->GetReceiversAsParsed().size() == 1 && ua->GetOrchardReceiver()) {
+        const bool paysTransparent = std::any_of(recipientAddrs.begin(), recipientAddrs.end(),
+            [](const PaymentAddress& addr) {
+                return examine(addr, match {
+                    [](const CKeyID&) { return true; },
+                    [](const CScriptID&) { return true; },
+                    [](const UnifiedAddress& recipient) {
+                        return !recipient.GetOrchardReceiver() && !recipient.GetSaplingReceiver();
+                    },
+                    [](const auto&) { return false; },
+                });
+            });
+        ironwoodPayoutStrategy = params.size() < 5 && paysTransparent
             ? TransactionStrategy(PrivacyPolicy::AllowRevealedRecipients)
             : strategy;
     }

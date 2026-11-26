@@ -351,6 +351,9 @@ public:
 enum class IronwoodUnsupportedError {
     HistoricalOrchardSpend,
     UnsupportedReceiver,
+    /// An Ironwood payout names a recipient that can only be paid in Sapling. Ironwood funds
+    /// never create Sapling outputs.
+    SaplingRecipient,
 };
 
 /// Explanation returned by operations outside the supported Ironwood wallet flows.
@@ -363,8 +366,10 @@ bool SelectsOnlyTransparent(const ZTXOSelector& selector);
  * True for a single payment to a Unified Address whose Orchard receiver belongs to this wallet.
  * From NU6.3, sent from transparent funds, this is the one z_sendmany shape that funds an
  * Ironwood receiver: one Ironwood output, with any change transparent. Pool sweepers use it in
- * place of z_shieldcoinbase. Like z_shieldcoinbase, Ironwood outputs go only to the wallet's own
- * addresses; another wallet's Unified Address keeps using its Sapling receiver.
+ * place of z_shieldcoinbase. Like z_shieldcoinbase, Ironwood outputs from transparent funds go
+ * only to the wallet's own addresses; another wallet's Unified Address keeps using its Sapling
+ * receiver. Payouts from an Orchard-only Unified Address holding Ironwood funds can instead pay
+ * any number of Unified Addresses with Orchard receivers.
  */
 bool IsIronwoodSweepPayment(const CWallet& wallet, const std::vector<Payment>& payments);
 

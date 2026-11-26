@@ -14,7 +14,22 @@ using namespace libzcash;
 const std::string IRONWOOD_WALLET_UNSUPPORTED =
     "This transfer to an Orchard receiver is unsupported from NU6.3. For Ironwood, use "
     "z_shieldcoinbase to shield rewards, z_sendmany from transparent funds to one of this wallet's "
-    "Unified Addresses with transparent change, or z_sendmany to pay transparent recipients.";
+    "Unified Addresses with transparent change, or z_sendmany from an Orchard-only Unified Address "
+    "to pay transparent addresses and Unified Addresses with Orchard receivers.";
+
+/// True when an Ironwood payout can pay this recipient without creating a Sapling output: a
+/// transparent address, or a Unified Address with an Orchard receiver (paid in Ironwood) or with
+/// only transparent receivers. Sprout recipients are refused later with their usual error.
+static bool IronwoodPayoutCanPay(const PaymentAddress& addr)
+{
+    return examine(addr, match {
+        [](const SaplingPaymentAddress&) { return false; },
+        [](const UnifiedAddress& ua) {
+            return ua.GetOrchardReceiver().has_value() || !ua.GetSaplingReceiver().has_value();
+        },
+        [](const auto&) { return true; },
+    });
+}
 
 bool SelectsOnlyTransparent(const ZTXOSelector& selector)
 {
@@ -469,7 +484,15 @@ WalletTxBuilder::PrepareTransaction(
         return !allowOrchard || note.IsIronwood() != useIronwood;
     }), notes.end());
     const bool transparentSource = SelectsOnlyTransparent(selector);
-    if (useIronwood && std::holds_alternative<std::vector<Payment>>(payments) && !transparentSource) {
+    const bool ironwoodPayout =
+        useIronwood && std::holds_alternative<std::vector<Payment>>(payments) && !transparentSource;
+    if (ironwoodPayout) {
+        // Ironwood funds pay transparent recipients and Orchard receivers, never Sapling.
+        for (const auto& payment : std::get<std::vector<Payment>>(payments)) {
+            if (!IronwoodPayoutCanPay(payment.GetAddress())) {
+                return tl::make_unexpected(IronwoodUnsupportedError::SaplingRecipient);
+            }
+        }
         // A payout debits only the sweep account's confirmed Ironwood notes.
         selectable.saplingNoteEntries.clear();
         selectable.sproutNoteEntries.clear();
@@ -552,6 +575,11 @@ WalletTxBuilder::PrepareTransaction(
         }
     }
 
+    // An Ironwood payout creates no Sapling output, whether for a recipient or for change.
+    if (ironwoodPayout && resolvedSelection.GetPayments().HasSaplingRecipient()) {
+        return tl::make_unexpected(IronwoodUnsupportedError::SaplingRecipient);
+    }
+
     // Historical Orchard funds and unsupported operations stay outside the Ironwood builder.
     if (afterNU63 && !useIronwood) {
         bool orchardChange =
@@ -574,12 +602,22 @@ WalletTxBuilder::PrepareTransaction(
     // outputs, so a transaction with more could never be mined. Change is among the
     // resolved payments, and the builder pads a bundle to two outputs.
     if (nu7Active) {
-        const auto ironwoodSpends = resolvedSelection.GetInputs().orchardNoteMetadata.size();
-        // Both supported flows create at most one shielded output. Beyond the
-        // two-action padding minimum, the payout's note count sets its size.
-        if (useIronwood && ironwoodSpends > ORCHARD_PROTOCOL_BLOCK_ACTION_LIMIT) {
+        // An Ironwood bundle has one action per spend or output, whichever is more,
+        // and at least two actions.
+        uint64_t ironwoodSpends = resolvedSelection.GetInputs().orchardNoteMetadata.size();
+        uint64_t ironwoodOutputs = 0;
+        for (const auto& payment : resolvedSelection.GetPayments().GetResolvedPayments()) {
+            if (std::holds_alternative<OrchardRawAddress>(payment.address)) {
+                ironwoodOutputs++;
+            }
+        }
+        uint64_t ironwoodActions = std::max(ironwoodSpends, ironwoodOutputs);
+        if (ironwoodActions > 0) {
+            ironwoodActions = std::max<uint64_t>(ironwoodActions, 2);
+        }
+        if (useIronwood && ironwoodActions > ORCHARD_PROTOCOL_BLOCK_ACTION_LIMIT) {
             return tl::make_unexpected(ExcessShieldedActionsError(
-                ironwoodSpends, ORCHARD_PROTOCOL_BLOCK_ACTION_LIMIT, true));
+                ironwoodActions, ORCHARD_PROTOCOL_BLOCK_ACTION_LIMIT, true));
         }
         uint64_t saplingSpends = resolvedSelection.GetInputs().saplingNoteEntries.size();
         uint64_t saplingOutputs = 0;
