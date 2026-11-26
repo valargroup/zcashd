@@ -49,9 +49,9 @@ AsyncRPCOperation_sendmany::AsyncRPCOperation_sendmany(
         TransactionStrategy strategy,
         std::optional<CAmount> fee,
         UniValue contextInfo,
-        bool defaultIronwoodPayoutPolicy) :
+        std::optional<TransactionStrategy> ironwoodPayoutStrategy) :
         builder_(std::move(builder)), ztxoSelector_(ztxoSelector), recipients_(recipients),
-        strategy_(strategy), defaultIronwoodPayoutPolicy_(defaultIronwoodPayoutPolicy),
+        strategy_(strategy), ironwoodPayoutStrategy_(ironwoodPayoutStrategy),
         mindepth_(minDepth), anchordepth_(anchorDepth), fee_(fee),
         contextinfo_(contextInfo)
 {
@@ -145,30 +145,19 @@ tl::expected<uint256, InputSelectionError>
 AsyncRPCOperation_sendmany::main_impl(CWallet& wallet) {
     auto spendable = builder_.FindAllSpendableInputs(wallet, ztxoSelector_, mindepth_);
 
-    const auto* ua = std::get_if<UnifiedAddress>(&ztxoSelector_.GetPattern());
-    const auto* account = std::get_if<AccountZTXOPattern>(&ztxoSelector_.GetPattern());
-    const auto receiverTypes = ua ? ua->GetKnownReceiverTypes()
-        : account ? account->GetReceiverTypes() : std::set<ReceiverType>{};
-    const bool ironwoodPayout = receiverTypes.count(ReceiverType::Orchard) &&
-        (receiverTypes.size() == 1 || spendable.hasReceivedIronwood) &&
-        std::all_of(recipients_.begin(), recipients_.end(), [](const Payment& payment) {
-            const auto& to = payment.GetAddress();
-            return std::holds_alternative<CKeyID>(to) || std::holds_alternative<CScriptID>(to);
-        });
-
     auto strategy = strategy_;
     auto preparedTx = [&]() {
         LOCK(cs_main);
-        // Resolve the omitted RPC policy at the same target height as note selection.
+        // Apply the payout policy at the same target height as note selection.
         // PrepareTransaction restricts these payouts to Ironwood inputs and shielded change.
-        if (defaultIronwoodPayoutPolicy_ && ironwoodPayout &&
+        if (ironwoodPayoutStrategy_ &&
             Params().GetConsensus().NetworkUpgradeActive(chainActive.Height() + 1, Consensus::UPGRADE_NU6_3)) {
-            strategy = TransactionStrategy(PrivacyPolicy::AllowRevealedRecipients);
+            strategy = *ironwoodPayoutStrategy_;
         }
         const bool ironwoodShielding =
             SelectsOnlyTransparent(ztxoSelector_) && IsIronwoodSweepPayment(wallet, recipients_);
         return builder_.PrepareTransaction(wallet, ztxoSelector_, spendable, recipients_, chainActive,
-                                           strategy, fee_, anchordepth_, ironwoodPayout || ironwoodShielding);
+                                           strategy, fee_, anchordepth_, ironwoodPayoutStrategy_.has_value() || ironwoodShielding);
     }();
 
     return preparedTx

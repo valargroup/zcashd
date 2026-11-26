@@ -979,7 +979,7 @@ private:
     bool limited = false;
 
 public:
-    // A mixed-receiver sweep account keeps paying from Ironwood even when its last note is spent or reserved.
+    // Distinguishes an exhausted Ironwood balance from funds held only in historical Orchard.
     bool hasReceivedIronwood = false;
     std::vector<COutput> utxos;
     std::vector<SproutNoteEntry> sproutNoteEntries;

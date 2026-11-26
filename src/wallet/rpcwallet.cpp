@@ -4877,7 +4877,7 @@ UniValue z_sendmany(const UniValue& params, bool fHelp)
             "\naddresses flows to a new transparent address, while change generated from a"
             "\nlegacy Sapling address returns to itself. When sending from a unified address,"
             "\nchange is returned to the internal-only address for the associated unified account."
-            "\nFrom NU6.3, an Ironwood payout from a Unified Address to transparent addresses defaults to AllowRevealedRecipients when privacyPolicy is omitted.\n"
+            "\nFrom NU6.3, an Ironwood payout from an Orchard-only Unified Address to transparent addresses defaults to AllowRevealedRecipients when privacyPolicy is omitted.\n"
             "From NU6.3, transparent funds sent to one of this wallet's Unified Addresses with an Orchard receiver fund Ironwood, with any change\n"
             "returned to a transparent address. With -allowdeprecated=legacy_privacy, an omitted privacyPolicy allows this.\n"
             "\nWhen spending coinbase UTXOs, only shielded recipients are permitted and change is not allowed;"
@@ -5115,11 +5115,24 @@ UniValue z_sendmany(const UniValue& params, bool fHelp)
     auto nAnchorDepth = std::min((unsigned int) nMinDepth, nAnchorConfirmations);
     WalletTxBuilder builder(chainparams, minRelayTxFee);
 
+    // Only the dedicated sweep address opts into Ironwood. Mixed addresses keep
+    // their usual funding and privacy rules even after this account receives Ironwood.
+    std::optional<TransactionStrategy> ironwoodPayoutStrategy;
+    const auto* ua = sender ? std::get_if<UnifiedAddress>(&*sender) : nullptr;
+    if (ua && ua->GetReceiversAsParsed().size() == 1 && ua->GetOrchardReceiver() &&
+        std::all_of(recipientAddrs.begin(), recipientAddrs.end(), [](const PaymentAddress& addr) {
+            return std::holds_alternative<CKeyID>(addr) || std::holds_alternative<CScriptID>(addr);
+        })) {
+        ironwoodPayoutStrategy = params.size() < 5
+            ? TransactionStrategy(PrivacyPolicy::AllowRevealedRecipients)
+            : strategy;
+    }
+
     std::shared_ptr<AsyncRPCQueue> q = getAsyncRPCQueue();
     std::shared_ptr<AsyncRPCOperation> operation(
             new AsyncRPCOperation_sendmany(
                 std::move(builder), ztxoSelector, recipients, nMinDepth, nAnchorDepth, strategy, nFee, contextInfo,
-                params.size() < 5 && sender && std::holds_alternative<UnifiedAddress>(*sender))
+                ironwoodPayoutStrategy)
             );
     q->addOperation(operation);
     AsyncRPCOperationId operationId = operation->getId();

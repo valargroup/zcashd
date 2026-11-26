@@ -165,6 +165,11 @@ The wallet pays the specified amounts, deducts the fee from the sweep account,
 and returns change to its internal Ironwood receiver. Restoring an older wallet
 backup requires the original blocks to rebuild the notes and their witnesses.
 
+Use an Orchard-only sweep UA for the Ironwood payout path. Sending from a UA
+with both Sapling and Orchard receivers keeps its usual funding and privacy
+rules. It can spend Sapling with `AllowRevealedRecipients`, including after
+the same account has received and spent Ironwood.
+
 With stock s-nomp, set `zAddress` to the sweep UA. `z_validateaddress` now
 reports `ismine` for Unified Addresses (true when the wallet holds the spending
 key), which s-nomp requires before it starts payment processing. s-nomp's two-argument

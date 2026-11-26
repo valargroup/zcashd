@@ -380,7 +380,7 @@ debug_enable_at_height = 0
             private = result(payout(outputs, 1, None, policy))
             assert private["status"] == "failed" and "AllowRevealedRecipients" in private["error"]["message"], private
         # The notes cover the requested amount exactly, leaving no funds for the fee.
-        insufficient = result(payout([(first, float(Decimal(before) / COIN))], 1, source=mixed))
+        insufficient = result(payout([(first, float(Decimal(before) / COIN))], 1))
         assert insufficient["status"] == "failed" and "Insufficient funds" in insufficient["error"]["message"]
         # 60,000 standard transparent outputs exceed the two-megabyte transaction limit.
         oversized = [(b58encode_chk(b"\x1d\x25" + n.to_bytes(20, "big")), 0.0001) for n in range(60_000)]
@@ -432,7 +432,7 @@ debug_enable_at_height = 0
         assert balance() == remaining
         # Both operations request almost all remaining notes and cannot both succeed.
         almost_all = float(Decimal(remaining - 500000) / COIN)
-        ops = [payout([(first, almost_all)], 1, source=mixed), payout([(second, almost_all)], 1)]
+        ops = [payout([(first, almost_all)], 1), payout([(second, almost_all)], 1)]
         results = [result(op) for op in ops]
         assert sorted(item["status"] for item in results) == ["failed", "success"], results
         winner = next(item["result"]["txid"] for item in results if item["status"] == "success")
@@ -459,6 +459,18 @@ debug_enable_at_height = 0
         wait_for(lambda: any(p.get("version", 0) for p in wallet("getpeerinfo")), "wallet to reconnect")
         check_payout(confirm(payout(snomp)), snomp, fee_zat=10_000)
         assert balance() == 0
+        # The mixed address still spends Sapling after another address on this account
+        # has received and exhausted its Ironwood. Keep the usual explicit privacy policy.
+        mixed_payment = mine_wallet_transaction(payout(
+            [(second, 0.1)], 1, 0.0003, "AllowRevealedRecipients", source=mixed))
+        assert mixed_payment["vShieldedSpend"] and not mixed_payment["vin"]
+        assert not mixed_payment.get("ironwood", {}).get("actions")
+        assert [(v["scriptPubKey"]["addresses"], v["value"]) for v in mixed_payment["vout"]] == [
+            ([second], Decimal("0.1"))]
+        assert mixed_payment["valueBalanceZat"] == 10_000_000 + 30_000
+        assert wallet("z_getbalanceforaccount", account)["pools"]["sapling"]["valueZat"] == (
+            sapling_reserve - mixed_payment["valueBalanceZat"])
+
         # With legacy_privacy, a sweeper's transparent send to the UA needs no policy: it
         # reveals the inputs and returns change to a transparent address, as for Sapling.
         swept_in = confirm(wallet("z_sendmany", second, [{"address": sweep, "amount": 0.5}]))
