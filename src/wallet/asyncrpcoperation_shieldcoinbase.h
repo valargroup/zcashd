@@ -73,7 +73,7 @@ public:
     AsyncRPCOperation_shieldcoinbase& operator=(AsyncRPCOperation_shieldcoinbase const&) = delete;  // Copy assign
     AsyncRPCOperation_shieldcoinbase& operator=(AsyncRPCOperation_shieldcoinbase &&) = delete;      // Move assign
 
-    Remaining prepare(CWallet& wallet);
+    Remaining prepare(CWallet& wallet, bool enableIronwood);
 
     virtual void main();
 

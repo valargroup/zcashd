@@ -125,6 +125,13 @@ def exercise(args, root):
         ready(proc, wallet, log)
         return proc
 
+    # A second wallet supplies receivers outside the mining wallet's accounts.
+    with ExitStack() as receiver:
+        start_wallet(receiver, args.zcashd, ["-wallet=receiver.dat", "-mocktime=1296688000"])
+        receiver_account = wallet("z_getnewaccount")["account"]
+        foreign_mixed = wallet("z_getaddressforaccount", receiver_account, ["sapling", "orchard"])["address"]
+        foreign_orchard = wallet("z_getaddressforaccount", receiver_account, ["orchard"])["address"]
+
     # Create the backup before either operation. An older compat binary also tests
     # loading wallet.dat records written by a version without Ironwood support.
     with ExitStack() as initial:
@@ -172,14 +179,18 @@ debug_enable_at_height = 0
     def result(opid):
         return wait_for(lambda: wallet("z_getoperationresult", [opid]), f"operation {opid}", 360)[0]
 
-    def confirm(opid):
+    def mine_wallet_transaction(opid):
         outcome = result(opid)
         assert outcome["status"] == "success", outcome.get("error")
         txid = outcome["result"]["txid"]
         wait_for(lambda: txid in zakura("getrawmempool"), "independent mempool acceptance")
         block = mine(1)
         assert txid in zakura("getblock", block, 1)["tx"]
-        tx = wallet("getrawtransaction", txid, 1)
+        return wallet("getrawtransaction", txid, 1)
+
+    def confirm(opid):
+        tx = mine_wallet_transaction(opid)
+        txid = tx["txid"]
         assert tx["version"] == 6 and not tx["orchard"]["actions"] and tx["ironwood"]["actions"]
         wire = bytes.fromhex(zakura("getrawtransaction", txid))
         assert wire.hex() == tx["hex"]
@@ -441,6 +452,22 @@ debug_enable_at_height = 0
         wait_for(lambda: any(p.get("version", 0) for p in wallet("getpeerinfo")), "wallet to reconnect")
         check_payout(confirm(payout(snomp)), snomp, fee_zat=10_000)
         assert balance() == 0
+
+        try:
+            wallet("z_shieldcoinbase", mining, foreign_orchard, None, 1)
+        except RpcError as error:
+            assert "Use a wallet-owned Unified Address" in str(error), error
+        else:
+            raise AssertionError("Accepted a foreign Orchard-only shielding destination")
+
+        shield = wallet("z_shieldcoinbase", mining, foreign_mixed, None, 1)
+        tx = mine_wallet_transaction(shield["opid"])
+        sidecar.close()
+        start_wallet(sidecar, args.zcashd, [*flags, "-wallet=receiver.dat"])
+        wait_for(lambda: wallet("getbestblockhash") == zakura("getbestblockhash") and
+                 wallet("getblockchaininfo")["fullyNotified"], "recipient wallet to sync")
+        receipts = wallet("z_listreceivedbyaddress", foreign_mixed)
+        assert [(n["pool"], n["txid"]) for n in receipts] == [("sapling", tx["txid"])]
 
 
 def main(argv=None):

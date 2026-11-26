@@ -140,7 +140,7 @@ void AsyncRPCOperation_shieldcoinbase::main() {
 }
 
 
-Remaining AsyncRPCOperation_shieldcoinbase::prepare(CWallet& wallet) {
+Remaining AsyncRPCOperation_shieldcoinbase::prepare(CWallet& wallet, bool enableIronwood) {
     LOCK2(cs_main, wallet.cs_wallet);
     auto spendable = builder_.FindAllSpendableInputs(wallet, ztxoSelector_, COINBASE_MATURITY);
     // The chain can connect a sweep before the wallet processes its notification.
@@ -200,7 +200,7 @@ Remaining AsyncRPCOperation_shieldcoinbase::prepare(CWallet& wallet) {
             strategy_,
             fee_,
             nAnchorConfirmations,
-            true);
+            enableIronwood);
 
     (void)preparationResult
         .map_error([&](const InputSelectionError& err) {

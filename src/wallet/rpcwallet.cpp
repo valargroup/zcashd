@@ -5368,12 +5368,16 @@ UniValue z_shieldcoinbase(const UniValue& params, bool fHelp)
         throw JSONRPCError(RPC_INVALID_PARAMETER, string("Invalid parameter, unknown address format: ") + destStr);
     }
 
+    bool enableIronwood = false;
     if (consensus.NetworkUpgradeActive(nextBlockHeight, Consensus::UPGRADE_NU6_3)) {
         if (const auto* ua = std::get_if<libzcash::UnifiedAddress>(&*destaddress)) {
-            const auto receiver = ua->GetOrchardReceiver();
-            if (receiver && !pwalletMain->GetUFVKMetadataForReceiver(*receiver)) {
-                throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY,
-                    "Use a wallet-owned Unified Address when shielding coinbase to Ironwood.");
+            if (auto receiver = ua->GetOrchardReceiver()) {
+                enableIronwood = pwalletMain->GetUFVKMetadataForReceiver(*receiver).has_value();
+                // A foreign UA can still receive a coinbase shield through Sapling.
+                if (!enableIronwood && !ua->GetSaplingReceiver()) {
+                    throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY,
+                        "Use a wallet-owned Unified Address when shielding coinbase to Ironwood.");
+                }
             }
         }
     }
@@ -5404,7 +5408,7 @@ UniValue z_shieldcoinbase(const UniValue& params, bool fHelp)
     auto async_shieldcoinbase =
         new AsyncRPCOperation_shieldcoinbase(
                 std::move(builder), ztxoSelector, destaddress.value(), memo, strategy, nUTXOLimit, nFee, contextInfo);
-    auto results = async_shieldcoinbase->prepare(*pwalletMain);
+    auto results = async_shieldcoinbase->prepare(*pwalletMain, enableIronwood);
 
     // Create operation and add to global queue
     std::shared_ptr<AsyncRPCQueue> q = getAsyncRPCQueue();
