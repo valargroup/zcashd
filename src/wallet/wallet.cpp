@@ -250,6 +250,7 @@ bool CWallet::AddOrchardZKey(const libzcash::OrchardSpendingKey &sk)
     }
 
     orchardWallet.AddSpendingKey(sk);
+    ironwoodWallet.AddSpendingKey(sk);
 
     if (!fFileBacked) {
         return true;
@@ -262,6 +263,7 @@ bool CWallet::AddOrchardFullViewingKey(const libzcash::OrchardFullViewingKey &fv
 {
     AssertLockHeld(cs_wallet); // orchardWallet
     orchardWallet.AddFullViewingKey(fvk);
+    ironwoodWallet.AddFullViewingKey(fvk);
 
     if (!fFileBacked) {
         return true;
@@ -276,7 +278,7 @@ bool CWallet::AddOrchardRawAddress(
     const libzcash::OrchardRawAddress &addr)
 {
     AssertLockHeld(cs_wallet); // orchardWallet
-    if (!orchardWallet.AddRawAddress(addr, ivk)) {
+    if (!(orchardWallet.AddRawAddress(addr, ivk) && ironwoodWallet.AddRawAddress(addr, ivk))) {
         // We should never add an Orchard raw address for which we don't know
         // the corresponding FVK.
         return false;
@@ -296,13 +298,13 @@ bool CWallet::LoadOrchardRawAddress(
     const libzcash::OrchardIncomingViewingKey &ivk)
 {
     AssertLockHeld(cs_wallet); // orchardWallet
-    return orchardWallet.AddRawAddress(addr, ivk);
+    return orchardWallet.AddRawAddress(addr, ivk) && ironwoodWallet.AddRawAddress(addr, ivk);
 }
 
 // Returns a loader that can be used to read an Orchard note commitment
 // tree from a stream into the Orchard wallet.
-OrchardWalletNoteCommitmentTreeLoader CWallet::GetOrchardNoteCommitmentTreeLoader() {
-    return OrchardWalletNoteCommitmentTreeLoader(orchardWallet);
+OrchardWalletNoteCommitmentTreeLoader CWallet::GetOrchardNoteCommitmentTreeLoader(bool ironwood) {
+    return OrchardWalletNoteCommitmentTreeLoader(ironwood ? ironwoodWallet : orchardWallet);
 }
 
 // Add spending key to keystore and persist to disk
@@ -610,6 +612,7 @@ std::optional<libzcash::ZcashdUnifiedSpendingKey>
         // Add Orchard spending key to the wallet
         auto orchardSk = usk.value().GetOrchardKey();
         orchardWallet.AddSpendingKey(orchardSk);
+        ironwoodWallet.AddSpendingKey(orchardSk);
 
         // Associate the Orchard default change address with its IVK. We do this
         // here because there is only ever a single Orchard change receiver, and
@@ -1072,6 +1075,7 @@ bool CWallet::LoadCaches()
                 {
                     auto orchardSk = usk.value().GetOrchardKey();
                     orchardWallet.AddSpendingKey(orchardSk);
+                    ironwoodWallet.AddSpendingKey(orchardSk);
 
                     // Associate the Orchard default change address with its IVK
                     auto orchardInternalIvk = orchardSk.ToFullViewingKey().ToInternalIncomingViewingKey();
@@ -1156,6 +1160,11 @@ bool CWallet::LoadCaches()
 
     // Restore decrypted Orchard notes.
     for (const auto& [_, walletTx] : mapWallet) {
+        if (!walletTx.ironwoodTxMeta.empty() &&
+            !ironwoodWallet.LoadWalletTx(walletTx, walletTx.ironwoodTxMeta)) {
+            LogPrintf("Could not restore Ironwood notes in transaction %s\n", walletTx.GetHash().GetHex());
+            return false;
+        }
         if (!walletTx.orchardTxMeta.empty()) {
             if (!orchardWallet.LoadWalletTx(walletTx, walletTx.orchardTxMeta)) {
                 LogPrintf("%s: Error: Failed to decrypt previously decrypted notes for txid %s.\n",
@@ -1399,6 +1408,7 @@ void CWallet::ChainTipAdded(const CBlockIndex *pindex,
             chainParams.GetConsensus(),
             pindex, pblock,
             frontiers, performOrchardWalletUpdates, performConsistencyCheck);
+    if (ShutdownRequested()) return;
     UpdateSaplingNullifierNoteMapForBlock(pblock);
 
     // SetBestChain() can be expensive for large wallets, so do only
@@ -1745,15 +1755,17 @@ set<uint256> CWallet::GetConflicts(const uint256& txid) const
         }
     }
 
-    for (const uint256& nullifier : wtx.GetOrchardBundle().GetNullifiers()) {
-        auto potential_spends = orchardWallet.GetPotentialSpendsFromNullifier(nullifier);
+    for (const auto* pool : {&orchardWallet, &ironwoodWallet}) {
+        for (const uint256& nullifier : pool->BundleFor(wtx).GetNullifiers()) {
+            auto potential_spends = pool->GetPotentialSpendsFromNullifier(nullifier);
 
-        if (potential_spends.size() <= 1) {
-            continue;  // No conflict if zero or one spends
-        }
-        for (const uint256 txid : potential_spends) {
-            // TODO: Take into account transaction expiry; see #5585
-            result.insert(txid);
+            if (potential_spends.size() <= 1) {
+                continue;  // No conflict if zero or one spends
+            }
+            for (const uint256 txid : potential_spends) {
+                // TODO: Take into account transaction expiry; see #5585
+                result.insert(txid);
+            }
         }
     }
 
@@ -2451,10 +2463,14 @@ SpendableInputs CWallet::FindSpendableInputs(
 
         for (const auto& ivk : orchardIvks) {
             std::vector<OrchardNoteMetadata> incomingNotes;
-            orchardWallet.GetFilteredNotes(incomingNotes, ivk, true, true);
+            orchardWallet.GetFilteredNotes(incomingNotes, ivk, true, selector.RequireSpendingKeys());
+            if (ironwoodWallet.GetFilteredNotes(incomingNotes, ivk, true, selector.RequireSpendingKeys())) {
+                unspent.hasReceivedIronwood = true;
+            }
 
             for (auto& noteMeta : incomingNotes) {
-                if (IsOrchardSpent(noteMeta.GetOutPoint(), asOfHeight)) {
+                if ((noteMeta.IsIronwood() && lockedIronwoodNotes.count(noteMeta.GetOutPoint())) ||
+                    IsOrchardSpent(noteMeta.GetOutPoint(), asOfHeight, noteMeta.IsIronwood())) {
                     continue;
                 }
 
@@ -2532,8 +2548,8 @@ bool CWallet::IsSaplingSpent(const uint256& nullifier, const std::optional<int>&
     return false;
 }
 
-bool CWallet::IsOrchardSpent(const OrchardOutPoint& outpoint, const std::optional<int>& asOfHeight) const {
-    for (const auto& txid : orchardWallet.GetPotentialSpends(outpoint)) {
+bool CWallet::IsOrchardSpent(const OrchardOutPoint& outpoint, const std::optional<int>& asOfHeight, bool ironwood) const {
+    for (const auto& txid : (ironwood ? ironwoodWallet : orchardWallet).GetPotentialSpends(outpoint)) {
         std::map<uint256, CWalletTx>::const_iterator mit = mapWallet.find(txid);
         if (mit != mapWallet.end() && mit->second.GetDepthInMainChain(asOfHeight) >= 0) {
             return true; // Spent
@@ -2611,6 +2627,7 @@ void CWallet::ClearNoteWitnessCache()
     // caches, which is fine because it will be recovered during the reindex or
     // rescan that called `ClearNoteWitnessCache()`.
     orchardWallet.Reset();
+    ironwoodWallet.Reset();
 }
 
 template<typename NoteDataMap>
@@ -2784,16 +2801,16 @@ static void IncrementNoteWitnesses(std::map<OutPoint, NoteData>& noteDataMap,
 // This runs on the wallet notification thread (ThreadNotifyWallets), so it must
 // request a clean shutdown via StartShutdown rather than throw: an exception
 // escaping onto that thread would terminate the process.
-static void OrchardNoteCommitmentTreeDiverged(int nHeight)
+static void OrchardNoteCommitmentTreeDiverged(int nHeight, const char* pool = "Orchard")
 {
     LogPrintf(
-        "*** Orchard note commitment tree diverged from consensus at height %d; the "
-        "wallet's Orchard state is inconsistent and must be rebuilt with -rescan.\n",
-        nHeight);
+        "*** %s note commitment tree diverged from consensus at height %d; the "
+        "wallet state is inconsistent and must be rebuilt with -rescan.\n",
+        pool, nHeight);
     uiInterface.ThreadSafeMessageBox(
-        _("Error: The wallet's Orchard note commitment tree has become inconsistent "
+        _("Error: The wallet's note commitment tree has become inconsistent "
           "with the block chain. The zcashd node will now shut down; please restart "
-          "with the -rescan option to rebuild the wallet's Orchard note commitment "
+          "with the -rescan option to rebuild the wallet's shielded note commitment "
           "tree."),
         "", CClientUIInterface::MSG_ERROR);
     StartShutdown();
@@ -2938,11 +2955,21 @@ void CWallet::IncrementNoteWitnesses(
                                  nWitnessCacheSize);
     }
 
+    if (performOrchardWalletUpdates && consensus.NetworkUpgradeActive(pindex->nHeight, Consensus::UPGRADE_NU6_3)) {
+        if ((!ironwoodWallet.GetLastCheckpointHeight() && !ironwoodWallet.InitNoteCommitmentTree(frontiers.ironwood)) ||
+            !ironwoodWallet.CheckpointNoteCommitmentTree(pindex->nHeight) ||
+            !ironwoodWallet.AppendNoteCommitments(pindex->nHeight, *pblock) ||
+            (performConsistencyCheck && ironwoodWallet.GetLatestAnchor() != pindex->hashFinalIronwoodRoot)) {
+            OrchardNoteCommitmentTreeDiverged(pindex->nHeight, "Ironwood");
+            return;
+        }
+    }
+
     // If we're at or beyond NU5 activation, initialize if necessary and then
     // update the Orchard note commitment tree.
     if (performOrchardWalletUpdates && consensus.NetworkUpgradeActive(pindex->nHeight, Consensus::UPGRADE_NU5)) {
         if (!orchardWallet.GetLastCheckpointHeight().has_value()) {
-            orchardWallet.InitNoteCommitmentTree(frontiers.orchard);
+            assert(orchardWallet.InitNoteCommitmentTree(frontiers.orchard));
         }
         assert(orchardWallet.CheckpointNoteCommitmentTree(pindex->nHeight));
 
@@ -3044,6 +3071,16 @@ void CWallet::DecrementNoteWitnesses(const Consensus::Params& consensus, const C
     // however, if we have never observed Sprout or Sapling notes, this is okay
     // because then the witness cache size can remain at 0.
     assert(!(hasSprout || hasSapling) || nWitnessCacheSize > 0);
+
+    if (consensus.NetworkUpgradeActive(pindex->nHeight, Consensus::UPGRADE_NU6_3)) {
+        uint32_t height;
+        if (!ironwoodWallet.Rewind(pindex->nHeight - 1, height) || height != pindex->nHeight - 1 ||
+            (ironwoodWallet.GetLastCheckpointHeight() &&
+             ironwoodWallet.GetLatestAnchor() != pindex->pprev->hashFinalIronwoodRoot)) {
+            OrchardNoteCommitmentTreeDiverged(pindex->nHeight - 1, "Ironwood");
+            return;
+        }
+    }
 
     // ORCHARD: rewind to the last checkpoint.
     if (consensus.NetworkUpgradeActive(pindex->nHeight, Consensus::UPGRADE_NU5)) {
@@ -3535,7 +3572,12 @@ bool CWallet::UpdatedNoteData(const CWalletTx& wtxIn, CWalletTx& wtx)
         wtx.orchardTxMeta = wtxIn.orchardTxMeta;
     }
 
-    return !unchangedSproutFlag || !unchangedSaplingFlag || !unchangedOrchardFlag;
+    bool ironwoodChanged = !wtxIn.ironwoodTxMeta.empty() && wtxIn.ironwoodTxMeta != wtx.ironwoodTxMeta;
+    if (ironwoodChanged) {
+        wtx.ironwoodTxMeta = wtxIn.ironwoodTxMeta;
+        wtx.missingIronwoodTxMeta = false;
+    }
+    return !unchangedSproutFlag || !unchangedSaplingFlag || !unchangedOrchardFlag || ironwoodChanged;
 }
 
 WalletDecryptedNotes CWallet::TryDecryptShieldedOutputs(const CTransaction& tx)
@@ -3604,7 +3646,8 @@ bool CWallet::AddToWalletIfInvolvingMe(
             orchardTxMeta = orchardWallet.AddNotesIfInvolvingMe(tx);
         }
 
-        if (fExisted || IsMine(tx) || IsFromMe(tx) ||
+        auto ironwoodMeta = ironwoodWallet.AddNotesIfInvolvingMe(tx);
+        if (ironwoodMeta || fExisted || IsMine(tx) || IsFromMe(tx) ||
             sproutNoteData.size() > 0 ||
             saplingNoteData.size() > 0 ||
             orchardTxMeta.has_value())
@@ -3619,6 +3662,9 @@ bool CWallet::AddToWalletIfInvolvingMe(
                 wtx.SetSaplingNoteData(saplingNoteData);
             }
 
+            if (ironwoodMeta) {
+                wtx.SetOrchardTxMeta(*ironwoodMeta, true);
+            }
             if (orchardTxMeta.has_value()) {
                 wtx.SetOrchardTxMeta(orchardTxMeta.value());
             }
@@ -4043,7 +4089,9 @@ std::vector<std::pair<libzcash::OrchardSpendingKey, orchard::SpendInfo>> CWallet
     // TransactionEffects::ApproveAndBuild). The divergence detector requests
     // the shutdown while holding cs_wallet, so a spend that observes no request has
     // read a tree that was consistent at that point.
-    return orchardWallet.GetSpendInfo(orchardNoteMetadata, anchor, anchorHeight);
+    const bool ironwood = !orchardNoteMetadata.empty() && orchardNoteMetadata.front().IsIronwood();
+    const auto& poolWallet = ironwood ? ironwoodWallet : orchardWallet;
+    return poolWallet.GetSpendInfo(orchardNoteMetadata, anchor, anchorHeight);
 }
 
 isminetype CWallet::IsMine(const CTxIn &txin) const
@@ -4156,9 +4204,11 @@ bool CWallet::IsFromMe(const CTransaction& tx) const
             return true;
         }
     }
-    for (const auto& action : tx.GetOrchardBundle().GetDetails()->actions()) {
-        if (orchardWallet.IsNullifierFromMe(action.nullifier())) {
-            return true;
+    for (const auto* pool : {&orchardWallet, &ironwoodWallet}) {
+        for (const auto& action : pool->BundleFor(tx).GetDetails()->actions()) {
+            if (pool->IsNullifierFromMe(action.nullifier())) {
+                return true;
+            }
         }
     }
     return false;
@@ -4373,9 +4423,9 @@ void CWalletTx::SetSaplingNoteData(const mapSaplingNoteData_t& noteData)
     }
 }
 
-void CWalletTx::SetOrchardTxMeta(OrchardWalletTxMeta txMeta)
+void CWalletTx::SetOrchardTxMeta(OrchardWalletTxMeta txMeta, bool ironwood)
 {
-    auto numActions = GetOrchardBundle().GetNumActions();
+    auto numActions = (ironwood ? GetIronwoodBundle() : GetOrchardBundle()).GetNumActions();
     for (const auto& [action_idx, ivk] : txMeta.GetMyActionIVKs()) {
         if (action_idx >= numActions) {
             throw std::logic_error("CWalletTx::SetOrchardTxMeta(): Invalid action index");
@@ -4386,7 +4436,7 @@ void CWalletTx::SetOrchardTxMeta(OrchardWalletTxMeta txMeta)
             throw std::logic_error("CWalletTx::SetOrchardTxMeta(): Invalid action index");
         }
     }
-    orchardTxMeta = txMeta;
+    (ironwood ? ironwoodTxMeta : orchardTxMeta) = std::move(txMeta);
 }
 
 std::pair<SproutNotePlaintext, SproutPaymentAddress> CWalletTx::DecryptSproutNote(
@@ -4500,9 +4550,9 @@ std::optional<std::pair<
     return std::nullopt;
 }
 
-OrchardActions CWalletTx::RecoverOrchardActions(const std::vector<uint256>& ovks) const
+OrchardActions CWalletTx::RecoverOrchardActions(const std::vector<uint256>& ovks, bool ironwood) const
 {
-    return pwallet->orchardWallet.GetTxActions(*this, ovks);
+    return (ironwood ? pwallet->ironwoodWallet : pwallet->orchardWallet).GetTxActions(*this, ovks);
 }
 
 
@@ -4690,6 +4740,69 @@ void CWallet::WitnessNoteCommitment(std::vector<uint256> commitments,
     }
 }
 
+bool CWallet::IronwoodHistoryMatches(const CBlockIndex& last) const
+{
+    LOCK2(cs_main, cs_wallet);
+    if (ironwoodWallet.GetLastCheckpointHeight() != last.nHeight ||
+        ironwoodWallet.GetLatestAnchor() != last.hashFinalIronwoodRoot) return false;
+    for (const auto& [txid, wtx] : mapWallet) {
+        if (wtx.ironwoodTxMeta.empty() && !wtx.missingIronwoodTxMeta) continue;
+        // Hints can reach disk before their block checkpoint. Normal replay
+        // will position those notes. Mempool notes have no witnesses yet.
+        if (wtx.GetDepthInMainChain(last.nHeight) > 0 &&
+            (wtx.missingIronwoodTxMeta || !ironwoodWallet.TxNotesHaveWitnesses(txid))) return false;
+    }
+    return true;
+}
+
+bool CWallet::IronwoodTracksOrchard() const
+{
+    LOCK(cs_wallet);
+    auto ironwood = ironwoodWallet.GetLastCheckpointHeight();
+    return ironwood.has_value() && ironwood == orchardWallet.GetLastCheckpointHeight();
+}
+
+bool CWallet::BackfillIronwood(const CBlockIndex& last)
+{
+    LOCK2(cs_main, cs_wallet);
+    const auto& consensus = Params().GetConsensus();
+    auto activation = consensus.GetActivationHeight(Consensus::UPGRADE_NU6_3);
+    if (!activation || last.nHeight < *activation) {
+        return true;
+    }
+
+    auto first = chainActive[*activation];
+    while (first != &last && nTimeFirstKey &&
+           first->GetBlockTime() < nTimeFirstKey - TIMESTAMP_WINDOW) {
+        first = chainActive.Next(first);
+    }
+    IronwoodMerkleFrontier frontier;
+    if (first->nHeight > *activation &&
+        !pcoinsTip->GetIronwoodAnchorAt(first->pprev->hashFinalIronwoodRoot, frontier)) {
+        return false;
+    }
+    ironwoodWallet.Reset();
+    if (!ironwoodWallet.InitNoteCommitmentTree(frontier)) return false;
+    CWalletDB walletdb(strWalletFile, "r+", false);
+    for (auto index = first; index; index = chainActive.Next(index)) {
+        CBlock block;
+        if (ShutdownRequested() || !ReadBlockFromDisk(block, index, consensus)) return false;
+        for (const auto& tx : block.vtx) {
+            if (!tx.GetIronwoodBundle().GetNumActions()) continue;
+            if (auto meta = ironwoodWallet.AddNotesIfInvolvingMe(tx)) {
+                CWalletTx wtx(this, tx);
+                wtx.SetOrchardTxMeta(*meta, true);
+                wtx.SetMerkleBranch(block);
+                if (!AddToWallet(wtx, &walletdb)) return false;
+            }
+        }
+        if (!ironwoodWallet.CheckpointNoteCommitmentTree(index->nHeight) ||
+            !ironwoodWallet.AppendNoteCommitments(index->nHeight, block)) return false;
+        if (index == &last) break;
+    }
+    return IronwoodHistoryMatches(last);
+}
+
 /**
  * Scan the block chain (starting in pindexStart) for transactions
  * from or to us. If fUpdate is true, found transactions that already
@@ -4757,11 +4870,17 @@ std::optional<int> CWallet::ScanForWalletTransactions(
                     throw std::runtime_error("CWallet::ScanForWalletTransactions(): Orchard wallet is out of sync. Please restart your node with -rescan.");
                 }
             }
-        } else if (isInitScan && pindexStart->nHeight < nu5_height) {
-            // If it's the initial scan and we're starting below the nu5 activation
-            // height, we're effectively rescanning from genesis and so it's safe
-            // to update the note commitment tree as we progress.
+        } else if (isInitScan) {
+            // Start from the consensus frontier immediately before the first scanned block.
             performOrchardWalletUpdates = true;
+        }
+
+        if (isInitScan && ironwoodWallet.GetLastCheckpointHeight()) {
+            uint32_t height;
+            int rewindTo = std::max(0, pindex->nHeight - 1);
+            if (!ironwoodWallet.Rewind(rewindTo, height) || height != rewindTo) {
+                throw std::runtime_error("Ironwood witnesses cannot rewind to the rescan height. Restart with -rescan.");
+            }
         }
 
         // Create a rescan-specific batch scanner for the wallet.
@@ -4809,6 +4928,9 @@ std::optional<int> CWallet::ScanForWalletTransactions(
                 if (consensus.NetworkUpgradeActive(pindex->pprev->nHeight,  Consensus::UPGRADE_NU5)) {
                     assert(pcoinsTip->GetOrchardAnchorAt(pindex->pprev->hashFinalOrchardRoot, frontiers.orchard));
                 }
+                if (consensus.NetworkUpgradeActive(pindex->pprev->nHeight, Consensus::UPGRADE_NU6_3)) {
+                    assert(pcoinsTip->GetIronwoodAnchorAt(pindex->pprev->hashFinalIronwoodRoot, frontiers.ironwood));
+                }
             }
             // Connecting a block during a bulk rescan: skip the Orchard note commitment
             // tree consistency check (performConsistencyCheck = false). The rescan
@@ -4816,6 +4938,7 @@ std::optional<int> CWallet::ScanForWalletTransactions(
             // (#5960), and running the check would reintroduce the per-block cost #6052
             // removed; see IncrementNoteWitnesses.
             ChainTipAdded(pindex, &block, frontiers, performOrchardWalletUpdates, false);
+            if (ShutdownRequested()) return std::nullopt;
 
             pindex = chainActive.Next(pindex);
             if (GetTime() >= nNow + 60) {
@@ -4832,7 +4955,7 @@ std::optional<int> CWallet::ScanForWalletTransactions(
         CWalletDB walletdb(strWalletFile, "r+", false);
         for (auto hash : myTxHashes) {
             CWalletTx wtx = mapWallet[hash];
-            if (!wtx.mapSaplingNoteData.empty() || !wtx.orchardTxMeta.empty()) {
+            if (!wtx.mapSaplingNoteData.empty() || !wtx.orchardTxMeta.empty() || !wtx.ironwoodTxMeta.empty()) {
                 if (!walletdb.WriteTx(wtx)) {
                     LogPrintf(
                             "Rescanning... WriteToDisk failed to update Sapling/Orchard note data for tx: %s\n",
@@ -5064,9 +5187,11 @@ bool CWalletTx::IsFromMe(const isminefilter& filter) const
             return true;
         }
     }
-    for (const auto& action : GetOrchardBundle().GetDetails()->actions()) {
-        if (pwallet->orchardWallet.IsNullifierFromMe(action.nullifier())) {
-            return true;
+    for (const auto* pool : {&pwallet->orchardWallet, &pwallet->ironwoodWallet}) {
+        for (const auto& action : pool->BundleFor(*this).GetDetails()->actions()) {
+            if (pool->IsNullifierFromMe(action.nullifier())) {
+                return true;
+            }
         }
     }
     return false;
@@ -5896,6 +6021,13 @@ bool CWallet::CommitTransaction(CWalletTx& wtxNew, std::optional<std::reference_
     {
         LOCK2(cs_main, cs_wallet);
         LogPrintf("CommitTransaction:\n%s", wtxNew.ToString()); /* Continued */
+        const bool ironwood = wtxNew.GetIronwoodBundle().GetNumActions() > 0;
+        // Reject an unrelayable Ironwood payout before recording its pending spends.
+        // Both locks remain held until the wallet records an accepted transaction.
+        if (ironwood && fBroadcastTransactions && !wtxNew.AcceptToMemoryPool(state, false)) {
+            LogPrintf("CommitTransaction(): Ironwood transaction rejected: %s\n", state.GetRejectReason());
+            return false;
+        }
         {
             // This is only to keep the database open to defeat the auto-flush for the
             // duration of this scope.  This is the only place where this optimization
@@ -5905,6 +6037,14 @@ bool CWallet::CommitTransaction(CWalletTx& wtxNew, std::optional<std::reference_
             if (reservekey) {
                 // Take key pair from key pool so it won't be used again
                 reservekey.value().get().KeepKey();
+            }
+
+            // Record pending Ironwood spends before releasing the selected notes.
+            // A second payout can arrive before the mempool notification does.
+            if (ironwood) {
+                if (auto meta = ironwoodWallet.AddNotesIfInvolvingMe(wtxNew)) {
+                    wtxNew.SetOrchardTxMeta(*meta, true);
+                }
             }
 
             // Add tx to wallet, because if it has change it's also ours,
@@ -5927,7 +6067,7 @@ bool CWallet::CommitTransaction(CWalletTx& wtxNew, std::optional<std::reference_
         if (fBroadcastTransactions)
         {
             // Broadcast
-            if (!wtxNew.AcceptToMemoryPool(state, false))
+            if (!ironwood && !wtxNew.AcceptToMemoryPool(state, false))
             {
                 // This must not fail. The transaction has already been signed and recorded.
                 LogPrintf("CommitTransaction(): Error: Transaction not valid, %s\n", state.GetRejectReason());
@@ -6760,8 +6900,7 @@ bool CWallet::InitLoadWallet(const CChainParams& params, bool clearWitnessCaches
 
     // Check for Orchard note commitment tree corruption and trigger a rescan
     // if necessary.
-    auto orchardSpendable = walletInstance->orchardWallet.UnspentNotesAreSpendable();
-    if (!orchardSpendable) {
+    if (!walletInstance->orchardWallet.UnspentNotesAreSpendable()) {
         LogPrintf("LoadWallet: inconsistency detected between available Orchard notes & spend information; starting with -rescan.");
         SoftSetBoolArg("-rescan", true);
     }
@@ -6775,8 +6914,30 @@ bool CWallet::InitLoadWallet(const CChainParams& params, bool clearWitnessCaches
     } else {
         CWalletDB walletdb(walletFile);
         CBlockLocator locator;
-        if (walletdb.ReadBestBlock(locator))
+        if (walletdb.ReadBestBlock(locator)) {
             pindexRescan = FindForkInGlobalIndex(chainActive, locator);
+            if (pindexRescan && !fFirstRun &&
+                params.GetConsensus().NetworkUpgradeActive(pindexRescan->nHeight, Consensus::UPGRADE_NU6_3)) {
+                // After an unclean shutdown the saved wallet tip can be ahead of the
+                // restored chain, or on a stale fork. The wallet notifier then resumes
+                // from that tip, or the rescan below rewinds to pindexRescan. Moving the
+                // saved tip back here would leave the Orchard tree and Sapling witnesses
+                // past it, so only rebuild Ironwood when the wallet stopped at pindexRescan.
+                bool walletAtRescanPoint =
+                    !locator.vHave.empty() && locator.vHave[0] == pindexRescan->GetBlockHash();
+                if (walletAtRescanPoint && !walletInstance->IronwoodHistoryMatches(*pindexRescan)) {
+                    uiInterface.InitMessage(_("Scanning wallet history for Ironwood payments..."));
+                    if (!walletInstance->BackfillIronwood(*pindexRescan)) {
+                        return UIError(_("Could not rebuild Ironwood wallet history. Restore full block data and restart with -rescan."));
+                    }
+                    walletInstance->SetBestChain(chainActive.GetLocator(pindexRescan));
+                } else if (!walletAtRescanPoint && !walletInstance->IronwoodTracksOrchard()) {
+                    // An older binary last wrote this wallet, so its Ironwood history must be
+                    // rebuilt, but that needs the wallet's saved tip on the active chain.
+                    return UIError(_("The wallet's Ironwood history is behind its saved tip, which is not on the restored chain. Restart with -rescan."));
+                }
+            }
+        }
     }
 
     if (chainActive.Tip() && chainActive.Tip() != pindexRescan)
@@ -6798,6 +6959,9 @@ bool CWallet::InitLoadWallet(const CChainParams& params, bool clearWitnessCaches
         // the Orchard wallet state to empty.
         if (pindexRescan->nHeight <= Params().GetConsensus().GetActivationHeight(Consensus::UPGRADE_NU5)) {
             walletInstance->orchardWallet.Reset();
+        }
+        if (pindexRescan->nHeight <= params.GetConsensus().GetActivationHeight(Consensus::UPGRADE_NU6_3)) {
+            walletInstance->ironwoodWallet.Reset();
         }
 
         uiInterface.InitMessage(_("Rescanning..."));
@@ -7214,28 +7378,34 @@ void CWallet::GetFilteredNotes(
     }
 
     std::vector<OrchardNoteMetadata> orchardNotes;
-    if (noteFilter.has_value()) {
-        for (const OrchardRawAddress& addr: noteFilter.value().GetOrchardAddresses()) {
-            auto ivk = orchardWallet.GetIncomingViewingKeyForAddress(addr);
-            if (ivk.has_value()) {
-                orchardWallet.GetFilteredNotes(
-                        orchardNotes,
-                        ivk.value(),
-                        ignoreSpent,
-                        requireSpendingKey);
+    for (const auto* wallet : {&orchardWallet, &ironwoodWallet}) {
+        if (noteFilter.has_value()) {
+            // Diversified receivers from the same account can share a viewing key.
+            std::set<OrchardIncomingViewingKey> keys;
+            for (const auto& addr : noteFilter->GetOrchardAddresses()) {
+                if (auto ivk = wallet->GetIncomingViewingKeyForAddress(addr)) {
+                    keys.insert(std::move(*ivk));
+                }
             }
+            for (const auto& ivk : keys) {
+                wallet->GetFilteredNotes(orchardNotes, ivk, ignoreSpent, requireSpendingKey);
+            }
+        } else {
+            // return all Orchard notes
+            wallet->GetFilteredNotes(
+                    orchardNotes,
+                    std::nullopt,
+                    ignoreSpent,
+                    requireSpendingKey);
         }
-    } else {
-        // return all Orchard notes
-        orchardWallet.GetFilteredNotes(
-                orchardNotes,
-                std::nullopt,
-                ignoreSpent,
-                requireSpendingKey);
     }
 
     for (auto& noteMeta : orchardNotes) {
-        if (ignoreSpent && IsOrchardSpent(noteMeta.GetOutPoint(), asOfHeight)) {
+        if (noteFilter && !noteFilter->HasOrchardAddress(noteMeta.GetAddress())) {
+            continue;
+        }
+        if ((ignoreLocked && noteMeta.IsIronwood() && lockedIronwoodNotes.count(noteMeta.GetOutPoint())) ||
+            (ignoreSpent && IsOrchardSpent(noteMeta.GetOutPoint(), asOfHeight, noteMeta.IsIronwood()))) {
             continue;
         }
 

@@ -495,6 +495,8 @@ public:
     mapSproutNoteData_t mapSproutNoteData;
     mapSaplingNoteData_t mapSaplingNoteData;
     OrchardWalletTxMeta orchardTxMeta;
+    OrchardWalletTxMeta ironwoodTxMeta;
+    bool missingIronwoodTxMeta{false}; // An older wallet rewrote the marked record without its trailing hints.
 
     std::vector<std::pair<std::string, std::string> > vOrderForm;
     unsigned int fTimeReceivedIsTxTime;
@@ -546,6 +548,7 @@ public:
     void Init(const CWallet* pwalletIn)
     {
         pwallet = pwalletIn;
+        missingIronwoodTxMeta = false;
         mapValue.clear();
         mapSproutNoteData.clear();
         mapSaplingNoteData.clear();
@@ -587,6 +590,9 @@ public:
         {
             mapValue["fromaccount"] = "";
 
+            if (!ironwoodTxMeta.empty() || missingIronwoodTxMeta) {
+                mapValue["ironwoodmeta"] = "1";
+            }
             WriteOrderPos(nOrderPos, mapValue);
 
             if (nTimeSmart)
@@ -610,6 +616,12 @@ public:
 
         if (fOverwintered && nVersion >= ZIP225_TX_VERSION) {
             READWRITE(orchardTxMeta);
+            if (mapValue.count("ironwoodmeta")) {
+                if constexpr (std::is_same_v<Operation, CSerActionUnserialize>) {
+                    missingIronwoodTxMeta = s.empty();
+                }
+                if (!missingIronwoodTxMeta) READWRITE(ironwoodTxMeta);
+            }
         }
 
         if (ser_action.ForRead())
@@ -621,6 +633,7 @@ public:
         mapValue.erase("fromaccount");
         mapValue.erase("version");
         mapValue.erase("spent");
+        mapValue.erase("ironwoodmeta");
         mapValue.erase("n");
         mapValue.erase("timesmart");
     }
@@ -646,7 +659,7 @@ public:
 
     void SetSproutNoteData(const mapSproutNoteData_t& noteData);
     void SetSaplingNoteData(const mapSaplingNoteData_t& noteData);
-    void SetOrchardTxMeta(OrchardWalletTxMeta actionData);
+    void SetOrchardTxMeta(OrchardWalletTxMeta actionData, bool ironwood = false);
 
     std::pair<libzcash::SproutNotePlaintext, libzcash::SproutPaymentAddress> DecryptSproutNote(
         JSOutPoint jsop) const;
@@ -678,7 +691,7 @@ public:
         libzcash::SaplingNotePlaintext,
         libzcash::SaplingPaymentAddress>> RecoverSaplingNote(const CChainParams& params,
             SaplingOutPoint op, std::set<uint256>& ovks) const;
-    OrchardActions RecoverOrchardActions(const std::vector<uint256>& ovks) const;
+    OrchardActions RecoverOrchardActions(const std::vector<uint256>& ovks, bool ironwood = false) const;
 
     //! filter decides which addresses will count towards the debit
     CAmount GetDebit(const isminefilter& filter) const;
@@ -966,6 +979,8 @@ private:
     bool limited = false;
 
 public:
+    // Distinguishes an exhausted Ironwood balance from funds held only in historical Orchard.
+    bool hasReceivedIronwood = false;
     std::vector<COutput> utxos;
     std::vector<SproutNoteEntry> sproutNoteEntries;
     std::vector<SaplingNoteEntry> saplingNoteEntries;
@@ -1343,6 +1358,12 @@ protected:
                 walletdb.TxnAbort();
                 return;
             }
+            ironwoodWallet.GarbageCollect();
+            if (!walletdb.WriteOrchardWitnesses(ironwoodWallet)) {
+                LogPrintf("SetBestChain(): Failed to write Ironwood witnesses, aborting atomic write\n");
+                walletdb.TxnAbort();
+                return;
+            }
             if (!walletdb.WriteWitnessCacheSize(nWitnessCacheSize)) {
                 LogPrintf("SetBestChain(): Failed to write nWitnessCacheSize, aborting atomic write\n");
                 walletdb.TxnAbort();
@@ -1399,6 +1420,8 @@ protected:
      * delegated to the Orchard wallet.
      */
     OrchardWallet orchardWallet;
+    OrchardWallet ironwoodWallet{true};
+    std::set<OrchardOutPoint> lockedIronwoodNotes;
 
     /**
      * The batch scanner for this wallet's CValidationInterface listener.
@@ -1661,7 +1684,10 @@ public:
     bool IsSpent(const uint256& hash, unsigned int n, const std::optional<int>& asOfHeight) const;
     bool IsSproutSpent(const uint256& nullifier, const std::optional<int>& asOfHeight) const;
     bool IsSaplingSpent(const uint256& nullifier, const std::optional<int>& asOfHeight) const;
-    bool IsOrchardSpent(const OrchardOutPoint& outpoint, const std::optional<int>& asOfHeight) const;
+    bool IsOrchardSpent(const OrchardOutPoint& outpoint, const std::optional<int>& asOfHeight, bool ironwood = false) const;
+    bool IsIronwoodNoteLocked(const OrchardOutPoint& op) const { AssertLockHeld(cs_wallet); return lockedIronwoodNotes.count(op); }
+    void LockIronwoodNote(const OrchardOutPoint& op) { AssertLockHeld(cs_wallet); lockedIronwoodNotes.insert(op); }
+    void UnlockIronwoodNote(const OrchardOutPoint& op) { AssertLockHeld(cs_wallet); lockedIronwoodNotes.erase(op); }
 
     bool IsLockedCoin(uint256 hash, unsigned int n) const;
     void LockCoin(COutPoint& output);
@@ -1815,7 +1841,7 @@ public:
      * Returns a loader that can be used to read an Orchard note commitment
      * tree from a stream into the Orchard wallet.
      */
-    OrchardWalletNoteCommitmentTreeLoader GetOrchardNoteCommitmentTreeLoader();
+    OrchardWalletNoteCommitmentTreeLoader GetOrchardNoteCommitmentTreeLoader(bool ironwood = false);
 
     //
     // Unified keys, addresses, and accounts
@@ -1922,6 +1948,15 @@ public:
          std::vector<uint256> commitments,
          std::vector<std::optional<SproutWitness>>& witnesses,
          uint256 &final_anchor);
+    /** Rebuild Ironwood history through the saved wallet tip after an upgrade or inconsistent checkpoint. */
+    bool BackfillIronwood(const CBlockIndex& last);
+    /** Check the saved checkpoint, consensus root, and confirmed unspent note witnesses. */
+    bool IronwoodHistoryMatches(const CBlockIndex& last) const;
+    /**
+     * True when the Ironwood tree is checkpointed at the same height as the Orchard tree,
+     * which SetBestChain writes together; false means an older binary wrote the wallet.
+     */
+    bool IronwoodTracksOrchard() const;
     std::optional<int> ScanForWalletTransactions(
         CBlockIndex* pindexStart,
         bool fUpdate,

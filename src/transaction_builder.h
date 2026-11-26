@@ -289,7 +289,8 @@ public:
         uint256 saplingAnchor,
         const CKeyStore* keyStore = nullptr,
         const CCoinsViewCache* coinsView = nullptr,
-        CCriticalSection* cs_coinsView = nullptr);
+        CCriticalSection* cs_coinsView = nullptr,
+        orchard::OrchardValuePool pool = orchard::OrchardValuePool::Orchard);
 
     // TransactionBuilder should never be copied
     TransactionBuilder(const TransactionBuilder&) = delete;

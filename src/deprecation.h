@@ -24,6 +24,8 @@ static const std::set<std::string> DEFAULT_ALLOW_DEPRECATED{{
     // Wallet-level features
 #ifdef ENABLE_WALLET
     "z_gettotalbalance",
+    // Pool payout software checks its shielded balance with z_getbalance.
+    "z_getbalance",
     "fundrawtransaction",
     "keypoolrefill",
     "settxfee",
@@ -39,7 +41,6 @@ static const std::set<std::string> DEFAULT_DENY_DEPRECATED{{
     "getnewaddress",
     "getrawchangeaddress",
     "z_getnewaddress",
-    "z_getbalance",
     "z_listaddresses",
     "legacy_privacy",
     "wallettxvjoinsplit",

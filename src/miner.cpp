@@ -218,7 +218,7 @@ public:
             throw std::runtime_error("Orchard shielded coinbase invalid from NU6.3; use transparent/Sapling -mineraddress or mine with Zebra");
         }
 
-        std::array<uint8_t, 32> saplingAnchor;
+        std::array<uint8_t, 32> saplingAnchor{};
         auto saplingBuilder = sapling::new_builder(*chainparams.RustNetwork(), nHeight, saplingAnchor, true);
 
         // `enableSpends` must be set to `false` for coinbase transactions. This
@@ -262,7 +262,7 @@ public:
 
     // Create Sapling output
     void operator()(const libzcash::SaplingPaymentAddress &pa) const {
-        std::array<uint8_t, 32> saplingAnchor;
+        std::array<uint8_t, 32> saplingAnchor{};
         auto saplingBuilder = sapling::new_builder(*chainparams.RustNetwork(), nHeight, saplingAnchor, true);
 
         auto miner_reward = SetFoundersRewardAndGetMinerValue(*saplingBuilder);
@@ -279,7 +279,7 @@ public:
     // Create transparent output
     void operator()(const boost::shared_ptr<CReserveScript> &coinbaseScript) const {
         // Add the FR output and fetch the miner's output value.
-        std::array<uint8_t, 32> saplingAnchor;
+        std::array<uint8_t, 32> saplingAnchor{};
         auto saplingBuilder = sapling::new_builder(*chainparams.RustNetwork(), nHeight, saplingAnchor, true);
 
         // Miner output will be vout[0]; Founders' Reward & funding stream outputs

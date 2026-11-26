@@ -199,6 +199,12 @@ void ThreadNotifyWallets(CBlockIndex *pindexLastTip)
                         OrchardMerkleFrontier::empty_root(), oldFrontiers.orchard));
                 }
 
+                if (pindex->pprev && chainParams.GetConsensus().NetworkUpgradeActive(
+                        pindex->pprev->nHeight, Consensus::UPGRADE_NU6_3)) {
+                    assert(pcoinsTip->GetIronwoodAnchorAt(
+                        pindex->pprev->hashFinalIronwoodRoot, oldFrontiers.ironwood));
+                }
+
                 // Fetch recently-conflicted transactions. These will include any
                 // block that has been connected since the last cycle, but we only
                 // notify for the conflicts created by the current active chain.

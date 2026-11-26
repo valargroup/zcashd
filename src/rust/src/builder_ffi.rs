@@ -202,7 +202,11 @@ pub extern "C" fn orchard_unauthorized_bundle_prove_and_sign(
     sighash: *const [u8; 32],
 ) -> *mut Bundle<Authorized, ZatBalance> {
     let bundle = unsafe { Box::from_raw(bundle) };
-    let keys = unsafe { slice::from_raw_parts(keys, keys_len) };
+    let keys = if keys_len == 0 {
+        &[]
+    } else {
+        unsafe { slice::from_raw_parts(keys, keys_len) }
+    };
     let sighash = unsafe { sighash.as_ref() }.expect("sighash pointer may not be null.");
 
     let signing_keys = keys
@@ -285,6 +289,7 @@ pub(crate) fn shielded_signature_digest(
     // Sapling or Orchard component.
     assert!(tx.sapling_bundle().is_none());
     assert!(tx.orchard_bundle().is_none());
+    assert!(tx.ironwood_bundle().is_none());
 
     let f_transparent = MapTransparent::parse(all_prev_outputs, &tx)?;
     let orchard_bundle = unsafe {
@@ -302,11 +307,35 @@ pub(crate) fn shielded_signature_digest(
         type OrchardAuth = InProgress<Unproven, Unauthorized>;
     }
 
-    let txdata: TransactionData<Signable> = tx.into_data().map_bundles(
-        |b| b.map(|b| b.map_authorization(f_transparent)),
-        |_| sapling_bundle.bundle.clone(),
-        |_| orchard_bundle.cloned(),
-    );
+    let txdata: TransactionData<Signable> =
+        if tx.version() == zcash_primitives::transaction::TxVersion::V6 {
+            // Each pool has a distinct digest in v6, even when both use the same circuit.
+            let (orchard, ironwood) = match orchard_bundle {
+                Some(bundle)
+                    if bundle.bundle_version().value_pool() == orchard::ValuePool::Ironwood =>
+                {
+                    (None, Some(bundle.clone()))
+                }
+                bundle => (bundle.cloned(), None),
+            };
+            TransactionData::from_parts_v6(
+                consensus_branch_id,
+                tx.lock_time(),
+                tx.expiry_height(),
+                tx.transparent_bundle()
+                    .cloned()
+                    .map(|b| b.map_authorization(f_transparent)),
+                sapling_bundle.bundle.clone(),
+                orchard,
+                ironwood,
+            )
+        } else {
+            tx.into_data().map_bundles(
+                |b| b.map(|b| b.map_authorization(f_transparent)),
+                |_| sapling_bundle.bundle.clone(),
+                |_| orchard_bundle.cloned(),
+            )
+        };
     let txid_parts = txdata.digest(TxIdDigester);
 
     let sighash = signature_hash(&txdata, &SignableInput::Shielded, &txid_parts);

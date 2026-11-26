@@ -59,7 +59,7 @@ Action required for Sprout users BEFORE NU7 activation
 Wallet changes from NU7
 -----------------------
 
-- Wallet transactions are v5, even with `-preferredtxversion=4`.
+- Wallet transactions using Ironwood are v6. Other wallet transactions are v5, even with `-preferredtxversion=4`.
 - The default expiry delta becomes 120 blocks, the same time as 40 blocks at
   the old spacing. `-txexpirydelta` still overrides it.
 - Sprout spends and the Sprout-to-Sapling migration are refused with an error.
@@ -122,8 +122,8 @@ Other fixes
   limit, the sidecar waited for the download timeout on each remaining block,
   and each wait was longer than the last.
 
-NU6.3 (Ironwood) consensus support; no wallet support, ever
------------------------------------------------------------
+NU6.3 (Ironwood) consensus support
+----------------------------------
 
 This release adds full consensus and node support for the NU6.3 network
 upgrade, which introduces the Ironwood shielded pool (testnet activation
@@ -135,38 +135,87 @@ and `getblock`, `finalironwoodroot` in `getblock`, an ironwood section in
 `z_gettreestate` and `z_getsubtreesbyindex`, and an "ironwood" bundle in
 verbose `getrawtransaction`/`decoderawtransaction` output for v6 transactions.
 
-zcashd will NEVER support the Ironwood pool in its wallet, and will never
-construct v6 transactions. This is a permanent decision, not a deferral.
-Shielded wallet functionality beyond Sapling is out of scope for zcashd;
-users who need it should migrate to a Z3-stack wallet. zcashd wallets remain
-fully supported for transparent and Sapling funds. Block production for
-post-NU6.3 shielded coinbase is handled by Zebra; from NU6.3 activation,
-zcashd's internal miner refuses to start with an Orchard `-mineraddress`
-(use a transparent or Sapling address, or mine with Zebra).
+Ironwood wallet shielding and transparent payouts
+--------------------------------------------------
 
-Action required for Orchard users BEFORE NU6.3 activation
----------------------------------------------------------
+From NU6.3, `z_shieldcoinbase` can spend mature transparent mining rewards into
+Ironwood. Ironwood uses the Orchard receiver in a Unified Address. The wallet
+tracks balances and notes in the two pools separately. Address-filtered receipt
+and unspent-note queries return only notes sent to the requested receivers.
+Shielding to another wallet’s Unified Address uses its Sapling receiver when
+present. Existing Orchard notes remain unavailable for spending through this
+wallet after NU6.3.
 
-From NU6.3 activation, the Orchard protocol itself no longer permits payments
-to third-party addresses, and the zcashd wallet rejects ALL transactions that
-would spend or receive Orchard funds, including unshielding. This means:
+For example, create a wallet-owned sweep address with `z_getaddressforaccount` using the
+receiver list `["orchard"]`. Supply the account's actual address and the
+transparent addresses and amounts for the payout job in these commands:
 
-- **Orchard funds held in a zcashd wallet become unspendable through zcashd
-  once NU6.3 activates.** Move any Orchard funds (for example with `z_sendmany`
-  to a transparent or Sapling address, or migrate to a Z3-stack wallet) BEFORE
-  the activation height, on both testnet and mainnet.
+```sh
+zcash-cli z_shieldcoinbase "$MINING_ADDRESS" "$SWEEP_ADDRESS" null 50
+zcash-cli z_getoperationresult '["<shield-operation-id>"]'
+zcash-cli z_getbalanceforaccount "$ACCOUNT"
+zcash-cli z_sendmany "$SWEEP_ADDRESS" '[{"address":"<worker-1-taddr>","amount":1.25},{"address":"<worker-2-taddr>","amount":0.75}]' 1 null AllowRevealedRecipients
+zcash-cli z_getoperationresult '["<payout-operation-id>"]'
+```
 
-- **Stop publishing unified addresses that contain an Orchard receiver.**
-  After activation, an Ironwood-capable wallet paying a zcashd-generated
-  unified address will send funds to the Orchard receiver's corresponding
-  Ironwood address. zcashd cannot detect, display, or spend Ironwood funds;
-  such payments will appear to vanish. Generate replacement addresses without
-  an Orchard receiver (e.g. `z_getaddressforaccount` with `["sapling"]` or
-  `["p2pkh"]` receiver types), or migrate to a Z3-stack wallet.
+Poll each operation until it finishes. Wait for the shield to confirm before
+paying recipients. `remainingUTXOs` in the shielding result counts eligible
+rewards left for a subsequent sweep. A payout can also have one destination.
+The wallet pays the specified amounts, deducts the fee from the sweep account,
+and returns change to its internal Ironwood receiver. Restoring an older wallet
+backup requires the original blocks to rebuild the notes and their witnesses.
 
-Wallet operations that would involve Orchard or Ironwood at NU6.3 heights
-(`z_sendmany`, `z_shieldcoinbase`, `z_mergetoaddress`) fail at preparation
-time with a clear error explaining these alternatives.
+Use an Orchard-only sweep UA for the Ironwood payout path. Sending from a UA
+with both Sapling and Orchard receivers keeps its usual funding and privacy
+rules. It can spend Sapling with `AllowRevealedRecipients`, including after
+the same account has received and spent Ironwood.
+
+Pool sweepers that move transparent rewards with `z_sendmany` instead of
+`z_shieldcoinbase` can send them to the sweep UA from NU6.3: transparent
+funds to one of this wallet's Unified Addresses with an Orchard receiver
+produce one Ironwood output, and any change returns to a transparent address.
+As with `z_shieldcoinbase`, another wallet's Unified Address receives through
+its Sapling receiver. Pass
+`AllowRevealedSenders`, or `AllowFullyTransparent` when there is change. With
+`-allowdeprecated=legacy_privacy`, an omitted policy allows it, as it does for
+a Sapling address. Sending to more than one Unified Address, or from shielded
+funds to a Unified Address, remains unsupported.
+
+With stock s-nomp, set `zAddress` to the sweep UA. Its startup check uses
+`z_validateaddress.ismine`. Its two-argument `z_sendmany` refill spends the
+eligible balance, leaves 10,000 zatoshis (0.0001 ZEC) for the fee, and pays
+one transparent address. This call requires ten confirmations and permits
+revealed recipients. An explicit privacy policy still applies. The deprecated
+`z_getbalance` RPC is enabled by default. `-allowdeprecated=none` disables it. Pass the same
+confirmation count when estimating the refill balance. On the sweep UA this
+RPC reports confirmed Ironwood funds from NU6.3. Historical Orchard remains
+visible in `z_getbalanceforaccount`. [Stock s-nomp refill](https://github.com/s-nomp/s-nomp/blob/e6498056547d77d684097fe3024eb47110177e30/libs/paymentProcessor.js#L294-L306)
+
+For a refill spending 24 Ironwood notes to one standard P2PKH output, the
+transaction has 25 logical actions. zcashd's default policy requires 125,000
+zatoshis. To accept the stock fee locally, set `-txunpaidactionlimit` to at
+least 23 for this refill (the default is zero). The Zakura v1.9.0-rc2 peer requires 400 zatoshis per
+action, so the stock fee covers exactly 25 actions. At **25 notes**, the same
+refill needs **10,400 zatoshis** at the peer. Increasing zcashd's local limit
+cannot make the peer relay it. Keep stock refills within 24 notes, or adapt the
+pool software to split larger refills or reserve a fee that covers them.
+A successful wallet operation reports local submission. Use the Zakura peer's
+mempool to check relay and a mined block to confirm payment.
+
+Stock Miningcore requests eight confirmations, sets a fixed fee of 10,000
+zatoshis and batches up to 50 workers. Even a single standard P2PKH worker
+and two padded Ironwood actions require 15,000 zatoshis under zcashd's default
+relay policy. With 50 such outputs and two Ironwood actions, the minimums are
+260,000 zatoshis at default zcashd and 20,800 at the Zakura v1.9.0-rc2 peer.
+Adapt Miningcore's fee calculation to the batch it submits. For example, 80
+standard outputs and two Ironwood actions need 410,000 zatoshis at default
+zcashd. The shielding source can be `"*"`. [Stock Miningcore payout handler](https://github.com/oliverw/miningcore/blob/a553f62301f44c6df80891e408b6526d1dd98692/src/Miningcore/Blockchain/Equihash/EquihashPayoutHandler.cs#L41-L123)
+
+Size batches using the serialized transaction limit of 2,000,000 bytes, the
+wallet's maximum fee, and its Orchard action limit (which also applies to
+Ironwood notes). A payout with many recipients or many small input notes can
+reach different limits. From NU7, a block can contain at most 330 Ironwood
+actions. Check the returned operation result before retrying a batch.
 
 P2P sidecar hard-lock
 ---------------------

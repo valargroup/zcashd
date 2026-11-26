@@ -436,7 +436,8 @@ jobs:
   nu7-differential:
     name: NU7 differential check against Zakura
     needs: [setup, build]
-    runs-on: ubuntu-22.04
+    # The pinned Zakura release requires glibc 2.39.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6.0.3
 
@@ -447,7 +448,30 @@ jobs:
           path: ./src
 
       - name: Make artifact executable
-        run: chmod +x ./src/zcash-gtest
+        run: chmod +x ./src/zcashd ./src/zcash-gtest
+
+      - name: Install pinned regtest peer and pre-feature wallet
+        working-directory: ${{ runner.temp }}
+        run: |
+          curl --fail --location --retry 3 --max-time 180 -o zakura.tar.gz \
+            https://github.com/zakura-core/zakura/releases/download/v1.9.0-rc2/zakurad-v1.9.0-rc2-linux-x86_64.tar.gz
+          curl --fail --location --retry 3 --max-time 180 -o previous-zcashd \
+            https://github.com/valargroup/zcashd/releases/download/v1.3.1/zcashd-zebra-compat-v1.3.1-linux-x86_64
+          sha256sum --check <<'SUMS'
+          74b4fb9a4aab7aa51ac5fd3a1c44616b8b6e7843a372b152ce537c14b7bfadca  zakura.tar.gz
+          a7deec605c7e531dc1d1d5e3cdfd15587977a464004b10ac7c9647389a1bdb6b  previous-zcashd
+          SUMS
+          tar -xzf zakura.tar.gz ./bin/zakurad
+          chmod +x previous-zcashd
+      - name: Shield rewards, restore the wallet, and confirm pool payouts
+        timeout-minutes: 30
+        run: |
+          python3 qa/rpc-tests/wallet_ironwood_payouts.py \
+            --zcashd ./src/zcashd --zakurad "$RUNNER_TEMP/bin/zakurad" \
+            --previous-zcashd "$RUNNER_TEMP/previous-zcashd" --workdir "$RUNNER_TEMP/payouts"
+      - name: Show regtest diagnostics on failure
+        if: failure()
+        run: tail -n 60 "$RUNNER_TEMP"/payouts/{wallet.log,wallet/regtest/debug.log,zakura.log} || true
 
       - name: Test the NU7 dump comparer
         run: python3 qa/zcash/nu7-diff/test_compare.py

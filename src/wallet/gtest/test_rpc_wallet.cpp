@@ -417,7 +417,7 @@ TEST(WalletRPCTests, PrepareTransactionSaplingLimitAfterNU7)
         ASSERT_FALSE(tooMany.has_value());
         const auto* error = std::get_if<ExcessShieldedActionsError>(&tooMany.error());
         ASSERT_NE(error, nullptr);
-        EXPECT_EQ(error->saplingIOs, 301);
+        EXPECT_EQ(error->actions, 301);
         EXPECT_EQ(error->limit, SAPLING_BLOCK_IO_LIMIT);
     }
 }

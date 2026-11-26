@@ -245,7 +245,8 @@ TransactionBuilder::TransactionBuilder(
     uint256 saplingAnchor,
     const CKeyStore* keystore,
     const CCoinsViewCache* coinsView,
-    CCriticalSection* cs_coinsView) :
+    CCriticalSection* cs_coinsView,
+    orchard::OrchardValuePool pool) :
     consensusParams(params.GetConsensus()),
     nHeight(nHeight),
     keystore(keystore),
@@ -259,11 +260,19 @@ TransactionBuilder::TransactionBuilder(
             consensusParams, nHeight,
             !orchardAnchor.has_value() && nPreferredTxVersion < ZIP225_MIN_TX_VERSION);
 
+    if (pool == orchard::OrchardValuePool::Ironwood) {
+        if (!orchardAnchor || !consensusParams.NetworkUpgradeActive(nHeight, Consensus::UPGRADE_NU6_3)) {
+            throw std::invalid_argument("Ironwood requires an anchor and active NU6.3 rules");
+        }
+        mtx.nVersion = ZIP248_TX_VERSION;
+        mtx.nVersionGroupId = ZIP248_VERSION_GROUP_ID;
+    }
+
     // Ignore the Orchard anchor if we can't use it yet.
     if (orchardAnchor.has_value() && mtx.nVersion >= ZIP225_MIN_TX_VERSION) {
         orchardBuilder = orchard::Builder(
             false,
-            {orchard::OrchardValuePool::Orchard, orchard::ProtocolVersionForHeight(params, nHeight)},
+            {pool, orchard::ProtocolVersionForHeight(params, nHeight)},
             orchardAnchor.value());
     }
 }
@@ -624,7 +633,8 @@ TransactionBuilderResult TransactionBuilder::Build()
         auto authorizedBundle = orchardBundle.value().ProveAndSign(
             orchardSpendingKeys, dataToBeSigned);
         if (authorizedBundle.has_value()) {
-            mtx.orchardBundle = authorizedBundle.value();
+            auto& destination = mtx.nVersion == ZIP248_TX_VERSION ? mtx.ironwoodBundle : mtx.orchardBundle;
+            destination = authorizedBundle.value();
         } else {
             return TransactionBuilderResult("Failed to create Orchard proof or signatures");
         }

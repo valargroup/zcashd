@@ -1686,9 +1686,13 @@ TEST(ChecktransactionTests, V6TxRejectedBeforeNU6_3) {
     mtx.nConsensusBranchId = NetworkUpgradeInfo[Consensus::UPGRADE_NU6_3].nBranchId;
 
     CTransaction tx(mtx);
-    MockCValidationState state;
-    EXPECT_CALL(state, DoS(100, false, REJECT_INVALID, "bad-nu5-tx-version-group-id", BodyCorruption::Default, "")).Times(1);
-    ContextualCheckTransaction(tx, state, Params(), 1, true);
+    CValidationState state;
+    EXPECT_FALSE(ContextualCheckTransaction(tx, state, Params(), 1, true));
+    EXPECT_EQ(state.GetRejectReason(), "bad-nu5-tx-version-group-id");
+    EXPECT_EQ(state.GetRejectCode(), REJECT_INVALID);
+    int score = 0;
+    EXPECT_TRUE(state.IsInvalid(score));
+    EXPECT_EQ(score, 100);
 
     RegtestDeactivateNU6point2();
 }

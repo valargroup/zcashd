@@ -230,8 +230,10 @@ void ThrowInputSelectionError(
                     err.maxNotes,
                     err.orchardNotes));
         },
-        [](const IronwoodUnsupportedError&) {
-            throw JSONRPCError(RPC_INVALID_PARAMETER, IRONWOOD_WALLET_UNSUPPORTED);
+        [](const IronwoodUnsupportedError& err) {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, err == IronwoodUnsupportedError::HistoricalOrchardSpend
+                ? "Historical Orchard notes cannot be spent from NU6.3."
+                : IRONWOOD_WALLET_UNSUPPORTED);
         },
         [](const SproutUnsupportedError&) {
             throw JSONRPCError(
@@ -240,13 +242,18 @@ void ThrowInputSelectionError(
                 "transactions, the only ones that carry Sprout JoinSplits, invalid.");
         },
         [](const ExcessShieldedActionsError& err) {
+            if (err.ironwood) {
+                throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf(
+                    "This payout requires %u Ironwood actions. From NU7 a block holds at most %u. "
+                    "Reduce the payout amount so fewer notes are needed.", err.actions, err.limit));
+            }
             throw JSONRPCError(
                 RPC_INVALID_PARAMETER,
                 strprintf(
                     "This transaction would have %u Sapling spends and outputs, but from NU7 "
                     "a block can hold at most %u (ZIP 218), so it could never be mined. Send "
                     "to fewer Sapling recipients, or first merge notes into fewer, larger ones.",
-                    err.saplingIOs,
+                    err.actions,
                     err.limit));
         }
     });

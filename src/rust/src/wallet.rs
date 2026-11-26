@@ -2,7 +2,7 @@ use bridgetree::{self, BridgeTree};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use incrementalmerkletree::Position;
 use libc::c_uchar;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{btree_map::Entry, BTreeMap, BTreeSet};
 use std::convert::TryInto;
 use std::io;
 use std::ptr;
@@ -176,6 +176,8 @@ pub struct Wallet {
 pub enum WalletError {
     OutOfOrder(LastObserved, BlockHeight, usize),
     NoteCommitmentTreeFull,
+    DuplicateNotePosition(TxId),
+    DuplicateMinedSpend(OutPoint),
 }
 
 #[allow(dead_code)]
@@ -279,7 +281,9 @@ impl Wallet {
             }
         }
 
-        self.commitment_tree.checkpoint(block_height.into());
+        if !self.commitment_tree.checkpoint(block_height.into()) {
+            return false;
+        }
         self.last_checkpoint = Some(block_height);
         true
     }
@@ -592,16 +596,13 @@ impl Wallet {
         let my_notes_for_tx = self.wallet_received_notes.get(txid);
         if my_notes_for_tx.is_some() {
             tracing::trace!("Tx is ours, marking as mined");
-            assert!(self
-                .wallet_note_positions
-                .insert(
-                    *txid,
-                    NotePositions {
-                        tx_height: block_height,
-                        note_positions: BTreeMap::default(),
-                    },
-                )
-                .is_none());
+            let Entry::Vacant(entry) = self.wallet_note_positions.entry(*txid) else {
+                return Err(WalletError::DuplicateNotePosition(*txid));
+            };
+            entry.insert(NotePositions {
+                tx_height: block_height,
+                note_positions: BTreeMap::default(),
+            });
         }
 
         for (action_idx, action) in bundle.actions().iter().enumerate() {
@@ -633,16 +634,13 @@ impl Wallet {
             // For nullifiers that are ours that we detect as spent by this action,
             // we will record that input as being mined.
             if let Some(outpoint) = self.nullifiers.get(action.nullifier()) {
-                assert!(self
-                    .mined_notes
-                    .insert(
-                        *outpoint,
-                        InPoint {
-                            txid: *txid,
-                            action_idx,
-                        },
-                    )
-                    .is_none());
+                let Entry::Vacant(entry) = self.mined_notes.entry(*outpoint) else {
+                    return Err(WalletError::DuplicateMinedSpend(*outpoint));
+                };
+                entry.insert(InPoint {
+                    txid: *txid,
+                    action_idx,
+                });
             }
         }
 
@@ -656,44 +654,40 @@ impl Wallet {
             || self.nullifiers.values().any(|v| v.txid == *txid)
     }
 
+    /// Lists the eligible notes and reports whether the key has ever received a
+    /// note in this pool, even if all of its notes have already been spent.
     #[tracing::instrument(level = "trace", skip(self))]
     pub fn get_filtered_notes(
         &self,
         ivk: Option<&IncomingViewingKey>,
         ignore_mined: bool,
         require_spending_key: bool,
-    ) -> Vec<(OutPoint, DecryptedNote)> {
-        tracing::trace!("Filtering notes");
-        self.wallet_received_notes
-            .iter()
-            .flat_map(|(txid, tx_notes)| {
-                tx_notes
-                    .decrypted_notes
-                    .iter()
-                    .filter_map(move |(idx, dnote)| {
-                        let outpoint = OutPoint {
-                            txid: *txid,
-                            action_idx: *idx,
-                        };
-
-                        self.key_store
-                            .ivk_for_address(&dnote.note.recipient())
-                            // if `ivk` is `None`, return all notes that match the other conditions
-                            .filter(|dnote_ivk| ivk.is_none_or(|ivk| &ivk == dnote_ivk))
-                            .and_then(|dnote_ivk| {
-                                if (ignore_mined && self.mined_notes.contains_key(&outpoint))
-                                    || (require_spending_key
-                                        && self.key_store.spending_key_for_ivk(dnote_ivk).is_none())
-                                {
-                                    None
-                                } else {
-                                    tracing::trace!("Selected note at {:?}", outpoint);
-                                    Some((outpoint, (*dnote).clone()))
-                                }
-                            })
-                    })
-            })
-            .collect()
+    ) -> (Vec<(OutPoint, DecryptedNote)>, bool) {
+        let mut notes = Vec::new();
+        let mut has_received = false;
+        for (txid, tx_notes) in &self.wallet_received_notes {
+            for (idx, dnote) in &tx_notes.decrypted_notes {
+                let Some(note_ivk) = self.key_store.ivk_for_address(&dnote.note.recipient()) else {
+                    continue;
+                };
+                if ivk.is_some_and(|ivk| ivk != note_ivk) {
+                    continue;
+                }
+                has_received = true;
+                let outpoint = OutPoint {
+                    txid: *txid,
+                    action_idx: *idx,
+                };
+                if (ignore_mined && self.mined_notes.contains_key(&outpoint))
+                    || (require_spending_key
+                        && self.key_store.spending_key_for_ivk(note_ivk).is_none())
+                {
+                    continue;
+                }
+                notes.push((outpoint, dnote.clone()));
+            }
+        }
+        (notes, has_received)
     }
 
     /// Returns the root of the Orchard note commitment tree, as of the specified checkpoint
@@ -741,12 +735,10 @@ impl Wallet {
             .ok_or(SpendRetrievalError::NoteNotPositioned(outpoint))?;
         tracing::trace!("Found position for note: {:?}", position);
 
-        assert_eq!(
-            self.commitment_tree
-                .get_marked_leaf(*position)
-                .expect("This note has been marked as one of ours."),
-            &MerkleHashOrchard::from_cmx(&dnote.note.commitment().into()),
-        );
+        let commitment = MerkleHashOrchard::from_cmx(&dnote.note.commitment().into());
+        if self.commitment_tree.get_marked_leaf(*position) != Some(&commitment) {
+            return Err(SpendRetrievalError::NoteNotPositioned(outpoint));
+        }
 
         let path = self
             .commitment_tree
@@ -903,9 +895,16 @@ pub extern "C" fn orchard_wallet_load_bundle(
     let txid = TxId::from_bytes(*unsafe { txid.as_ref() }.expect("txid may not be null."));
     let bundle = unsafe { bundle.as_ref() }.expect("bundle pointer may not be null.");
 
-    let hints_data = unsafe { slice::from_raw_parts(hints, hints_len) };
-    let potential_spend_idxs =
-        unsafe { slice::from_raw_parts(potential_spend_idxs, potential_spend_idxs_len) };
+    let hints_data = if hints_len == 0 {
+        &[]
+    } else {
+        unsafe { slice::from_raw_parts(hints, hints_len) }
+    };
+    let potential_spend_idxs = if potential_spend_idxs_len == 0 {
+        &[]
+    } else {
+        unsafe { slice::from_raw_parts(potential_spend_idxs, potential_spend_idxs_len) }
+    };
 
     let mut hints = BTreeMap::new();
     for action_ivk in hints_data {
@@ -1063,11 +1062,12 @@ pub extern "C" fn orchard_wallet_get_filtered_notes(
     require_spending_key: bool,
     result: Option<FFICallbackReceiver>,
     push_cb: Option<NotePushCb>,
-) {
+) -> bool {
     let wallet = unsafe { wallet.as_ref() }.expect("Wallet pointer may not be null.");
     let ivk = unsafe { ivk.as_ref() };
 
-    for (outpoint, dnote) in wallet.get_filtered_notes(ivk, ignore_mined, require_spending_key) {
+    let (notes, has_received) = wallet.get_filtered_notes(ivk, ignore_mined, require_spending_key);
+    for (outpoint, dnote) in notes {
         let metadata = FFINoteMetadata {
             txid: *outpoint.txid.as_ref(),
             action_idx: outpoint.action_idx as u32,
@@ -1077,6 +1077,7 @@ pub extern "C" fn orchard_wallet_get_filtered_notes(
         };
         unsafe { (push_cb.unwrap())(result, metadata) };
     }
+    has_received
 }
 
 /// A type used to pass decrypted spend information across the FFI boundary.
@@ -1123,7 +1124,11 @@ pub extern "C" fn orchard_wallet_get_txdata(
     output_push_cb: Option<OutputPushCB>,
 ) -> bool {
     let wallet = unsafe { wallet.as_ref() }.expect("Wallet pointer may not be null.");
-    let raw_ovks = unsafe { slice::from_raw_parts(raw_ovks, raw_ovks_len) };
+    let raw_ovks = if raw_ovks_len == 0 {
+        &[]
+    } else {
+        unsafe { slice::from_raw_parts(raw_ovks, raw_ovks_len) }
+    };
     let ovks: Vec<OutgoingViewingKey> = raw_ovks
         .iter()
         .map(|k| OutgoingViewingKey::from(*k))
@@ -1422,12 +1427,29 @@ pub extern "C" fn orchard_wallet_init_from_frontier(
     }
 }
 
+/// Check the witnesses for a transaction known by the caller to be mined at the saved checkpoint.
+#[no_mangle]
+pub extern "C" fn orchard_wallet_tx_notes_have_witnesses(
+    wallet: *const Wallet,
+    txid: *const [u8; 32],
+) -> bool {
+    let wallet = unsafe { wallet.as_ref() }.expect("wallet must be supplied");
+    let txid = TxId::from_bytes(*unsafe { txid.as_ref() }.expect("txid must be supplied"));
+    wallet.wallet_received_notes.get(&txid).is_none_or(|notes| {
+        notes.decrypted_notes.keys().all(|&action_idx| {
+            let outpoint = OutPoint { txid, action_idx };
+            wallet.mined_notes.contains_key(&outpoint) || wallet.get_spend_info(outpoint, 0).is_ok()
+        })
+    })
+}
+
 #[no_mangle]
 pub extern "C" fn orchard_wallet_unspent_notes_are_spendable(wallet: *const Wallet) -> bool {
     let wallet = unsafe { wallet.as_ref() }.expect("Wallet pointer may not be null.");
 
     wallet
         .get_filtered_notes(None, true, true)
+        .0
         .iter()
         .all(|(outpoint, _)| wallet.get_spend_info(*outpoint, 0).is_ok())
 }

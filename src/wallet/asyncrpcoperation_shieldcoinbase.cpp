@@ -140,8 +140,15 @@ void AsyncRPCOperation_shieldcoinbase::main() {
 }
 
 
-Remaining AsyncRPCOperation_shieldcoinbase::prepare(CWallet& wallet) {
+Remaining AsyncRPCOperation_shieldcoinbase::prepare(CWallet& wallet, bool enableIronwood) {
+    LOCK2(cs_main, wallet.cs_wallet);
     auto spendable = builder_.FindAllSpendableInputs(wallet, ztxoSelector_, COINBASE_MATURITY);
+    // The chain can connect a sweep before the wallet processes its notification.
+    auto& utxos = spendable.utxos;
+    utxos.erase(std::remove_if(utxos.begin(), utxos.end(), [](const COutput& out) {
+        const auto* coins = pcoinsTip->AccessCoins(out.tx->GetHash());
+        return !coins || !coins->IsAvailable(out.i);
+    }), utxos.end());
 
     // Find unspent coinbase utxos and update estimated size
     unsigned int max_tx_size = MAX_TX_SIZE_AFTER_SAPLING;
@@ -192,7 +199,8 @@ Remaining AsyncRPCOperation_shieldcoinbase::prepare(CWallet& wallet) {
             chainActive,
             strategy_,
             fee_,
-            nAnchorConfirmations);
+            nAnchorConfirmations,
+            enableIronwood);
 
     (void)preparationResult
         .map_error([&](const InputSelectionError& err) {

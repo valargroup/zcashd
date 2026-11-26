@@ -224,7 +224,7 @@ bool CWalletDB::EraseSaplingExtendedFullViewingKey(
 bool CWalletDB::WriteOrchardWitnesses(const OrchardWallet& wallet) {
     nWalletDBUpdateCounter++;
     return Write(
-            std::string("orchard_note_commitment_tree"),
+            std::string(wallet.IsIronwood() ? "ironwood_note_commitment_tree" : "orchard_note_commitment_tree"),
             OrchardWalletNoteCommitmentTreeWriter(wallet));
 }
 
@@ -895,9 +895,9 @@ ReadKeyValue(CWallet* pwallet, CDataStream& ssKey, CDataStream& ssValue,
 
             pwallet->LoadRecipientMapping(txid, RecipientMapping(ua.value(), recipient));
         }
-        else if (strType == "orchard_note_commitment_tree")
+        else if (strType == "orchard_note_commitment_tree" || strType == "ironwood_note_commitment_tree")
         {
-            auto loader = pwallet->GetOrchardNoteCommitmentTreeLoader();
+            auto loader = pwallet->GetOrchardNoteCommitmentTreeLoader(strType == "ironwood_note_commitment_tree");
             ssValue >> loader;
         }
     } catch (...)
@@ -972,9 +972,8 @@ DBErrors CWalletDB::LoadWallet(CWallet* pwallet)
                 } else {
                     // Leave other errors alone, if we try to fix them we might make things worse.
                     fNoncriticalErrors = true; // ... but do warn the user there is something wrong.
-                    if (strType == "tx") {
-                        // Rescan if there is a bad transaction record:
-                        LogPrintf("LoadWallet: Malformed transaction data encountered; starting with -rescan.");
+                    if (strType == "tx" || strType == "ironwood_note_commitment_tree") {
+                        LogPrintf("LoadWallet: Malformed %s record encountered; starting with -rescan.", strType);
                         SoftSetBoolArg("-rescan", true);
                     }
                 }

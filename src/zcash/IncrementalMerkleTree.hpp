@@ -435,6 +435,7 @@ private:
     rust::Box<merkle_frontier::Orchard> inner;
 
     friend class IronwoodMerkleFrontierLegacySer;
+    friend class OrchardWallet;
 public:
     IronwoodMerkleFrontier() : inner(merkle_frontier::new_orchard()) {}
 
