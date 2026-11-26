@@ -109,7 +109,7 @@ class WalletShieldingCoinbaseTest (BitcoinTestFramework):
         error_result = wait_and_assert_operationid_status_result(
                 self.nodes[0],
                 myopid, "failed",
-                "When shielding coinbase funds, the wallet does not allow any change. The proposed transaction would result in 8.76533211 in change.",
+                "When shielding coinbase funds, the wallet does not allow any change. The proposed transaction would result in 8.76541211 in change.",
                 10)
 
         # Test that the returned status object contains a params field with the operation's input parameters
@@ -245,9 +245,9 @@ class WalletShieldingCoinbaseTest (BitcoinTestFramework):
         # z_sendmany will fail because of insufficient funds
         recipients = [{"address": self.nodes[1].getnewaddress(), "amount": Decimal('10000.0')}]
         myopid = self.nodes[0].z_sendmany(mytaddr, recipients, 1, fee)
-        wait_and_assert_operationid_status(self.nodes[0], myopid, "failed", "Insufficient funds: have 10.00, need 10000.0001; note that coinbase outputs will not be selected if you specify ANY_TADDR, any transparent recipients are included, or if the `privacyPolicy` parameter is not set to `AllowRevealedSenders` or weaker.")
+        wait_and_assert_operationid_status(self.nodes[0], myopid, "failed", "Insufficient funds: have 10.00, need 10000.00002; note that coinbase outputs will not be selected if you specify ANY_TADDR, any transparent recipients are included, or if the `privacyPolicy` parameter is not set to `AllowRevealedSenders` or weaker.")
         myopid = self.nodes[0].z_sendmany(myzaddr, recipients, 1, fee, 'AllowRevealedRecipients')
-        wait_and_assert_operationid_status(self.nodes[0], myopid, "failed", "Insufficient funds: have 9.99955, need 10000.0001; note that coinbase outputs will not be selected if you specify ANY_TADDR, any transparent recipients are included, or if the `privacyPolicy` parameter is not set to `AllowRevealedSenders` or weaker.")
+        wait_and_assert_operationid_status(self.nodes[0], myopid, "failed", "Insufficient funds: have 9.99991, need 10000.00002; note that coinbase outputs will not be selected if you specify ANY_TADDR, any transparent recipients are included, or if the `privacyPolicy` parameter is not set to `AllowRevealedSenders` or weaker.")
 
         # Send will fail because of insufficient funds unless sender uses coinbase utxos
         try:
@@ -319,7 +319,7 @@ class WalletShieldingCoinbaseTest (BitcoinTestFramework):
         num_fewer_recipients = 400
         fewer_recipients = recipients[0:num_fewer_recipients]
         myopid = self.nodes[0].z_sendmany(myzaddr, fewer_recipients, 1, (WEIGHT_RATIO_CAP * conventional_fee(2+num_fewer_recipients)) + Decimal('0.00000001'))
-        wait_and_assert_operationid_status(self.nodes[0], myopid, 'failed', 'Fee 0.08040001 is greater than 4 times the conventional fee for this tx (which is 0.0201). There is no prioritisation benefit to a fee this large (see https://zips.z.cash/zip-0317#recommended-algorithm-for-block-template-construction), and it likely indicates a mistake in setting the fee.')
+        wait_and_assert_operationid_status(self.nodes[0], myopid, 'failed', 'Fee 0.01608001 is greater than 4 times the conventional fee for this tx (which is 0.00402). There is no prioritisation benefit to a fee this large (see https://zips.z.cash/zip-0317#recommended-algorithm-for-block-template-construction), and it likely indicates a mistake in setting the fee.')
 
         # Send will succeed because the balance of non-coinbase utxos is 10.0
         try:
@@ -341,8 +341,8 @@ class WalletShieldingCoinbaseTest (BitcoinTestFramework):
         amount_per_recipient = Decimal('0.002')
         minconf = 1
         send_amount = num_recipients * amount_per_recipient
-        custom_fee = Decimal('0.00023456')
-        assert custom_fee >= conventional_fee(4)
+        custom_fee = Decimal('0.00012345')
+        assert conventional_fee(4) <= custom_fee <= WEIGHT_RATIO_CAP * conventional_fee(4)
         zbalance = self.nodes[0].z_getbalance(myzaddr)
         for i in range(0, num_recipients):
             newzaddr = self.nodes[2].z_getnewaddress('sapling')

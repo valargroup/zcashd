@@ -13,7 +13,9 @@
 #include <vector>
 
 // Constants for fee calculation.
-static const CAmount MARGINAL_FEE = 5000;
+// ZIP 317 specifies 5000 zatoshis per logical action. This wallet charges 1000, which still
+// covers the 400 that Zakura, the node it runs behind, requires for mempool acceptance.
+static const CAmount MARGINAL_FEE = 1000;
 static const size_t GRACE_ACTIONS = 2;
 static const size_t P2PKH_STANDARD_INPUT_SIZE = 150;
 static const size_t P2PKH_STANDARD_OUTPUT_SIZE = 34;
