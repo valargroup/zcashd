@@ -238,10 +238,11 @@ count of unpaid actions that this node's mempool checks against
 transactions still reach its mempool. Transactions paying between 400 and 1,000
 zatoshis per action are accepted by Zakura but not by this node's mempool.
 
-An explicit fee is refused as a likely mistake only above 40 times this
-wallet's fee (40,000 zatoshis per logical action, 8 times the ZIP 317 fee), so
-fees that pool software computes at ZIP 317's 5,000 zatoshis per action are
-still accepted, as in stock zcashd. `-maxtxfee` (0.1 ZEC by default) still bounds a
+An explicit fee is refused as a likely mistake only above the limit stock
+zcashd applies: 4 times its 5,000 zatoshis per logical action, which is 20,000
+per action or 20 times this wallet's fee. Every explicit fee that stock zcashd
+accepted, including fees that pool software computes at ZIP 317's rate, is
+still accepted. `-maxtxfee` (0.1 ZEC by default) still bounds a
 transaction's total fee. An explicit fee below 1,000 zatoshis per action is
 refused by this node's mempool. For pools:
 
