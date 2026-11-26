@@ -193,7 +193,7 @@ void ThrowInputSelectionError(
                     "https://zips.z.cash/zip-0317#recommended-algorithm-for-block-template-construction), "
                     "and it likely indicates a mistake in setting the fee.",
                     FormatMoney(err.fixedFee),
-                    WEIGHT_RATIO_CAP,
+                    EXPLICIT_FEE_RATIO_CAP,
                     FormatMoney(err.conventionalFee)));
         },
         [](const MaxFeeError& err) {

@@ -10,7 +10,7 @@ from test_framework.util import assert_equal, initialize_chain_clean, \
     start_nodes, connect_nodes_bi, wait_and_assert_operationid_status, \
     wait_and_assert_operationid_status_result, get_coinbase_address, \
     check_node_log
-from test_framework.zip317 import conventional_fee, WEIGHT_RATIO_CAP, ZIP_317_FEE
+from test_framework.zip317 import conventional_fee, EXPLICIT_FEE_RATIO_CAP, WEIGHT_RATIO_CAP, ZIP_317_FEE
 
 import sys
 import timeit
@@ -315,11 +315,11 @@ class WalletShieldingCoinbaseTest (BitcoinTestFramework):
             errorString = e.error['message']
         assert_equal("Amount out of range" in errorString, True)
 
-        # Send will fail because fee is more than `WEIGHT_RATIO_CAP * conventional_fee`
+        # Send will fail because fee is more than `EXPLICIT_FEE_RATIO_CAP * conventional_fee`
         num_fewer_recipients = 400
         fewer_recipients = recipients[0:num_fewer_recipients]
-        myopid = self.nodes[0].z_sendmany(myzaddr, fewer_recipients, 1, (WEIGHT_RATIO_CAP * conventional_fee(2+num_fewer_recipients)) + Decimal('0.00000001'))
-        wait_and_assert_operationid_status(self.nodes[0], myopid, 'failed', 'Fee 0.01608001 is greater than 4 times the conventional fee for this tx (which is 0.00402). There is no prioritisation benefit to a fee this large (see https://zips.z.cash/zip-0317#recommended-algorithm-for-block-template-construction), and it likely indicates a mistake in setting the fee.')
+        myopid = self.nodes[0].z_sendmany(myzaddr, fewer_recipients, 1, (EXPLICIT_FEE_RATIO_CAP * conventional_fee(2+num_fewer_recipients)) + Decimal('0.00000001'))
+        wait_and_assert_operationid_status(self.nodes[0], myopid, 'failed', 'Fee 0.08040001 is greater than 20 times the conventional fee for this tx (which is 0.00402). There is no prioritisation benefit to a fee this large (see https://zips.z.cash/zip-0317#recommended-algorithm-for-block-template-construction), and it likely indicates a mistake in setting the fee.')
 
         # Send will succeed because the balance of non-coinbase utxos is 10.0
         try:
@@ -341,8 +341,10 @@ class WalletShieldingCoinbaseTest (BitcoinTestFramework):
         amount_per_recipient = Decimal('0.002')
         minconf = 1
         send_amount = num_recipients * amount_per_recipient
-        custom_fee = Decimal('0.00012345')
-        assert conventional_fee(4) <= custom_fee <= WEIGHT_RATIO_CAP * conventional_fee(4)
+        # A fee computed at ZIP 317's 5000 zatoshis per action, as pool software written for stock
+        # zcashd passes it. It is more than 4 times this wallet's conventional fee, and is accepted.
+        custom_fee = Decimal('0.00020000')
+        assert WEIGHT_RATIO_CAP * conventional_fee(4) < custom_fee <= EXPLICIT_FEE_RATIO_CAP * conventional_fee(4)
         zbalance = self.nodes[0].z_getbalance(myzaddr)
         for i in range(0, num_recipients):
             newzaddr = self.nodes[2].z_getnewaddress('sapling')
