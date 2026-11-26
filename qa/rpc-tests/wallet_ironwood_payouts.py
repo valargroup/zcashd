@@ -272,6 +272,12 @@ debug_enable_at_height = 0
         wait_for(lambda: balance() == received, "confirmed Ironwood balance")
         assert wallet("z_getbalance", sweep) * COIN == received
         assert wallet("z_getbalance", sweep, 8) == 0
+        # The sweep and mixed addresses share an incoming viewing key. Only the sweep was paid.
+        assert wallet("z_listreceivedbyaddress", mixed) == []
+        receipts = wallet("z_listreceivedbyaddress", sweep)
+        assert [n["txid"] for n in receipts if n["pool"] == "ironwood"] == [shield["txid"]]
+        unspent = wallet("z_listunspent", 1, 999999, False, [sweep, mixed])
+        assert [(n["txid"], n["address"]) for n in unspent if n["pool"] == "ironwood"] == [(shield["txid"], sweep)]
         disconnect_and_reconnect(wallet("getbestblockhash"))
         assert balance() == received
         mine(2)

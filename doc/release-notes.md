@@ -140,7 +140,8 @@ Ironwood wallet shielding and transparent payouts
 
 From NU6.3, `z_shieldcoinbase` can spend mature transparent mining rewards into
 Ironwood. Ironwood uses the Orchard receiver in a Unified Address. The wallet
-tracks balances and notes in the two pools separately. Existing Orchard notes
+tracks balances and notes in the two pools separately. Address-filtered receipt
+and unspent-note queries return only notes sent to the requested receivers. Existing Orchard notes
 remain unavailable for spending through this wallet after NU6.3.
 
 For example, create a wallet-owned sweep address with `z_getaddressforaccount` using the

@@ -7380,15 +7380,15 @@ void CWallet::GetFilteredNotes(
     std::vector<OrchardNoteMetadata> orchardNotes;
     for (const auto* wallet : {&orchardWallet, &ironwoodWallet}) {
         if (noteFilter.has_value()) {
-            for (const OrchardRawAddress& addr: noteFilter.value().GetOrchardAddresses()) {
-                auto ivk = wallet->GetIncomingViewingKeyForAddress(addr);
-                if (ivk.has_value()) {
-                    wallet->GetFilteredNotes(
-                            orchardNotes,
-                            ivk.value(),
-                            ignoreSpent,
-                            requireSpendingKey);
+            // Diversified receivers from the same account can share a viewing key.
+            std::set<OrchardIncomingViewingKey> keys;
+            for (const auto& addr : noteFilter->GetOrchardAddresses()) {
+                if (auto ivk = wallet->GetIncomingViewingKeyForAddress(addr)) {
+                    keys.insert(std::move(*ivk));
                 }
+            }
+            for (const auto& ivk : keys) {
+                wallet->GetFilteredNotes(orchardNotes, ivk, ignoreSpent, requireSpendingKey);
             }
         } else {
             // return all Orchard notes
@@ -7401,6 +7401,9 @@ void CWallet::GetFilteredNotes(
     }
 
     for (auto& noteMeta : orchardNotes) {
+        if (noteFilter && !noteFilter->HasOrchardAddress(noteMeta.GetAddress())) {
+            continue;
+        }
         if ((ignoreLocked && noteMeta.IsIronwood() && lockedIronwoodNotes.count(noteMeta.GetOutPoint())) ||
             (ignoreSpent && IsOrchardSpent(noteMeta.GetOutPoint(), asOfHeight, noteMeta.IsIronwood()))) {
             continue;
