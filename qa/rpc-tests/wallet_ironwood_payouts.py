@@ -378,9 +378,10 @@ debug_enable_at_height = 0
         assert immature["status"] == "failed" and "Insufficient funds" in immature["error"]["message"], immature
         # The two-argument z_sendmany uses ten confirmations, even though z_getbalance defaults to one.
         mine(1)
+        # Ironwood funds never pay a Sapling-only Unified Address.
         mixed_recipients = result(payout([(first, 1), (sapling, 1)]))
         assert (mixed_recipients["status"] == "failed" and
-                "AllowRevealedRecipients" in mixed_recipients["error"]["message"]), mixed_recipients
+                "cannot pay a Sapling address" in mixed_recipients["error"]["message"]), mixed_recipients
         tx = confirm(payout(outputs))
         check_payout(tx, outputs)
         remaining = received - tx["ironwood"]["valueBalanceZat"]
@@ -559,6 +560,66 @@ debug_enable_at_height = 0
         sidecar.close()
         start_wallet(sidecar, args.zcashd, flags)
 
+        # Ironwood payouts to Unified Addresses: another wallet's Orchard-only and
+        # Sapling-and-Orchard UAs both receive Ironwood notes, never Sapling ones.
+        mine(10)
+        payer_account = wallet("z_getnewaccount")["account"]
+        payer = wallet("z_getaddressforaccount", payer_account, ["orchard"])["address"]
+
+        def payer_balance():
+            return wallet("z_getbalanceforaccount", payer_account)["pools"].get("ironwood", {}).get("valueZat", 0)
+
+        funding = wallet("z_shieldcoinbase", mining, payer, None, 2)
+        funded = check_shield(confirm(funding["opid"]), funding)
+        wait_for(lambda: payer_balance() == funded, "payer funds credited to Ironwood")
+        sapling_receiver = wallet("z_listunifiedreceivers", sapling)["sapling"]
+        for recipient in (sapling, sapling_receiver):
+            refused = result(wallet("z_sendmany", payer, [{"address": recipient, "amount": 0.1}], 1))
+            assert (refused["status"] == "failed" and
+                    "cannot pay a Sapling address" in refused["error"]["message"]), refused
+
+        def check_shielded_payout(tx, transparent_zat=0):
+            # Shielded recipients and change are Ironwood actions. No Sapling output is created.
+            assert not tx["vin"] and not tx.get("vShieldedSpend") and not tx.get("vShieldedOutput")
+            actions = len(tx["ironwood"]["actions"])
+            fee = MARGINAL_FEE * (actions + len(tx["vout"]))
+            assert tx["ironwood"]["valueBalanceZat"] == transparent_zat + fee
+            return fee
+
+        # Fully shielded: two UAs with FullPrivacy and a memo. One spend and three
+        # outputs (two recipients and change) make three actions.
+        memo = "49726f6e776f6f64207061796f7574"
+        private = confirm(wallet("z_sendmany", payer, [
+            {"address": foreign_orchard, "amount": 0.5, "memo": memo},
+            {"address": foreign_mixed, "amount": 0.25}], 1, None, "FullPrivacy"))
+        assert len(private["ironwood"]["actions"]) == 3
+        spent = 75_000_000 + check_shielded_payout(private)
+        wait_for(lambda: payer_balance() == funded - spent, "payer change after a private payout")
+
+        # With the policy omitted, a payout to UAs only is fully shielded as well.
+        default = confirm(wallet("z_sendmany", payer, [{"address": foreign_orchard, "amount": 0.125}], 1))
+        assert len(default["ironwood"]["actions"]) == 2
+        spent += 12_500_000 + check_shielded_payout(default)
+        wait_for(lambda: payer_balance() == funded - spent, "payer change after a default payout")
+
+        # One payout to two UAs and two transparent addresses. The omitted policy
+        # allows the revealed recipients; each P2PKH output adds a logical action.
+        workers = [(first, 0.1), (second, 0.2)]
+        mixed_payout = confirm(wallet("z_sendmany", payer, [
+            {"address": foreign_orchard, "amount": 0.0625},
+            {"address": foreign_mixed, "amount": 0.03125},
+            *({"address": addr, "amount": amount} for addr, amount in workers)], 1))
+        assert len(mixed_payout["ironwood"]["actions"]) == 3
+        fee = check_shielded_payout(mixed_payout, 30_000_000)
+        check_payout(mixed_payout, workers, fee_zat=fee)
+        spent += 9_375_000 + 30_000_000 + fee
+        wait_for(lambda: payer_balance() == funded - spent, "payer change after a mixed payout")
+        ironwood_paid = [
+            (foreign_orchard, private["txid"], 50_000_000), (foreign_mixed, private["txid"], 25_000_000),
+            (foreign_orchard, default["txid"], 12_500_000),
+            (foreign_orchard, mixed_payout["txid"], 6_250_000), (foreign_mixed, mixed_payout["txid"], 3_125_000),
+        ]
+
         try:
             wallet("z_shieldcoinbase", mining, foreign_orchard, None, 1)
         except RpcError as error:
@@ -573,7 +634,18 @@ debug_enable_at_height = 0
         wait_for(lambda: wallet("getbestblockhash") == zakura("getbestblockhash") and
                  wallet("getblockchaininfo")["fullyNotified"], "recipient wallet to sync")
         receipts = wallet("z_listreceivedbyaddress", foreign_mixed)
-        assert [(n["pool"], n["txid"]) for n in receipts] == [("sapling", tx["txid"])]
+        assert sorted((n["pool"], n["txid"]) for n in receipts if n["pool"] == "sapling") == [("sapling", tx["txid"])]
+        # The other wallet sees each Ironwood payout note, its amount and its memo.
+        received_ironwood = []
+        for address in (foreign_orchard, foreign_mixed):
+            for note in wallet("z_listreceivedbyaddress", address):
+                if note["pool"] == "ironwood":
+                    received_ironwood.append((address, note["txid"], int(note["amount"] * COIN)))
+                    if note["txid"] == private["txid"] and address == foreign_orchard:
+                        assert note["memo"].startswith(memo), note
+        assert sorted(received_ironwood) == sorted(ironwood_paid), received_ironwood
+        pools = wallet("z_getbalanceforaccount", receiver_account)["pools"]
+        assert pools["ironwood"]["valueZat"] == sum(amount for _, _, amount in ironwood_paid), pools
 
 
 def main(argv=None):

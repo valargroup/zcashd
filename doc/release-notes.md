@@ -135,8 +135,8 @@ and `getblock`, `finalironwoodroot` in `getblock`, an ironwood section in
 `z_gettreestate` and `z_getsubtreesbyindex`, and an "ironwood" bundle in
 verbose `getrawtransaction`/`decoderawtransaction` output for v6 transactions.
 
-Ironwood wallet shielding and transparent payouts
---------------------------------------------------
+Ironwood wallet shielding and payouts
+-------------------------------------
 
 From NU6.3, `z_shieldcoinbase` can spend mature transparent mining rewards into
 Ironwood. Ironwood uses the Orchard receiver in a Unified Address. The wallet
@@ -170,6 +170,27 @@ with both Sapling and Orchard receivers keeps its usual funding and privacy
 rules. It can spend Sapling with `AllowRevealedRecipients`, including after
 the same account has received and spent Ironwood.
 
+An Ironwood payout can also pay miners who have shielded addresses. In one
+`z_sendmany` call, the sweep UA can pay any mix of transparent addresses and
+Unified Addresses that have an Orchard receiver, whether they belong to this
+wallet or another. Each Unified Address receives an Ironwood note at its
+Orchard receiver, with its memo if one is given. A Unified Address with both
+Sapling and Orchard receivers is paid through its Orchard receiver. Ironwood
+funds never create Sapling outputs, so a Sapling address, or a Unified Address
+with a Sapling receiver and no Orchard receiver, is refused with an error. A
+payout to Unified Addresses only is fully shielded: it works with
+`FullPrivacy` and with the policy omitted. A payout that also has transparent
+recipients needs `AllowRevealedRecipients`, which is the default when the
+policy is omitted, as before. The fee counts each Ironwood output as a logical
+action: a payout's Ironwood actions are its spent notes or its outputs
+(recipients and change), whichever is more, and at least two. From NU7, a
+payout that needs more than 330 Ironwood actions is refused, because no block
+could hold it. For example:
+
+```sh
+zcash-cli z_sendmany "$SWEEP_ADDRESS" '[{"address":"<miner-1-ua>","amount":1.25},{"address":"<miner-2-ua>","amount":0.5,"memo":"<hex-memo>"},{"address":"<worker-taddr>","amount":0.75}]' 1
+```
+
 Pool sweepers that move transparent rewards with `z_sendmany` instead of
 `z_shieldcoinbase` can send them to the sweep UA from NU6.3: transparent
 funds to one of this wallet's Unified Addresses with an Orchard receiver
@@ -178,8 +199,10 @@ As with `z_shieldcoinbase`, another wallet's Unified Address receives through
 its Sapling receiver. Pass
 `AllowRevealedSenders`, or `AllowFullyTransparent` when there is change. With
 `-allowdeprecated=legacy_privacy`, an omitted policy allows it, as it does for
-a Sapling address. Sending to more than one Unified Address, or from shielded
-funds to a Unified Address, remains unsupported.
+a Sapling address. Sending transparent funds to more than one Unified Address,
+or to another wallet's Unified Address through its Orchard receiver, remains
+unsupported. Ironwood funds reach Unified Addresses only through the Ironwood
+payout path above.
 
 With stock s-nomp, set `zAddress` to the sweep UA. Its startup check uses
 `z_validateaddress.ismine`. Its two-argument `z_sendmany` refill spends the
