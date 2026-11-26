@@ -356,6 +356,18 @@ enum class IronwoodUnsupportedError {
 /// Explanation returned by operations outside the supported Ironwood wallet flows.
 extern const std::string IRONWOOD_WALLET_UNSUPPORTED;
 
+/** True when the selector can spend only transparent funds. */
+bool SelectsOnlyTransparent(const ZTXOSelector& selector);
+
+/**
+ * True for a single payment to a Unified Address whose Orchard receiver belongs to this wallet.
+ * From NU6.3, sent from transparent funds, this is the one z_sendmany shape that funds an
+ * Ironwood receiver: one Ironwood output, with any change transparent. Pool sweepers use it in
+ * place of z_shieldcoinbase. Like z_shieldcoinbase, Ironwood outputs go only to the wallet's own
+ * addresses; another wallet's Unified Address keeps using its Sapling receiver.
+ */
+bool IsIronwoodSweepPayment(const CWallet& wallet, const std::vector<Payment>& payments);
+
 /// Error when a transaction would spend Sprout notes at NU7 heights or later. ZIP 2003
 /// makes v4 transactions, the only ones that carry Sprout JoinSplits, invalid from NU7.
 class SproutUnsupportedError {

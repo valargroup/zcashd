@@ -176,10 +176,22 @@ no fee given, the wallet pays what is left when the unpaid actions fit
 `-txunpaidactionlimit`, as a Sapling sweep of that shape already does; set it to
 at least the number of notes a sweep spends. The default of 0 refuses the
 payout with "Insufficient funds".
-Pools using the deprecated `z_getbalance` RPC must start the wallet with
-`-allowdeprecated=z_getbalance`. On the Orchard-only sweep UA this RPC
-reports confirmed Ironwood funds from NU6.3 and accepts a minimum confirmation
-count. Historical Orchard remains visible in `z_getbalanceforaccount`.
+The deprecated `z_getbalance` RPC is now enabled by default, because pool
+payout software checks its sweep balance with it; `-allowdeprecated=none`
+still disables it. On the Orchard-only sweep UA this RPC reports confirmed
+Ironwood funds from NU6.3 and accepts a minimum confirmation count. Historical
+Orchard remains visible in `z_getbalanceforaccount`.
+
+Pool sweepers that move transparent rewards with `z_sendmany` instead of
+`z_shieldcoinbase` can send them to the sweep UA from NU6.3: transparent
+funds to one of this wallet's Unified Addresses with an Orchard receiver
+produce one Ironwood output, and any change returns to a transparent address.
+As with `z_shieldcoinbase`, another wallet's Unified Address receives through
+its Sapling receiver. Pass
+`AllowRevealedSenders`, or `AllowFullyTransparent` when there is change. With
+`-allowdeprecated=legacy_privacy`, an omitted policy allows it, as it does for
+a Sapling address. Sending to more than one Unified Address, or from shielded
+funds to a Unified Address, remains unsupported.
 
 Miningcore can use `"*"` for the shielding source and request eight
 confirmations and an explicit fee for payouts. With default relay policy,

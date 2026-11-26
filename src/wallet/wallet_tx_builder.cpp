@@ -13,7 +13,24 @@ using namespace libzcash;
 
 const std::string IRONWOOD_WALLET_UNSUPPORTED =
     "This transfer to an Orchard receiver is unsupported from NU6.3. For Ironwood, use "
-    "z_shieldcoinbase to shield rewards or z_sendmany to pay transparent recipients.";
+    "z_shieldcoinbase to shield rewards, z_sendmany from transparent funds to one of this wallet's "
+    "Unified Addresses with transparent change, or z_sendmany to pay transparent recipients.";
+
+bool SelectsOnlyTransparent(const ZTXOSelector& selector)
+{
+    return selector.SelectsTransparent() && !selector.SelectsSprout() &&
+        !selector.SelectsSapling() && !selector.SelectsOrchard();
+}
+
+bool IsIronwoodSweepPayment(const CWallet& wallet, const std::vector<Payment>& payments)
+{
+    if (payments.size() != 1) return false;
+    const auto* ua = std::get_if<UnifiedAddress>(&payments[0].GetAddress());
+    auto receiver = ua ? ua->GetOrchardReceiver() : std::nullopt;
+    if (!receiver.has_value()) return false;
+    LOCK(wallet.cs_wallet);
+    return wallet.GetUFVKMetadataForReceiver(receiver.value()).has_value();
+}
 
 int GetAnchorHeight(const CChain& chain, uint32_t anchorConfirmations)
 {
@@ -451,7 +468,8 @@ WalletTxBuilder::PrepareTransaction(
     notes.erase(std::remove_if(notes.begin(), notes.end(), [&](const OrchardNoteMetadata& note) {
         return !allowOrchard || note.IsIronwood() != useIronwood;
     }), notes.end());
-    if (useIronwood && std::holds_alternative<std::vector<Payment>>(payments)) {
+    const bool transparentSource = SelectsOnlyTransparent(selector);
+    if (useIronwood && std::holds_alternative<std::vector<Payment>>(payments) && !transparentSource) {
         // A payout debits only the sweep account's confirmed Ironwood notes.
         selectable.saplingNoteEntries.clear();
         selectable.sproutNoteEntries.clear();
@@ -519,6 +537,20 @@ WalletTxBuilder::PrepareTransaction(
         return tl::make_unexpected(selected.error());
     }
     const auto& resolvedSelection = selected.value();
+
+    // Transparent funds sent into Ironwood create one Ironwood output; change stays transparent.
+    if (useIronwood && transparentSource) {
+        auto changeAddr = resolvedSelection.GetChangeAddress();
+        bool shieldedChange = changeAddr.has_value() && examine(changeAddr.value(), match {
+            [](const RecipientAddress& addr) {
+                return !std::holds_alternative<CKeyID>(addr) && !std::holds_alternative<CScriptID>(addr);
+            },
+            [](const SproutPaymentAddress&) { return true; },
+        });
+        if (shieldedChange) {
+            return tl::make_unexpected(IronwoodUnsupportedError::UnsupportedReceiver);
+        }
+    }
 
     // Historical Orchard funds and unsupported operations stay outside the Ironwood builder.
     if (afterNU63 && !useIronwood) {

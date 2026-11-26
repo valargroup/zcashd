@@ -119,8 +119,11 @@ def exercise(args, root):
         log = root / "wallet.log"
         cmd = [binary, "-regtest", f"-datadir={datadir}", f"-exportdir={root}",
                f"-rpcport={wallet_port}", f"-connect=127.0.0.1:{peer}", "-listen=0",
-               "-walletrequirebackup=0", "-allowdeprecated=getnewaddress", "-allowdeprecated=z_getbalance", "-maxtipage=3153600000",
+               "-walletrequirebackup=0", "-allowdeprecated=getnewaddress", "-maxtipage=3153600000",
                "-regtestwalletsetbestchaineveryblock", "-regtestshieldcoinbase", "-regtestacceptunvalidatedpow", "-txindex=1", *extra]
+        if binary != args.zcashd:
+            # Older compat releases disable z_getbalance by default; this build allows it.
+            cmd.append("-allowdeprecated=z_getbalance")
         proc = stack.enter_context(node_process(cmd, log))
         ready(proc, wallet, log)
         return proc
@@ -352,10 +355,13 @@ debug_enable_at_height = 0
         check_payout(tx, outputs)
         remaining = received - tx["ironwood"]["valueBalanceZat"]
         assert balance() == remaining
-        unsupported = result(wallet("z_sendmany", first, [{"address": sweep, "amount": 0.99985}],
-                                    1, 0.00015, "AllowRevealedSenders"))
-        assert (unsupported["status"] == "failed" and
-                "transfer to an Orchard receiver" in unsupported["error"]["message"]), unsupported
+        # A transparent send to one UA funds Ironwood, as pool sweepers do instead of z_shieldcoinbase.
+        swept_in = confirm(wallet("z_sendmany", first, [{"address": sweep, "amount": 0.99985}],
+                                  1, 0.00015, "AllowRevealedSenders"))
+        assert len(swept_in["vin"]) == 1 and not swept_in["vout"] and len(swept_in["ironwood"]["actions"]) == 2
+        assert -swept_in["ironwood"]["valueBalanceZat"] == 99_985_000
+        remaining += 99_985_000
+        wait_for(lambda: balance() == remaining, "transparent funds credited to Ironwood")
         sapling_op = wallet("z_shieldcoinbase", mining, sapling, None, 1)
         sapling_result = result(sapling_op["opid"])
         assert sapling_result["status"] == "success", sapling_result
@@ -447,11 +453,18 @@ debug_enable_at_height = 0
         snomp = [(first, float(Decimal(swept - 10_000) / COIN))]
         refused = result(payout(snomp))
         assert refused["status"] == "failed" and "Insufficient funds" in refused["error"]["message"], refused
+        # Pools run with legacy_privacy and a nonzero unpaid-action limit.
         sidecar.close()
-        start_wallet(sidecar, args.zcashd, [*flags, "-txunpaidactionlimit=50"])
+        start_wallet(sidecar, args.zcashd, [*flags, "-txunpaidactionlimit=50", "-allowdeprecated=legacy_privacy"])
         wait_for(lambda: any(p.get("version", 0) for p in wallet("getpeerinfo")), "wallet to reconnect")
         check_payout(confirm(payout(snomp)), snomp, fee_zat=10_000)
         assert balance() == 0
+        # With legacy_privacy, a sweeper's transparent send to the UA needs no policy: it
+        # reveals the inputs and returns change to a transparent address, as for Sapling.
+        swept_in = confirm(wallet("z_sendmany", second, [{"address": sweep, "amount": 0.5}]))
+        assert swept_in["vin"] and len(swept_in["vout"]) == 1 and len(swept_in["ironwood"]["actions"]) == 2
+        assert -swept_in["ironwood"]["valueBalanceZat"] == 50_000_000
+        wait_for(lambda: balance() == 50_000_000, "swept funds credited to Ironwood")
 
         try:
             wallet("z_shieldcoinbase", mining, foreign_orchard, None, 1)

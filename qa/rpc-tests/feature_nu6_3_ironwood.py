@@ -26,7 +26,8 @@ IRONWOOD_TREE_EMPTY_ROOT = "ae2935f1dfd8a24aed7c70df7de3a668eb7a49b1319880dde2bb
 HISTORICAL_ORCHARD_UNSUPPORTED = "Historical Orchard notes cannot be spent from NU6.3."
 ORCHARD_RECIPIENT_UNSUPPORTED = (
     "This transfer to an Orchard receiver is unsupported from NU6.3. For Ironwood, use "
-    "z_shieldcoinbase to shield rewards or z_sendmany to pay transparent recipients."
+    "z_shieldcoinbase to shield rewards, z_sendmany from transparent funds to one of this wallet's "
+    "Unified Addresses with transparent change, or z_sendmany to pay transparent recipients."
 )
 # NU5 activates before NU6.3 so the test can create Orchard notes pre-NU6.3 and
 # then prove they are frozen by the wallet guardrails post-activation. The gap
@@ -151,20 +152,6 @@ class IronwoodRpcSurfaceTest(BitcoinTestFramework):
         assert_equal(node.getblockcount(), tip_height)
         assert_equal(node.getblock(tip_hash)['finalironwoodroot'], IRONWOOD_TREE_EMPTY_ROOT)
 
-        # Sending TO an Orchard receiver fails (z_sendmany prepares inside the
-        # async operation, so the error surfaces via the operation status).
-        # Spend a whole coinbase UTXO (amount + fee = 10) so the transaction has
-        # no transparent change: the Ironwood guardrail runs after input
-        # selection, and transparent change would fail selection first with an
-        # unrelated privacy-policy error.
-        opid = node.z_sendmany(
-            get_coinbase_address(node),
-            [{"address": orchard_ua, "amount": Decimal('10') - fee}],
-            1,
-            fee,
-            'AllowRevealedSenders')
-        wait_and_assert_operationid_status(node, opid, 'failed', ORCHARD_RECIPIENT_UNSUPPORTED)
-
         # Spending FROM existing Orchard funds fails, even to unshield them.
         # This is the permanent fund freeze called out in the release notes.
         taddr = node.getnewaddress()
@@ -178,6 +165,23 @@ class IronwoodRpcSurfaceTest(BitcoinTestFramework):
         balances = node.z_getbalanceforaccount(acct)['pools']
         assert_equal(balances['orchard']['valueZat'], int(orchard_funds * 100000000))
 
+        # Transparent funds sent to the Orchard receiver become an Ironwood note.
+        # Spend a whole coinbase UTXO (amount + fee = 10): coinbase leaves no change.
+        opid = node.z_sendmany(
+            get_coinbase_address(node),
+            [{"address": orchard_ua, "amount": Decimal('10') - fee}],
+            1,
+            fee,
+            'AllowRevealedSenders')
+        sent_txid = wait_and_assert_operationid_status(node, opid)
+        node.generate(1)
+        self.sync_all()
+        sent = node.getrawtransaction(sent_txid, 1)
+        assert_equal(sent['version'], 6)
+        assert_equal(sent['orchard']['actions'], [])
+        assert_equal(sent['vout'], [])
+        assert_equal(-sent['ironwood']['valueBalanceZat'], int((Decimal('10') - fee) * 100000000))
+
         # The same receiver gets a new Ironwood note without changing the historical balance.
         shield = node.z_shieldcoinbase('*', orchard_ua, None, 1)
         txid = wait_and_assert_operationid_status(node, shield['opid'])
@@ -187,7 +191,8 @@ class IronwoodRpcSurfaceTest(BitcoinTestFramework):
         assert_equal(tx['version'], 6)
         assert_equal(tx['orchard']['actions'], [])
         balances = node.z_getbalanceforaccount(acct)['pools']
-        assert_equal(balances['ironwood']['valueZat'], -tx['ironwood']['valueBalanceZat'])
+        assert_equal(balances['ironwood']['valueZat'],
+                     -tx['ironwood']['valueBalanceZat'] - sent['ironwood']['valueBalanceZat'])
         assert_equal(balances['orchard']['valueZat'], int(orchard_funds * 100000000))
         # z_mergetoaddress does not merge coinbase UTXOs, and all of the wallet's
         # transparent funds so far are coinbase, so create a regular UTXO first

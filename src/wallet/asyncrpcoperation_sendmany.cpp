@@ -165,8 +165,10 @@ AsyncRPCOperation_sendmany::main_impl(CWallet& wallet) {
             Params().GetConsensus().NetworkUpgradeActive(chainActive.Height() + 1, Consensus::UPGRADE_NU6_3)) {
             strategy = TransactionStrategy(PrivacyPolicy::AllowRevealedRecipients);
         }
+        const bool ironwoodShielding =
+            SelectsOnlyTransparent(ztxoSelector_) && IsIronwoodSweepPayment(wallet, recipients_);
         return builder_.PrepareTransaction(wallet, ztxoSelector_, spendable, recipients_, chainActive,
-                                           strategy, fee_, anchordepth_, ironwoodPayout);
+                                           strategy, fee_, anchordepth_, ironwoodPayout || ironwoodShielding);
     }();
 
     return preparedTx

@@ -4878,6 +4878,8 @@ UniValue z_sendmany(const UniValue& params, bool fHelp)
             "\nlegacy Sapling address returns to itself. When sending from a unified address,"
             "\nchange is returned to the internal-only address for the associated unified account."
             "\nFrom NU6.3, an Ironwood payout from a Unified Address to transparent addresses defaults to AllowRevealedRecipients when privacyPolicy is omitted.\n"
+            "From NU6.3, transparent funds sent to one of this wallet's Unified Addresses with an Orchard receiver fund Ironwood, with any change\n"
+            "returned to a transparent address. With -allowdeprecated=legacy_privacy, an omitted privacyPolicy allows this.\n"
             "\nWhen spending coinbase UTXOs, only shielded recipients are permitted and change is not allowed;"
             "\nthe entire value of the coinbase UTXO(s) must be consumed."
             + HelpRequiringPassphrase() + "\n"
@@ -5026,6 +5028,21 @@ UniValue z_sendmany(const UniValue& params, bool fHelp)
                         std::nullopt,
                         params.size() > 4 ? std::optional(params[4].get_str()) : std::nullopt),
                 InterpretLegacyCompat(sender, recipientAddrs));
+
+    // From NU6.3 a transparent send to one of this wallet's Unified Addresses funds an Ironwood
+    // receiver; pool sweepers use it in place of z_shieldcoinbase. With legacy_privacy, an omitted policy then
+    // reveals the transparent inputs and change, as it does when the recipient is a Sapling
+    // address. It is resolved here because it decides whether coinbase may be selected.
+    const bool transparentSender = !sender.has_value() || examine(sender.value(), match {
+        [](const CKeyID&) { return true; },
+        [](const CScriptID&) { return true; },
+        [](const auto&) { return false; },
+    });
+    if (params.size() < 5 && fEnableLegacyPrivacyStrategy && transparentSender &&
+        IsIronwoodSweepPayment(*pwalletMain, recipients) &&
+        chainparams.GetConsensus().NetworkUpgradeActive(nextBlockHeight, Consensus::UPGRADE_NU6_3)) {
+        strategy = TransactionStrategy(PrivacyPolicy::AllowFullyTransparent);
+    }
 
     auto ztxoSelector = [&]() {
         if (!sender.has_value()) {
