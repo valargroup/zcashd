@@ -4,6 +4,14 @@ release-notes at release time)
 Notable changes
 ===============
 
+Linux binary platform requirements
+----------------------------------
+
+The Linux x86_64 binaries need glibc 2.35 or newer, so they run on Ubuntu 22.04
+and later and Debian 12 and later. The v1.3.3 binaries needed glibc 2.42 and did
+not start on Ubuntu 24.04, Debian 12 or Debian 13 (``version `GLIBC_2.42' not
+found``); v1.3.3 is withdrawn, so use this release instead.
+
 Sidecar sync after burst mining
 ------------------------------
 
