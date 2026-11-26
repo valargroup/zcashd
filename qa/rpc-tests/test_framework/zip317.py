@@ -28,12 +28,9 @@ MINIMUM_FEE = MARGINAL_FEE * GRACE_ACTIONS
 # https://zips.z.cash/zip-0317#recommended-algorithm-for-block-template-construction
 WEIGHT_RATIO_CAP = 4
 
-# ZIP 317's own fee per logical action, which stock zcashd charges.
-ZIP317_MARGINAL_FEE = 5000
-
 # The wallet refuses an explicit fee above this multiple of its conventional fee
-# (EXPLICIT_FEE_RATIO_CAP in src/zip317.h): 4 times the ZIP 317 fee.
-EXPLICIT_FEE_RATIO_CAP = WEIGHT_RATIO_CAP * ZIP317_MARGINAL_FEE // MARGINAL_FEE
+# (EXPLICIT_FEE_RATIO_CAP in src/zip317.h): 8 times the ZIP 317 fee.
+EXPLICIT_FEE_RATIO_CAP = 40
 
 # Default limit on the number of unpaid actions in a block. See
 # https://zips.z.cash/zip-0317#recommended-algorithm-for-block-template-construction

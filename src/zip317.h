@@ -28,15 +28,11 @@ static const size_t DEFAULT_BLOCK_UNPAID_ACTION_LIMIT = 0;
 /// Limit on the number of unpaid actions a transaction can have to be accepted to the mempool.
 static const size_t DEFAULT_TX_UNPAID_ACTION_LIMIT = DEFAULT_BLOCK_UNPAID_ACTION_LIMIT;
 
-// ZIP 317's own fee per logical action. Stock zcashd charges this, and pool software written for
-// it may pass explicit fees computed at this rate.
-static const CAmount ZIP317_MARGINAL_FEE = 5000;
-
 // The wallet refuses an explicit fee above this multiple of its conventional fee, as a likely
-// mistake. It is `WEIGHT_RATIO_CAP` times the ZIP 317 fee rather than this wallet's lower fee, so
-// every explicit fee that stock zcashd accepted (up to 4 times 5000 zatoshis per logical action)
-// is still accepted. `-maxtxfee` still bounds the total fee of a transaction.
-static const int64_t EXPLICIT_FEE_RATIO_CAP = WEIGHT_RATIO_CAP * ZIP317_MARGINAL_FEE / MARGINAL_FEE;
+// mistake: 40,000 zatoshis per logical action, 8 times the ZIP 317 fee. Fees that pool software
+// computes at ZIP 317's rate, or a little above it, are therefore accepted. `-maxtxfee` still
+// bounds the total fee of a transaction.
+static const int64_t EXPLICIT_FEE_RATIO_CAP = 40;
 
 /// This is the lowest the conventional fee can be in ZIP 317.
 static const CAmount MINIMUM_FEE = MARGINAL_FEE * GRACE_ACTIONS;

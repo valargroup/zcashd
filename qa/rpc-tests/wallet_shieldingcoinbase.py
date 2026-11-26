@@ -315,11 +315,12 @@ class WalletShieldingCoinbaseTest (BitcoinTestFramework):
             errorString = e.error['message']
         assert_equal("Amount out of range" in errorString, True)
 
-        # Send will fail because fee is more than `EXPLICIT_FEE_RATIO_CAP * conventional_fee`
-        num_fewer_recipients = 400
+        # Send will fail because fee is more than `EXPLICIT_FEE_RATIO_CAP * conventional_fee`. Few
+        # enough recipients that the fee stays under the default -maxtxfee of 0.1 ZEC.
+        num_fewer_recipients = 200
         fewer_recipients = recipients[0:num_fewer_recipients]
         myopid = self.nodes[0].z_sendmany(myzaddr, fewer_recipients, 1, (EXPLICIT_FEE_RATIO_CAP * conventional_fee(2+num_fewer_recipients)) + Decimal('0.00000001'))
-        wait_and_assert_operationid_status(self.nodes[0], myopid, 'failed', 'Fee 0.08040001 is greater than 20 times the conventional fee for this tx (which is 0.00402). There is no prioritisation benefit to a fee this large (see https://zips.z.cash/zip-0317#recommended-algorithm-for-block-template-construction), and it likely indicates a mistake in setting the fee.')
+        wait_and_assert_operationid_status(self.nodes[0], myopid, 'failed', 'Fee 0.08080001 is greater than 40 times the conventional fee for this tx (which is 0.00202). There is no prioritisation benefit to a fee this large (see https://zips.z.cash/zip-0317#recommended-algorithm-for-block-template-construction), and it likely indicates a mistake in setting the fee.')
 
         # Send will succeed because the balance of non-coinbase utxos is 10.0
         try:
