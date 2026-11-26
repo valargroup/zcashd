@@ -948,7 +948,7 @@ WalletTxBuilder::ResolveInputsAndPayments(
             //       unconditional once that’s fixed.
             auto conventionalFee =
                 CalcZIP317Fee(wallet, spendableMut, resolved.GetResolvedPayments(), changeAddr, consensusBranchId);
-            if (finalFee > WEIGHT_RATIO_CAP * conventionalFee) {
+            if (finalFee > EXPLICIT_FEE_RATIO_CAP * conventionalFee) {
                 return tl::make_unexpected(AbsurdFeeError(conventionalFee, finalFee));
             }
             auto changeRes =
@@ -959,8 +959,8 @@ WalletTxBuilder::ResolveInputsAndPayments(
         } else {
             auto conventionalFee =
                 CalcZIP317Fee(wallet, spendableMut, resolved.GetResolvedPayments(), std::nullopt, consensusBranchId);
-            if (finalFee > WEIGHT_RATIO_CAP * conventionalFee) {
-                return tl::make_unexpected(AbsurdFeeError(resolved.Total(), finalFee));
+            if (finalFee > EXPLICIT_FEE_RATIO_CAP * conventionalFee) {
+                return tl::make_unexpected(AbsurdFeeError(conventionalFee, finalFee));
             }
         }
     } else {
