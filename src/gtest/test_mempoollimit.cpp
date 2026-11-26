@@ -138,7 +138,7 @@ TEST(MempoolLimitTests, MempoolCostAndEvictionWeight)
         auto builder = TransactionBuilder(Params(), 1, std::nullopt, testNote.tree.root());
         builder.AddSaplingSpend(sk, testNote.note, testNote.tree.witness());
         builder.AddSaplingOutput(fvk.ovk, pa, 25000, {});
-        static_assert(MINIMUM_FEE == 10000);
+        static_assert(MINIMUM_FEE == 2000);
         builder.SetFee(MINIMUM_FEE-1);
 
         auto [cost, evictionWeight] = MempoolCostAndEvictionWeight(builder.Build().GetTxOrThrow(), MINIMUM_FEE-1);
