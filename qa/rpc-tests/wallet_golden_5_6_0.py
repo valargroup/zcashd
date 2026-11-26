@@ -17,6 +17,7 @@ from test_framework.util import (
     persistent_cache_exists,
     persist_node_caches,
 )
+from test_framework.zip317 import conventional_fee_zats
 from decimal import Decimal
 
 
@@ -198,6 +199,8 @@ def golden_check_spendability(test_instance, block_offset):
             },
             test_instance.nodes[2].z_getbalanceforaccount(n2account0))
 
+    # The cached balances above were built at 5,000 zatoshis per logical action. The sends below
+    # pay the current conventional fee.
     # Send a bunch of notes back and forth again.
     for i in range(10):
         if i % 2 == 0:
@@ -230,19 +233,19 @@ def golden_check_spendability(test_instance, block_offset):
 
     assert_equal(
             {
-                'pools': {'orchard': {'valueZat': Decimal(299925000 + (5 * 30000000) - (5 * 10010000) + 290000000)}},
+                'pools': {'orchard': {'valueZat': Decimal(299925000 + (5 * 30000000) - (5 * (10000000 + conventional_fee_zats(2))) + 290000000)}},
                 'minimum_confirmations': 1
             },
             test_instance.nodes[0].z_getbalanceforaccount(n0account0))
     assert_equal(
             {
-                'pools': {'orchard': {'valueZat': Decimal(150000000 + (5 * 30000000) - 290050000)}},
+                'pools': {'orchard': {'valueZat': Decimal(150000000 + (5 * 30000000) - (290000000 + conventional_fee_zats(10)))}},
                 'minimum_confirmations': 1
             },
             test_instance.nodes[0].z_getbalanceforaccount(n0account1))
     assert_equal(
             {
-                'pools': {'orchard': {'valueZat': Decimal(549900000 + (5 * 10000000) - (5 * 60020000))}},
+                'pools': {'orchard': {'valueZat': Decimal(549900000 + (5 * 10000000) - (5 * (60000000 + conventional_fee_zats(4))))}},
                 'minimum_confirmations': 1
             },
             test_instance.nodes[2].z_getbalanceforaccount(n2account0))

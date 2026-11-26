@@ -114,7 +114,7 @@ class WalletSendManyAnyTaddr(BitcoinTestFramework):
             'ANY_TADDR',
             [{'address': recipient, 'amount': Decimal('20') - fee}],
             1, fee, 'AllowLinkingAccountAddresses')
-        wait_and_assert_operationid_status(self.nodes[3], myopid, "failed", "Insufficient funds: have 14.99965, need 20.00; note that coinbase outputs will not be selected if you specify ANY_TADDR, any transparent recipients are included, or if the `privacyPolicy` parameter is not set to `AllowRevealedSenders` or weaker.")
+        wait_and_assert_operationid_status(self.nodes[3], myopid, "failed", "Insufficient funds: have 14.99993, need 20.00; note that coinbase outputs will not be selected if you specify ANY_TADDR, any transparent recipients are included, or if the `privacyPolicy` parameter is not set to `AllowRevealedSenders` or weaker.")
 
         # Create a transaction that will expire on node 3.
         self.split_network()

@@ -19,6 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "contrib" / "testge
 from base58 import b58encode_chk
 
 COIN = 100_000_000
+# The wallet's ZIP 317 fee per logical action, MARGINAL_FEE in src/zip317.h.
+MARGINAL_FEE = 1_000
 UPGRADES = [
     ("Overwinter", "5ba81b19"), ("Sapling", "76b809bb"), ("Blossom", "2bb40e60"),
     ("Heartwood", "f5b9230b"), ("Canopy", "e9ff75a6"), ("NU5", "c2d6d0b4"),
@@ -215,7 +217,7 @@ debug_enable_at_height = 0
             assert "coinbase" in reward["vin"][0] and reward["confirmations"] >= 101
             inputs += int(reward["vout"][vin["vout"]]["value"] * COIN)
         assert inputs == int(sweep_result["shieldingValue"] * COIN)
-        fee = 5000 * (len(tx["vin"]) + len(tx["ironwood"]["actions"]))
+        fee = MARGINAL_FEE * (len(tx["vin"]) + len(tx["ironwood"]["actions"]))
         assert -tx["ironwood"]["valueBalanceZat"] == inputs - fee
         return inputs - fee
 
@@ -243,7 +245,7 @@ debug_enable_at_height = 0
         assert actual == {addr: int(Decimal(str(amount)) * COIN) for addr, amount in outputs}
         # One shielded spend and change pad to two actions. Transparent outputs
         # contribute another logical action per standard P2PKH destination.
-        fee = fee_zat if fee_zat is not None else 5000 * (len(tx["ironwood"]["actions"]) + len(outputs))
+        fee = fee_zat if fee_zat is not None else MARGINAL_FEE * (len(tx["ironwood"]["actions"]) + len(outputs))
         assert tx["ironwood"]["valueBalanceZat"] == sum(actual.values()) + fee
 
     def fund_refill(address, note_count):
@@ -384,11 +386,13 @@ debug_enable_at_height = 0
         remaining = received - tx["ironwood"]["valueBalanceZat"]
         assert balance() == remaining
         # A transparent send to one UA funds Ironwood, as pool sweepers do instead of z_shieldcoinbase.
-        swept_in = confirm(wallet("z_sendmany", first, [{"address": sweep, "amount": 0.99985}],
-                                  1, 0.00015, "AllowRevealedSenders"))
+        # The whole 1 ZEC input pays the conventional fee for one transparent input and two
+        # padded Ironwood actions.
+        swept_in = confirm(wallet("z_sendmany", first, [{"address": sweep, "amount": 0.99997}],
+                                  1, 0.00003, "AllowRevealedSenders"))
         assert len(swept_in["vin"]) == 1 and not swept_in["vout"] and len(swept_in["ironwood"]["actions"]) == 2
-        assert -swept_in["ironwood"]["valueBalanceZat"] == 99_985_000
-        remaining += 99_985_000
+        assert -swept_in["ironwood"]["valueBalanceZat"] == COIN - 3 * MARGINAL_FEE
+        remaining += COIN - 3 * MARGINAL_FEE
         wait_for(lambda: balance() == remaining, "transparent funds credited to Ironwood")
         sapling_op = wallet("z_shieldcoinbase", mining, sapling, None, 1)
         sapling_result = result(sapling_op["opid"])
@@ -422,8 +426,8 @@ debug_enable_at_height = 0
         assert wallet("z_getbalance", sweep, 8) * COIN < before
         mine(7)
         assert wallet("z_getbalance", sweep, 8) * COIN == before
-        tx = confirm(payout(outputs, 8, 0.0004, "AllowRevealedRecipients"))
-        check_payout(tx, outputs, fee_zat=40_000)
+        tx = confirm(payout(outputs, 8, 0.00008, "AllowRevealedRecipients"))
+        check_payout(tx, outputs, fee_zat=8_000)
         remaining = before - tx["ironwood"]["valueBalanceZat"]
         wait_for(lambda: balance() == remaining, "change to be credited exactly once")
         disconnect_and_reconnect(wallet("getbestblockhash"))
@@ -453,9 +457,9 @@ debug_enable_at_height = 0
         underpaid = result(payout(workers, 8, 0.0001, "AllowRevealedRecipients"))
         assert underpaid["status"] == "failed" and "unpaid action limit exceeded" in underpaid["error"]["message"], underpaid
         assert balance() == remaining
-        large = confirm(payout(workers, 8, 0.0041, "AllowRevealedRecipients"))
+        large = confirm(payout(workers, 8, 0.00082, "AllowRevealedRecipients"))
         assert len(large["ironwood"]["actions"]) == 2
-        check_payout(large, workers, fee_zat=410_000)
+        check_payout(large, workers, fee_zat=82_000)
         remaining -= large["ironwood"]["valueBalanceZat"]
         assert balance() == remaining
         # Both operations request almost all remaining notes and cannot both succeed.
@@ -473,29 +477,42 @@ debug_enable_at_height = 0
         pools = wallet("z_getbalanceforaccount", account)["pools"]
         assert pools["orchard"]["valueZat"] == frozen and pools["sapling"]["valueZat"] == sapling_reserve
         # s-nomp moves its whole sweep balance with the 2-argument z_sendmany and leaves
-        # 0.0001 ZEC for the fee, less than the conventional fee for its spends and one
-        # transparent output. That is refused by default and pays the 0.0001 ZEC when the
-        # operator allows the unpaid actions, as a Sapling sweep of that shape already does.
+        # 0.0001 ZEC for the fee. That covers the conventional fee for up to ten logical
+        # actions, so the default policy pays the conventional fee and keeps the rest as change.
         mine(10)
         swept = balance()
         snomp = [(first, float(Decimal(swept - 10_000) / COIN))]
-        refused = result(payout(snomp))
+        tx = confirm(payout(snomp))
+        check_payout(tx, snomp)
+        reserve = swept - tx["ironwood"]["valueBalanceZat"]
+        assert 0 < reserve < 10_000
+        wait_for(lambda: balance() == reserve, "fee reserve change to be credited")
+        # A reserve below the conventional fee for one spend and one transparent output (two
+        # padded Ironwood actions and the output) is refused by default. When the operator allows
+        # the unpaid actions, the wallet pays the reserve, as a Sapling sweep of that shape
+        # already does. It still covers Zakura's 400 zatoshis per action.
+        short_fee = 2 * MARGINAL_FEE
+        assert 3 * 400 <= short_fee < 3 * MARGINAL_FEE
+        mine(10)
+        short = [(first, float(Decimal(reserve - short_fee) / COIN))]
+        refused = result(payout(short))
         assert refused["status"] == "failed" and "Insufficient funds" in refused["error"]["message"], refused
         # Pools run with legacy_privacy and a nonzero unpaid-action limit.
         sidecar.close()
         start_wallet(sidecar, args.zcashd, [*flags, "-txunpaidactionlimit=50", "-allowdeprecated=legacy_privacy"])
         wait_for(lambda: any(p.get("version", 0) for p in wallet("getpeerinfo")), "wallet to reconnect")
-        check_payout(confirm(payout(snomp)), snomp, fee_zat=10_000)
+        check_payout(confirm(payout(short)), short, fee_zat=short_fee)
         assert balance() == 0
         # The mixed address still spends Sapling after another address on this account
         # has received and exhausted its Ironwood. Keep the usual explicit privacy policy.
+        mixed_fee = 6 * MARGINAL_FEE
         mixed_payment = mine_wallet_transaction(payout(
-            [(second, 0.1)], 1, 0.0003, "AllowRevealedRecipients", source=mixed))
+            [(second, 0.1)], 1, float(Decimal(mixed_fee) / COIN), "AllowRevealedRecipients", source=mixed))
         assert mixed_payment["vShieldedSpend"] and not mixed_payment["vin"]
         assert not mixed_payment.get("ironwood", {}).get("actions")
         assert [(v["scriptPubKey"]["addresses"], v["value"]) for v in mixed_payment["vout"]] == [
             ([second], Decimal("0.1"))]
-        assert mixed_payment["valueBalanceZat"] == 10_000_000 + 30_000
+        assert mixed_payment["valueBalanceZat"] == 10_000_000 + mixed_fee
         assert wallet("z_getbalanceforaccount", account)["pools"]["sapling"]["valueZat"] == (
             sapling_reserve - mixed_payment["valueBalanceZat"])
 
