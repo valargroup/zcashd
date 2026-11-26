@@ -191,10 +191,11 @@ confirmation count when estimating the refill balance. On the sweep UA this
 RPC reports confirmed Ironwood funds from NU6.3. Historical Orchard remains
 visible in `z_getbalanceforaccount`. [Stock s-nomp refill](https://github.com/s-nomp/s-nomp/blob/e6498056547d77d684097fe3024eb47110177e30/libs/paymentProcessor.js#L294-L306)
 
-For a refill spending 24 Ironwood notes to one standard P2PKH output, the
-transaction has 25 logical actions. zcashd's default policy requires 125,000
-zatoshis. To accept the stock fee locally, set `-txunpaidactionlimit` to at
-least 23 for this refill (the default is zero). The Zakura v1.9.0-rc2 peer requires 400 zatoshis per
+The stock fee covers zcashd's default policy for a refill of up to nine notes
+(10 logical actions). For a refill spending 24 Ironwood notes to one standard
+P2PKH output, the transaction has 25 logical actions. zcashd's default policy
+requires 25,000 zatoshis. To accept the stock fee locally, set
+`-txunpaidactionlimit` to at least 15 for this refill (the default is zero). The Zakura v1.9.0-rc2 peer requires 400 zatoshis per
 action, so the stock fee covers exactly 25 actions. At **25 notes**, the same
 refill needs **10,400 zatoshis** at the peer. Increasing zcashd's local limit
 cannot make the peer relay it. Keep stock refills within 24 notes, or adapt the
@@ -203,12 +204,12 @@ A successful wallet operation reports local submission. Use the Zakura peer's
 mempool to check relay and a mined block to confirm payment.
 
 Stock Miningcore requests eight confirmations, sets a fixed fee of 10,000
-zatoshis and batches up to 50 workers. Even a single standard P2PKH worker
-and two padded Ironwood actions require 15,000 zatoshis under zcashd's default
-relay policy. With 50 such outputs and two Ironwood actions, the minimums are
-260,000 zatoshis at default zcashd and 20,800 at the Zakura v1.9.0-rc2 peer.
+zatoshis and batches up to 50 workers. Under zcashd's default relay policy
+that fee covers up to eight standard P2PKH workers and two padded Ironwood
+actions. With 50 such outputs and two Ironwood actions, the minimums are
+52,000 zatoshis at default zcashd and 20,800 at the Zakura v1.9.0-rc2 peer.
 Adapt Miningcore's fee calculation to the batch it submits. For example, 80
-standard outputs and two Ironwood actions need 410,000 zatoshis at default
+standard outputs and two Ironwood actions need 82,000 zatoshis at default
 zcashd. The shielding source can be `"*"`. [Stock Miningcore payout handler](https://github.com/oliverw/miningcore/blob/a553f62301f44c6df80891e408b6526d1dd98692/src/Miningcore/Blockchain/Equihash/EquihashPayoutHandler.cs#L41-L123)
 
 Size batches using the serialized transaction limit of 2,000,000 bytes, the
@@ -216,6 +217,29 @@ wallet's maximum fee, and its Orchard action limit (which also applies to
 Ironwood notes). A payout with many recipients or many small input notes can
 reach different limits. From NU7, a block can contain at most 330 Ironwood
 actions. Check the returned operation result before retrying a batch.
+
+Lower ZIP 317 fee
+-----------------
+
+The wallet now charges 1,000 zatoshis per logical action instead of ZIP 317's
+5,000, so the minimum fee for a transaction (two grace actions) is 2,000
+zatoshis instead of 10,000. The same rate sets the default fee of `z_sendmany`,
+`z_shieldcoinbase`, `z_mergetoaddress` and the legacy sending RPCs, and the
+count of unpaid actions that this node's mempool checks against
+`-txunpaidactionlimit`. Zakura accepts 400 zatoshis per action, so the wallet's
+transactions still reach its mempool. Transactions paying between 400 and 1,000
+zatoshis per action are accepted by Zakura but not by this node's mempool.
+
+The wallet still refuses an explicit fee above 4 times the conventional fee, so
+a fixed fee sized for 5,000 zatoshis per action may now be rejected as too
+high. For pools:
+
+- s-nomp's 0.0001 ZEC fee reserve now covers up to 10 logical actions. Refills
+  of up to nine notes pay the conventional fee without `-txunpaidactionlimit`.
+  A 24-note refill needs a limit of at least 15 (previously 23).
+- Miningcore's fixed 0.0001 ZEC fee also covers 10 logical actions, up to eight
+  workers per batch. A page of 50 transparent recipients with two Ironwood
+  actions needs 52,000 zatoshis, so it still needs a larger fee.
 
 P2P sidecar hard-lock
 ---------------------
