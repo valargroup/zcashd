@@ -86,7 +86,7 @@ jobs:
             "${{ github.api_url }}/repos/${{ github.repository }}/releases/tags/$TAG")
           case "$status" in
             200)
-              if jq -r '.assets[].name' release.json | grep -q '^zcashd-zebra-compat-'; then
+              if jq -e 'any(.assets[].name; test("^zcashd-(zebra|zakura)-compat-"))' release.json >/dev/null; then
                 echo "::error::Release $TAG already has assets, which Zakura may pin. Publish a new tag instead."
                 exit 1
               fi
