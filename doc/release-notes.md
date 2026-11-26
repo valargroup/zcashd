@@ -170,23 +170,6 @@ with both Sapling and Orchard receivers keeps its usual funding and privacy
 rules. It can spend Sapling with `AllowRevealedRecipients`, including after
 the same account has received and spent Ironwood.
 
-With stock s-nomp, set `zAddress` to the sweep UA. `z_validateaddress` now
-reports `ismine` for Unified Addresses (true when the wallet holds the spending
-key), which s-nomp requires before it starts payment processing. s-nomp's two-argument
-`z_sendmany` refill permits revealed recipients when spending Ironwood
-to transparent addresses. This call requires ten confirmations. An explicit
-privacy policy still applies. s-nomp leaves 0.0001 ZEC for the fee, less than
-the conventional fee for the notes it spends and its transparent output. With
-no fee given, the wallet pays what is left when the unpaid actions fit
-`-txunpaidactionlimit`, as a Sapling sweep of that shape already does; set it to
-at least the number of notes a sweep spends. The default of 0 refuses the
-payout with "Insufficient funds".
-The deprecated `z_getbalance` RPC is now enabled by default, because pool
-payout software checks its sweep balance with it; `-allowdeprecated=none`
-still disables it. On the Orchard-only sweep UA this RPC reports confirmed
-Ironwood funds from NU6.3 and accepts a minimum confirmation count. Historical
-Orchard remains visible in `z_getbalanceforaccount`.
-
 Pool sweepers that move transparent rewards with `z_sendmany` instead of
 `z_shieldcoinbase` can send them to the sweep UA from NU6.3: transparent
 funds to one of this wallet's Unified Addresses with an Orchard receiver
@@ -198,11 +181,35 @@ its Sapling receiver. Pass
 a Sapling address. Sending to more than one Unified Address, or from shielded
 funds to a Unified Address, remains unsupported.
 
-Miningcore can use `"*"` for the shielding source and request eight
-confirmations and an explicit fee for payouts. With default relay policy,
-a fixed fee must cover all logical actions, including each standard
-transparent output and the padded Ironwood actions. For example, a batch of
-80 standard P2PKH outputs and two Ironwood actions needs 410,000 zatoshis.
+With stock s-nomp, set `zAddress` to the sweep UA. Its startup check uses
+`z_validateaddress.ismine`. Its two-argument `z_sendmany` refill spends the
+eligible balance, leaves 10,000 zatoshis (0.0001 ZEC) for the fee, and pays
+one transparent address. This call requires ten confirmations and permits
+revealed recipients. An explicit privacy policy still applies. The deprecated
+`z_getbalance` RPC is enabled by default. `-allowdeprecated=none` disables it. Pass the same
+confirmation count when estimating the refill balance. On the sweep UA this
+RPC reports confirmed Ironwood funds from NU6.3. Historical Orchard remains
+visible in `z_getbalanceforaccount`. [Stock s-nomp refill](https://github.com/s-nomp/s-nomp/blob/e6498056547d77d684097fe3024eb47110177e30/libs/paymentProcessor.js#L294-L306)
+
+For a refill spending 24 Ironwood notes to one standard P2PKH output, the
+transaction has 25 logical actions. zcashd's default policy requires 125,000
+zatoshis. To accept the stock fee locally, set `-txunpaidactionlimit` to at
+least 23 for this refill (the default is zero). The Zakura v1.9.0-rc2 peer requires 400 zatoshis per
+action, so the stock fee covers exactly 25 actions. At **25 notes**, the same
+refill needs **10,400 zatoshis** at the peer. Increasing zcashd's local limit
+cannot make the peer relay it. Keep stock refills within 24 notes, or adapt the
+pool software to split larger refills or reserve a fee that covers them.
+A successful wallet operation reports local submission. Use the Zakura peer's
+mempool to check relay and a mined block to confirm payment.
+
+Stock Miningcore requests eight confirmations, sets a fixed fee of 10,000
+zatoshis and batches up to 50 workers. Even a single standard P2PKH worker
+and two padded Ironwood actions require 15,000 zatoshis under zcashd's default
+relay policy. With 50 such outputs and two Ironwood actions, the minimums are
+260,000 zatoshis at default zcashd and 20,800 at the Zakura v1.9.0-rc2 peer.
+Adapt Miningcore's fee calculation to the batch it submits. For example, 80
+standard outputs and two Ironwood actions need 410,000 zatoshis at default
+zcashd. The shielding source can be `"*"`. [Stock Miningcore payout handler](https://github.com/oliverw/miningcore/blob/a553f62301f44c6df80891e408b6526d1dd98692/src/Miningcore/Blockchain/Equihash/EquihashPayoutHandler.cs#L41-L123)
 
 Size batches using the serialized transaction limit of 2,000,000 bytes, the
 wallet's maximum fee, and its Orchard action limit (which also applies to

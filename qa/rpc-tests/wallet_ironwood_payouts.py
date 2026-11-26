@@ -44,6 +44,9 @@ def rpc(port, method, *params, auth=None):
     try:
         response = urlopen(request, timeout=120)
     except HTTPError as error:
+        # A hard restart can leave the previous RPC cookie on disk until startup.
+        if error.code == 401:
+            raise
         response = error
     with response:
         reply = json.load(response, parse_float=Decimal)
@@ -239,6 +242,28 @@ debug_enable_at_height = 0
         # contribute another logical action per standard P2PKH destination.
         fee = fee_zat if fee_zat is not None else 5000 * (len(tx["ironwood"]["actions"]) + len(outputs))
         assert tx["ironwood"]["valueBalanceZat"] == sum(actual.values()) + fee
+
+    def fund_refill(address, note_count):
+        # One shielding transaction creates one spendable note, even with padded actions.
+        operations = [wallet("z_shieldcoinbase", mining, address, None, 1) for _ in range(note_count)]
+        assert all(op["shieldingUTXOs"] == 1 for op in operations)
+        txids = set()
+        for op in operations:
+            outcome = result(op["opid"])
+            assert outcome["status"] == "success", outcome
+            txids.add(outcome["result"]["txid"])
+        wait_for(lambda: txids <= set(zakura("getrawmempool")), "refill funding to reach Zakura")
+        # The miner can spread the shields across blocks. Count ten confirmations
+        # from the last one before requesting the stock refill.
+        for _ in range(note_count):
+            mine(1)
+            if not txids.intersection(zakura("getrawmempool")):
+                break
+        mine(9)
+        notes = [n for n in wallet("z_listunspent", 10, 999999, False, [address]) if n["pool"] == "ironwood"]
+        assert len(notes) == note_count and {n["txid"] for n in notes} == txids, notes
+        amount = wallet("z_getbalance", address, 10) - Decimal("0.0001")
+        return [(first, float(amount))]
 
     with ExitStack() as nodes:
         zlog = root / "zakura.log"
@@ -477,6 +502,42 @@ debug_enable_at_height = 0
         assert swept_in["vin"] and len(swept_in["vout"]) == 1 and len(swept_in["ironwood"]["actions"]) == 2
         assert -swept_in["ironwood"]["valueBalanceZat"] == 50_000_000
         wait_for(lambda: balance() == 50_000_000, "swept funds credited to Ironwood")
+
+        # A stock refill leaves a fixed 10,000 zatoshis. With one P2PKH output,
+        # Zakura admits 24 Ironwood spends (25 actions at 400 zatoshis each).
+        mine(50)
+        refill_account = wallet("z_getnewaccount")["account"]
+        refill_address = wallet("z_getaddressforaccount", refill_account, ["orchard"])["address"]
+        outputs = fund_refill(refill_address, 24)
+        refill = confirm(payout(outputs, source=refill_address))
+        assert len(refill["ironwood"]["actions"]) == 24
+        check_payout(refill, outputs, fee_zat=10_000)
+        assert wallet("z_getbalance", refill_address) == 0
+
+        # Submit the exact same signed bytes to each node, in a deterministic
+        # order, so P2P gossip cannot race the peer's fee rejection.
+        outputs = fund_refill(refill_address, 25)
+        sidecar.close()
+        start_wallet(sidecar, args.zcashd, [*flags, "-txunpaidactionlimit=50", "-walletbroadcast=0"])
+        outcome = result(payout(outputs, source=refill_address))
+        assert outcome["status"] == "success", outcome
+        txid = outcome["result"]["txid"]
+        raw = wallet("gettransaction", txid)["hex"]
+        refill = wallet("decoderawtransaction", raw)
+        assert len(refill["ironwood"]["actions"]) == 25 and len(refill["vout"]) == 1
+        paid = refill["vout"][0]["value"]
+        assert paid == Decimal(str(outputs[0][1]))
+        assert refill["ironwood"]["valueBalanceZat"] - int(paid * COIN) == 10_000
+        try:
+            zakura("sendrawtransaction", raw)
+        except RpcError as error:
+            assert "unpaid actions" in str(error).lower(), error
+        else:
+            raise AssertionError("Zakura accepted 26 actions with a 10,000-zatoshi fee")
+        assert wallet("sendrawtransaction", raw) == txid
+        assert txid in wallet("getrawmempool") and txid not in zakura("getrawmempool")
+        sidecar.close()
+        start_wallet(sidecar, args.zcashd, flags)
 
         try:
             wallet("z_shieldcoinbase", mining, foreign_orchard, None, 1)
