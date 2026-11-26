@@ -233,20 +233,20 @@ the marking to see what GitHub wants to be done.
 
 ## Publish zcashd compatibility artifacts
 
-For releases that need Zebra-managed `zcashd` compatibility downloads, publish
+For releases that need Zakura-managed `zcashd` compatibility downloads, publish
 the compatibility artifacts to the same GitHub release tag:
 
 - Trigger `.github/workflows/release-zcashd-compat-assets.yml` (or rely on the
   automatic release trigger).
 - Ensure the workflow publishes:
-  - stripped runtime archives (`zcashd-zebra-compat-<tag>-<platform>.tar.gz`);
+  - stripped runtime archives (`zcashd-zakura-compat-<tag>-<platform>.tar.gz`);
   - standalone stripped `zcashd` executables
-    (`zcashd-zebra-compat-<tag>-<platform>`), byte-identical to `./bin/zcashd`
+    (`zcashd-zakura-compat-<tag>-<platform>`), byte-identical to `./bin/zcashd`
     in the runtime archive, with their `.sha256` files. Zakura downloads these
     and pins their SHA-256, so a published executable must never be replaced;
   - debug symbol archives (`...-debug.tar.gz`);
   - `SHA256SUMS.txt`;
-  - `zcashd-zebra-compat-manifest-<tag>.json`, whose `runtime_binary` entry
+  - `zcashd-zakura-compat-manifest-<tag>.json`, whose `runtime_binary` entry
     gives each executable's file name, URL, SHA-256 and size.
 - Verify the manifest and checksums before announcing the release.
 

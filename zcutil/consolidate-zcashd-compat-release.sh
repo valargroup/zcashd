@@ -14,7 +14,7 @@ Reads every *.metadata.json written by zcutil/package-zcashd-compat.sh under
 to <output-dir>:
   - each platform's runtime archive, debug archive, standalone zcashd
     executable and its .sha256 file
-  - zcashd-zebra-compat-manifest-<tag>.json
+  - zcashd-zakura-compat-manifest-<tag>.json
   - SHA256SUMS.txt
 EOF
 }
@@ -131,7 +131,7 @@ output = {
     "artifacts": entries,
 }
 
-(output_dir / f"zcashd-zebra-compat-manifest-{release_tag}.json").write_text(
+(output_dir / f"zcashd-zakura-compat-manifest-{release_tag}.json").write_text(
     json.dumps(output, indent=2, sort_keys=True) + "\n",
     encoding="utf-8",
 )

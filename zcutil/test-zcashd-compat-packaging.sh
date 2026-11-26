@@ -12,7 +12,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CC="${CC:-cc}"
 TAG="v0.0.0-fixture"
 PLATFORM="linux-x86_64"
-BASENAME="zcashd-zebra-compat-${TAG}-${PLATFORM}"
+BASENAME="zcashd-zakura-compat-${TAG}-${PLATFORM}"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -106,7 +106,7 @@ cmp "$FINAL/$BASENAME" "$PACKAGED/$BASENAME" || fail "published executable diffe
 
 expected_assets="$(printf '%s\n' \
   SHA256SUMS.txt \
-  "zcashd-zebra-compat-manifest-${TAG}.json" \
+  "zcashd-zakura-compat-manifest-${TAG}.json" \
   "$BASENAME" \
   "$BASENAME-debug.tar.gz" \
   "$BASENAME.sha256" \
@@ -115,7 +115,7 @@ actual_assets="$(find "$FINAL" -mindepth 1 -printf '%f\n' | sort)"
 [[ "$actual_assets" == "$expected_assets" ]] || fail "unexpected release assets: $actual_assets"
 grep -q "  ./$BASENAME\$" "$FINAL/SHA256SUMS.txt" || fail "SHA256SUMS.txt does not list the standalone executable"
 
-python3 - "$FINAL/zcashd-zebra-compat-manifest-${TAG}.json" "$PACKAGED/$BASENAME.metadata.json" "$TAG" <<'PY' || fail "release manifest is wrong"
+python3 - "$FINAL/zcashd-zakura-compat-manifest-${TAG}.json" "$PACKAGED/$BASENAME.metadata.json" "$TAG" <<'PY' || fail "release manifest is wrong"
 import json
 import sys
 from pathlib import Path

@@ -14,11 +14,11 @@ Build prerequisites:
   - objcopy/strip (or llvm-objcopy/llvm-strip) must be available
 
 Outputs:
-  - zcashd-zebra-compat-<version>-<platform> (standalone stripped zcashd)
-  - zcashd-zebra-compat-<version>-<platform>.sha256
-  - zcashd-zebra-compat-<version>-<platform>.tar.gz
-  - zcashd-zebra-compat-<version>-<platform>-debug.tar.gz
-  - zcashd-zebra-compat-<version>-<platform>.metadata.json
+  - zcashd-zakura-compat-<version>-<platform> (standalone stripped zcashd)
+  - zcashd-zakura-compat-<version>-<platform>.sha256
+  - zcashd-zakura-compat-<version>-<platform>.tar.gz
+  - zcashd-zakura-compat-<version>-<platform>-debug.tar.gz
+  - zcashd-zakura-compat-<version>-<platform>.metadata.json
 EOF
 }
 
@@ -152,7 +152,7 @@ for binary in zcashd zcash-cli; do
   "$OBJCOPY_BIN" --add-gnu-debuglink="$DEBUG_STAGING/${binary}.dbg" "$RUNTIME_STAGING/bin/$binary"
 done
 
-RUNTIME_ARCHIVE_BASENAME="zcashd-zebra-compat-${VERSION_TAG}-${PLATFORM_ID}"
+RUNTIME_ARCHIVE_BASENAME="zcashd-zakura-compat-${VERSION_TAG}-${PLATFORM_ID}"
 DEBUG_ARCHIVE_BASENAME="${RUNTIME_ARCHIVE_BASENAME}-debug"
 RUNTIME_ARCHIVE_PATH="${OUTPUT_DIR}/${RUNTIME_ARCHIVE_BASENAME}.tar.gz"
 DEBUG_ARCHIVE_PATH="${OUTPUT_DIR}/${DEBUG_ARCHIVE_BASENAME}.tar.gz"
