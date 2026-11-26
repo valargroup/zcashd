@@ -22,7 +22,12 @@ concurrency:
 jobs:
   build-assets:
     name: Build zcashd compat (${{ matrix.name }})
-    runs-on: ${{ vars.UBUNTU_LARGE_RUNNER || 'ubuntu-latest' }}
+    # The binaries need the build host's glibc or newer, so build on the oldest supported OS
+    # rather than the floating ubuntu-latest: Ubuntu 22.04 has glibc 2.35, which covers Ubuntu
+    # 22.04+ and Debian 12+. v1.3.3 was built on ubuntu-latest (26.04) and needed glibc 2.42.
+    runs-on: ${{ vars.UBUNTU_LARGE_RUNNER_2204 || 'ubuntu-22.04' }}
+    env:
+      MAX_GLIBC: "2.35"
     strategy:
       fail-fast: false
       matrix:
@@ -125,6 +130,22 @@ jobs:
         env:
           HOST: ${{ matrix.host }}
         run: ./zcutil/build.sh -j"$(nproc)"
+
+      # Fails the release if any binary would refuse to start on a system with MAX_GLIBC.
+      - name: Check the glibc the binaries require
+        shell: bash
+        run: |
+          set -euo pipefail
+          failed=0
+          for bin in src/zcashd src/zcash-cli src/zcash-tx src/zcashd-wallet-tool; do
+            need=$(objdump -T "$bin" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -n1)
+            echo "$bin needs glibc $need"
+            if [ "$(printf '%s\n%s\n' "$need" "$MAX_GLIBC" | sort -V | tail -n1)" != "$MAX_GLIBC" ]; then
+              echo "::error::$bin needs glibc $need, newer than the supported $MAX_GLIBC."
+              failed=1
+            fi
+          done
+          exit "$failed"
 
       - name: Package zcashd compatibility assets
         shell: bash
