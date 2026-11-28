@@ -36,6 +36,7 @@ int main(void) {
 EOF
 "$CC" -g -O0 -o "$FIXTURE/src/zcashd" "$WORK/fixture.c"
 "$CC" -g -O0 -o "$FIXTURE/src/zcash-cli" "$WORK/fixture.c"
+"$CC" -g -O0 -o "$FIXTURE/src/zcashd-wallet-tool" "$WORK/fixture.c"
 echo "fixture readme" > "$FIXTURE/README.md"
 git -C "$FIXTURE" init -q
 git -C "$FIXTURE" -c user.name=fixture -c user.email=fixture@example.invalid commit -q --allow-empty -m fixture
@@ -51,6 +52,18 @@ for name in "$BASENAME" "$BASENAME.sha256" "$BASENAME.tar.gz" "$BASENAME-debug.t
 done
 [[ -x "$PACKAGED/$BASENAME" ]] || fail "standalone executable is not executable"
 (cd "$PACKAGED" && sha256sum -c --quiet "$BASENAME.sha256") || fail "standalone executable checksum file does not verify"
+
+# The runtime archive ships the wallet tool, which a new wallet needs to confirm
+# its recovery phrase backup, and the debug archive holds every binary's symbols.
+expected_members="$(printf '%s\n' ./README.md ./bin/zcash-cli ./bin/zcashd ./bin/zcashd-wallet-tool)"
+actual_members="$(tar -tzf "$PACKAGED/$BASENAME.tar.gz" | grep -v '/$' | sort)"
+[[ "$actual_members" == "$expected_members" ]] || fail "unexpected runtime archive members: $actual_members"
+expected_debug="$(printf '%s\n' ./zcash-cli.dbg ./zcashd-wallet-tool.dbg ./zcashd.dbg)"
+actual_debug="$(tar -tzf "$PACKAGED/$BASENAME-debug.tar.gz" | grep -v '/$' | sort)"
+[[ "$actual_debug" == "$expected_debug" ]] || fail "unexpected debug archive members: $actual_debug"
+tar -xzf "$PACKAGED/$BASENAME.tar.gz" -C "$WORK" ./bin/zcashd-wallet-tool
+[[ -x "$WORK/bin/zcashd-wallet-tool" ]] || fail "archived wallet tool is not executable"
+cmp -s "$WORK/bin/zcashd-wallet-tool" "$FIXTURE/src/zcashd-wallet-tool" && fail "archived wallet tool was not stripped"
 
 # The standalone executable must be the exact bytes of ./bin/zcashd in the
 # runtime archive, which are stripped and carry a debuglink.
@@ -86,9 +99,11 @@ assert metadata["runtime_binary"] == {
 assert metadata["runtime"]["archive"] == f"{basename}.tar.gz"
 assert metadata["runtime"]["archive_member_binary_path"] == "./bin/zcashd"
 assert metadata["runtime"]["archive_member_cli_path"] == "./bin/zcash-cli"
+assert metadata["runtime"]["archive_member_wallet_tool_path"] == "./bin/zcashd-wallet-tool"
 assert metadata["runtime"]["sha256"] == hashlib.sha256((packaged / f"{basename}.tar.gz").read_bytes()).hexdigest()
 assert metadata["debug"]["archive"] == f"{basename}-debug.tar.gz"
 assert metadata["debug"]["archive_member_debug_path"] == "./zcashd.dbg"
+assert metadata["debug"]["archive_member_wallet_tool_debug_path"] == "./zcashd-wallet-tool.dbg"
 assert metadata["zcashd_version_output"] == "v0.0.0-fixture"
 PY
 
