@@ -10,7 +10,8 @@ Usage:
   zcutil/package-zcashd-compat.sh --host <host-triple> --version <vX.Y.Z> --output-dir <dir> [--release-url-base <url>]
 
 Build prerequisites:
-  - ./zcutil/build.sh must already have produced ./src/zcashd
+  - ./zcutil/build.sh must already have produced ./src/zcashd, ./src/zcash-cli and
+    ./src/zcashd-wallet-tool
   - objcopy/strip (or llvm-objcopy/llvm-strip) must be available
 
 Outputs:
@@ -139,6 +140,10 @@ cp "./src/zcashd" "$RUNTIME_STAGING/bin/zcashd"
 # Without it, troubleshooting means hand-rolling curl against the cookie file. The
 # Docker image has always shipped it; the archive omitting it was an oversight.
 cp "./src/zcash-cli" "$RUNTIME_STAGING/bin/zcash-cli"
+# A new wallet refuses to create accounts (z_getnewaccount fails with error -18)
+# until its recovery phrase backup is confirmed with zcashd-wallet-tool. Without
+# the tool, the only way past that is starting zcashd with -walletrequirebackup=false.
+cp "./src/zcashd-wallet-tool" "$RUNTIME_STAGING/bin/zcashd-wallet-tool"
 if [[ -f "./COPYING" ]]; then
   cp "./COPYING" "$RUNTIME_STAGING/COPYING"
 fi
@@ -146,7 +151,7 @@ if [[ -f "./README.md" ]]; then
   cp "./README.md" "$RUNTIME_STAGING/README.md"
 fi
 
-for binary in zcashd zcash-cli; do
+for binary in zcashd zcash-cli zcashd-wallet-tool; do
   "$OBJCOPY_BIN" --only-keep-debug "$RUNTIME_STAGING/bin/$binary" "$DEBUG_STAGING/${binary}.dbg"
   "$STRIP_BIN" -s "$RUNTIME_STAGING/bin/$binary"
   "$OBJCOPY_BIN" --add-gnu-debuglink="$DEBUG_STAGING/${binary}.dbg" "$RUNTIME_STAGING/bin/$binary"
@@ -220,6 +225,7 @@ metadata = {
     "size_bytes": int("${RUNTIME_SIZE_BYTES}"),
     "archive_member_binary_path": "./bin/zcashd",
     "archive_member_cli_path": "./bin/zcash-cli",
+    "archive_member_wallet_tool_path": "./bin/zcashd-wallet-tool",
     "url": "${RUNTIME_URL}",
   },
   "runtime_binary": {
@@ -234,6 +240,7 @@ metadata = {
     "size_bytes": int("${DEBUG_SIZE_BYTES}"),
     "archive_member_debug_path": "./zcashd.dbg",
     "archive_member_cli_debug_path": "./zcash-cli.dbg",
+    "archive_member_wallet_tool_debug_path": "./zcashd-wallet-tool.dbg",
     "url": "${DEBUG_URL}",
   },
 }

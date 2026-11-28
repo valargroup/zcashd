@@ -12,6 +12,24 @@ and later and Debian 12 and later. The v1.3.3 binaries needed glibc 2.42 and did
 not start on Ubuntu 24.04, Debian 12 or Debian 13 (``version `GLIBC_2.42' not
 found``); v1.3.3 is withdrawn, so use this release instead.
 
+Release archive includes zcashd-wallet-tool
+-------------------------------------------
+
+The Linux release archive now contains `bin/zcashd-wallet-tool` beside
+`bin/zcashd` and `bin/zcash-cli`. A new wallet refuses to create accounts until
+its recovery phrase backup is confirmed, so `z_getnewaccount` fails with error
+-18 ("Please acknowledge that you have backed up the wallet's emergency
+recovery phrase by using zcashd-wallet-tool first."). The v1.3.5 archive did
+not ship the tool, so the only way past this was starting zcashd with
+`-walletrequirebackup=false`.
+
+With zcashd running, run `bin/zcashd-wallet-tool` with the same `-datadir`,
+`-conf` and RPC options you pass to `zcash-cli`. It shows the recovery phrase,
+asks you to re-enter three of its words, and then confirms the backup through
+`zcash-cli`, which it finds in the same directory. `SHA256SUMS.txt` covers the
+archive, and the debug archive holds the tool's symbols as
+`zcashd-wallet-tool.dbg`.
+
 Sidecar sync after burst mining
 ------------------------------
 
@@ -225,6 +243,47 @@ wallet's maximum fee, and its Orchard action limit (which also applies to
 Ironwood notes). A payout with many recipients or many small input notes can
 reach different limits. From NU7, a block can contain at most 330 Ironwood
 actions. Check the returned operation result before retrying a batch.
+
+Ironwood transfers the wallet supports from NU6.3
+-------------------------------------------------
+
+From NU6.3, v1.3.5 and this release create Ironwood transactions for exactly
+three kinds of transfer:
+
+- `z_shieldcoinbase` from mature transparent mining rewards into the pool,
+  addressed to one of this wallet's Unified Addresses with an Orchard receiver.
+- `z_sendmany` from transparent funds to one of this wallet's own Unified
+  Addresses with an Orchard receiver. Any change returns to a transparent
+  address.
+- `z_sendmany` from this wallet's Ironwood funds to transparent recipients,
+  one or many per call.
+
+The wallet refuses any other transfer that would create an Orchard output or
+spend Ironwood funds, with zcashd's own error:
+
+```
+This transfer to an Orchard receiver is unsupported from NU6.3. For Ironwood, use z_shieldcoinbase to shield rewards, z_sendmany from transparent funds to one of this wallet's Unified Addresses with transparent change, or z_sendmany to pay transparent recipients.
+```
+
+In particular, paying a shielded or Unified Address outside this wallet from
+its Ironwood funds is refused this way. To move Ironwood funds out of the
+wallet, pay a transparent address. Spending Orchard notes received before NU6.3
+fails with "Historical Orchard notes cannot be spent from NU6.3."
+
+A mainnet test on 2026-11-27 with a fresh v1.3.5 wallet mined every supported
+transfer above at 1,000 zatoshis per logical action.
+
+### Restarting a new wallet soon after it catches up
+
+A new wallet that is restarted soon after it first catches up with the chain
+can stop during startup with:
+
+```
+Ironwood witnesses cannot rewind to the rescan height. Restart with -rescan.
+```
+
+Start zcashd once with `-rescan`, which rebuilds the wallet's notes and
+witnesses from the blocks, then restart it normally from then on.
 
 Lower ZIP 317 fee
 -----------------
