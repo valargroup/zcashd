@@ -4828,11 +4828,19 @@ std::optional<int> CWallet::ScanForWalletTransactions(
 
         // There is no need to read and scan blocks that were created before
         // our wallet birthday (as adjusted for block time variability).
-        // If there is an Orchard wallet checkpoint, the rewind point must not
-        // be advanced past the last Orchard wallet checkpoint height.
+        // The rescan start must not move past the last Orchard or Ironwood
+        // checkpoint: each tree can only rewind to a height it has seen, and
+        // both are rewound to the block before the rescan start below.
+        // A new wallet restarted before its first periodic save has an
+        // Ironwood checkpoint (from BackfillIronwood) but no Orchard one.
         auto optOrchardCheckpointHeight = orchardWallet.GetLastCheckpointHeight();
+        auto optIronwoodCheckpointHeight = ironwoodWallet.GetLastCheckpointHeight();
+        auto belowCheckpoint = [](const std::optional<int>& checkpoint, int height) {
+            return !checkpoint.has_value() || height < checkpoint.value();
+        };
         while (chainActive.Next(pindex) != NULL && nTimeFirstKey && pindex->GetBlockTime() < nTimeFirstKey - TIMESTAMP_WINDOW &&
-               (!optOrchardCheckpointHeight.has_value() || pindex->nHeight < optOrchardCheckpointHeight.value())) {
+               belowCheckpoint(optOrchardCheckpointHeight, pindex->nHeight) &&
+               belowCheckpoint(optIronwoodCheckpointHeight, pindex->nHeight)) {
             pindex = chainActive.Next(pindex);
         }
 

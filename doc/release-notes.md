@@ -30,6 +30,20 @@ asks you to re-enter three of its words, and then confirms the backup through
 archive, and the debug archive holds the tool's symbols as
 `zcashd-wallet-tool.dbg`.
 
+New wallets restart without -rescan after a quick catch-up
+----------------------------------------------------------
+
+A new wallet that caught up quickly and restarted within about ten minutes, for
+example on a node restored from a snapshot, no longer fails to start with
+"Ironwood witnesses cannot rewind to the rescan height. Restart with -rescan."
+In v1.3.5 every later start failed the same way until zcashd was run once with
+`-rescan`. The wallet saves its position only every ten minutes, so on restart
+it rescans from the block it was created at. Its startup rescan skipped ahead
+to the wallet's creation time, past the block where it had just rebuilt its
+Ironwood note tree, and the tree could not move back to where the rescan began.
+The rescan now starts no later than that block. Wallets already in this state
+start normally after upgrading.
+
 Sidecar sync after burst mining
 ------------------------------
 

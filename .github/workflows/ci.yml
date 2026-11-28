@@ -469,9 +469,17 @@ jobs:
           python3 qa/rpc-tests/wallet_ironwood_payouts.py \
             --zcashd ./src/zcashd --zakurad "$RUNNER_TEMP/bin/zakurad" \
             --previous-zcashd "$RUNNER_TEMP/previous-zcashd" --workdir "$RUNNER_TEMP/payouts"
+      - name: Restart a new wallet before it saves its position
+        timeout-minutes: 15
+        run: |
+          python3 qa/rpc-tests/wallet_ironwood_birthday_restart.py \
+            --zcashd ./src/zcashd --zakurad "$RUNNER_TEMP/bin/zakurad" \
+            --workdir "$RUNNER_TEMP/birthday-restart"
       - name: Show regtest diagnostics on failure
         if: failure()
-        run: tail -n 60 "$RUNNER_TEMP"/payouts/{wallet.log,wallet/regtest/debug.log,zakura.log} || true
+        run: |
+          tail -n 60 "$RUNNER_TEMP"/payouts/{wallet.log,wallet/regtest/debug.log,zakura.log} || true
+          tail -n 60 "$RUNNER_TEMP"/birthday-restart/{wallet.log,wallet/regtest/debug.log,funder.log,zakura.log} || true
 
       - name: Test the NU7 dump comparer
         run: python3 qa/zcash/nu7-diff/test_compare.py
