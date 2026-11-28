@@ -231,9 +231,19 @@ void ThrowInputSelectionError(
                     err.orchardNotes));
         },
         [](const IronwoodUnsupportedError& err) {
-            throw JSONRPCError(RPC_INVALID_PARAMETER, err == IronwoodUnsupportedError::HistoricalOrchardSpend
-                ? "Historical Orchard notes cannot be spent from NU6.3."
-                : IRONWOOD_WALLET_UNSUPPORTED);
+            switch (err) {
+                case IronwoodUnsupportedError::HistoricalOrchardSpend:
+                    throw JSONRPCError(RPC_INVALID_PARAMETER,
+                        "Historical Orchard notes cannot be spent from NU6.3.");
+                case IronwoodUnsupportedError::SaplingRecipient:
+                    throw JSONRPCError(RPC_INVALID_PARAMETER,
+                        "Ironwood funds cannot pay a Sapling address or a Unified Address without an "
+                        "Orchard receiver. Pay a transparent address or a Unified Address with an "
+                        "Orchard receiver.");
+                case IronwoodUnsupportedError::UnsupportedReceiver:
+                    break;
+            }
+            throw JSONRPCError(RPC_INVALID_PARAMETER, IRONWOOD_WALLET_UNSUPPORTED);
         },
         [](const SproutUnsupportedError&) {
             throw JSONRPCError(

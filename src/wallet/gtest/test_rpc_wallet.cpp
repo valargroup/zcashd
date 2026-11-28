@@ -60,6 +60,37 @@ SpendableInputs MixedSaplingAndOrchardInputs(
     return inputs;
 }
 
+/// Confirmed Ironwood notes worth the given values, as a payout from an Orchard-only Unified
+/// Address would find them. The notes belong to an unrelated key: preparing a transaction does
+/// not check note ownership.
+SpendableInputs IronwoodInputs(const std::vector<CAmount>& values)
+{
+    auto seed = MnemonicSeed::Random(0);
+    auto orchardKey = OrchardSpendingKey::ForAccount(seed, 0, 0);
+    auto orchardAddress = orchardKey.ToFullViewingKey()
+        .ToIncomingViewingKey()
+        .Address(diversifier_index_t{0});
+    SpendableInputs inputs;
+    uint32_t n = 0;
+    for (auto value : values) {
+        OrchardNoteMetadata note{OrchardOutPoint{uint256(), n++}, orchardAddress, value, {}};
+        note.SetIronwood();
+        note.SetConfirmations(10);
+        inputs.orchardNoteMetadata.push_back(note);
+    }
+    return inputs;
+}
+
+/// A fresh Orchard receiver from a key outside the wallet.
+OrchardRawAddress ForeignOrchardReceiver()
+{
+    auto seed = MnemonicSeed::Random(0);
+    return OrchardSpendingKey::ForAccount(seed, 0, 0)
+        .ToFullViewingKey()
+        .ToIncomingViewingKey()
+        .Address(diversifier_index_t{0});
+}
+
 class ScopedFakeChainTip
 {
 private:
@@ -354,6 +385,182 @@ TEST(WalletRPCTests, PrepareTransactionAvoidsOrchardAfterNU6point3)
         EXPECT_TRUE(unifiedEffects->GetPayments().HasSaplingRecipient());
         EXPECT_FALSE(unifiedEffects->GetPayments().HasOrchardRecipient());
     }
+}
+
+TEST(WalletRPCTests, PrepareTransactionIronwoodPayoutsToUnifiedAddresses)
+{
+    ScopedNU6point3Wallet wallet;
+
+    {
+        LOCK2(cs_main, pwalletMain->cs_wallet);
+
+        if (!pwalletMain->HaveMnemonicSeed()) {
+            pwalletMain->GenerateNewSeed();
+        }
+
+        CBlock block;
+        block.hashMerkleRoot = BlockMerkleRoot(block);
+        ScopedFakeChainTip fakeTip(block);
+
+        auto [ufvk, accountId] = pwalletMain->GenerateNewUnifiedSpendingKey();
+        auto selector = pwalletMain->ZTXOSelectorForAccount(
+                accountId,
+                true,
+                TransparentCoinbasePolicy::Disallow,
+                {ReceiverType::Orchard}).value();
+
+        // Another wallet's addresses: an Orchard-only UA, a UA with Sapling and
+        // Orchard receivers, and Sapling-only recipients.
+        auto saplingKey = pwalletMain->GenerateNewLegacySaplingZKey();
+        UnifiedAddress orchardOnly;
+        ASSERT_TRUE(orchardOnly.AddReceiver(ForeignOrchardReceiver()));
+        UnifiedAddress saplingAndOrchard;
+        auto mixedOrchardReceiver = ForeignOrchardReceiver();
+        ASSERT_TRUE(saplingAndOrchard.AddReceiver(mixedOrchardReceiver));
+        ASSERT_TRUE(saplingAndOrchard.AddReceiver(saplingKey));
+        UnifiedAddress saplingOnly;
+        ASSERT_TRUE(saplingOnly.AddReceiver(saplingKey));
+        auto firstWorker = CKey::TestOnlyRandomKey(true).GetPubKey().GetID();
+        auto secondWorker = CKey::TestOnlyRandomKey(true).GetPubKey().GetID();
+        auto memo = Memo::FromBytes({0xAB, 0xCD});
+
+        WalletTxBuilder builder(Params(), minRelayTxFee);
+
+        // Ironwood funds pay every UA through its Orchard receiver, with change
+        // back to the account's Ironwood receiver. Paying only UAs is fully shielded.
+        auto inputs = IronwoodInputs({5 * COIN});
+        // Sapling funds in the same account are not spent by an Ironwood payout.
+        auto saplingAddress = ufvk.GetSaplingKey().value().FindAddress(diversifier_index_t{0}).first;
+        inputs.saplingNoteEntries.push_back(SaplingNoteEntry{
+            SaplingOutPoint{},
+            saplingAddress,
+            SaplingNote(saplingAddress, 5 * COIN, Zip212Enabled::AfterZip212),
+            {},
+            100});
+        std::vector<Payment> shielded{
+            Payment(orchardOnly, COIN, memo),
+            Payment(saplingAndOrchard, 2 * COIN, std::nullopt)};
+        auto effects = builder.PrepareTransaction(
+                *pwalletMain, selector, inputs, shielded, chainActive,
+                TransactionStrategy(PrivacyPolicy::FullPrivacy), std::nullopt, 1, true);
+        ASSERT_TRUE(effects.has_value());
+        EXPECT_EQ(effects->GetSpendable().GetSaplingTotal(), 0);
+        EXPECT_EQ(effects->GetSpendable().orchardNoteMetadata.size(), 1);
+        const auto& payments = effects->GetPayments();
+        EXPECT_FALSE(payments.HasSaplingRecipient());
+        EXPECT_FALSE(payments.HasTransparentRecipient());
+        ASSERT_EQ(payments.GetResolvedPayments().size(), 3);
+        const auto& first = payments.GetResolvedPayments()[0];
+        EXPECT_EQ(std::get<OrchardRawAddress>(first.address), orchardOnly.GetOrchardReceiver().value());
+        EXPECT_EQ(first.memo, memo);
+        const auto& second = payments.GetResolvedPayments()[1];
+        EXPECT_EQ(std::get<OrchardRawAddress>(second.address), mixedOrchardReceiver);
+        const auto& change = payments.GetResolvedPayments()[2];
+        EXPECT_TRUE(change.isInternal);
+        EXPECT_TRUE(std::holds_alternative<OrchardRawAddress>(change.address));
+        // One spend and three outputs make three Ironwood actions.
+        EXPECT_EQ(effects->GetFee(), 3 * MARGINAL_FEE);
+        EXPECT_EQ(change.amount, 2 * COIN - 3 * MARGINAL_FEE);
+        EXPECT_EQ(effects->GetRequiredPrivacyPolicy(), PrivacyPolicy::FullPrivacy);
+
+        // UAs and transparent addresses in one payout. Each standard P2PKH output adds
+        // a logical action to the three Ironwood actions.
+        std::vector<Payment> mixed{
+            Payment(orchardOnly, COIN, std::nullopt),
+            Payment(saplingAndOrchard, COIN, std::nullopt),
+            Payment(firstWorker, COIN / 2, std::nullopt),
+            Payment(secondWorker, COIN / 2, std::nullopt)};
+        auto mixedEffects = builder.PrepareTransaction(
+                *pwalletMain, selector, IronwoodInputs({2 * COIN, 2 * COIN}), mixed, chainActive,
+                TransactionStrategy(PrivacyPolicy::AllowRevealedRecipients), std::nullopt, 1, true);
+        ASSERT_TRUE(mixedEffects.has_value());
+        EXPECT_FALSE(mixedEffects->GetPayments().HasSaplingRecipient());
+        EXPECT_EQ(mixedEffects->GetPayments().GetOrchardTotal(), 2 * COIN + (4 * COIN - 3 * COIN - 5 * MARGINAL_FEE));
+        EXPECT_EQ(mixedEffects->GetPayments().GetTransparentTotal(), COIN);
+        EXPECT_EQ(mixedEffects->GetFee(), 5 * MARGINAL_FEE);
+        EXPECT_EQ(mixedEffects->GetRequiredPrivacyPolicy(), PrivacyPolicy::AllowRevealedRecipients);
+
+        // Transparent recipients still need AllowRevealedRecipients.
+        auto privateMixed = builder.PrepareTransaction(
+                *pwalletMain, selector, IronwoodInputs({5 * COIN}), mixed, chainActive,
+                TransactionStrategy(PrivacyPolicy::FullPrivacy), std::nullopt, 1, true);
+        ASSERT_FALSE(privateMixed.has_value());
+        EXPECT_EQ(std::get<AddressResolutionError>(privateMixed.error()),
+                  AddressResolutionError::TransparentRecipientNotAllowed);
+
+        // Ironwood funds never create a Sapling output, whatever the policy.
+        for (const PaymentAddress& recipient : std::vector<PaymentAddress>{saplingKey, saplingOnly}) {
+            std::vector<Payment> withSapling{
+                Payment(orchardOnly, COIN, std::nullopt),
+                Payment(recipient, COIN, std::nullopt)};
+            for (auto policy : {PrivacyPolicy::FullPrivacy, PrivacyPolicy::AllowRevealedAmounts,
+                                PrivacyPolicy::AllowRevealedRecipients}) {
+                auto refused = builder.PrepareTransaction(
+                        *pwalletMain, selector, IronwoodInputs({5 * COIN}), withSapling, chainActive,
+                        TransactionStrategy(policy), std::nullopt, 1, true);
+                ASSERT_FALSE(refused.has_value());
+                EXPECT_EQ(std::get<IronwoodUnsupportedError>(refused.error()),
+                          IronwoodUnsupportedError::SaplingRecipient);
+            }
+        }
+
+        // Without the Ironwood payout path, the same UA payment cannot spend these notes.
+        auto withoutIronwood = builder.PrepareTransaction(
+                *pwalletMain, selector, IronwoodInputs({5 * COIN}), shielded, chainActive,
+                TransactionStrategy(PrivacyPolicy::FullPrivacy), std::nullopt, 1, false);
+        EXPECT_FALSE(withoutIronwood.has_value());
+    }
+}
+
+TEST(WalletRPCTests, PrepareTransactionIronwoodActionLimitAfterNU7)
+{
+    ScopedNU7Wallet wallet;
+    auto previousActionLimit = nOrchardActionLimit;
+    nOrchardActionLimit = 1000;
+
+    {
+        LOCK2(cs_main, pwalletMain->cs_wallet);
+
+        if (!pwalletMain->HaveMnemonicSeed()) {
+            pwalletMain->GenerateNewSeed();
+        }
+
+        CBlock block;
+        block.hashMerkleRoot = BlockMerkleRoot(block);
+        ScopedFakeChainTip fakeTip(block);
+
+        auto [ufvk, accountId] = pwalletMain->GenerateNewUnifiedSpendingKey();
+        auto selector = pwalletMain->ZTXOSelectorForAccount(
+                accountId,
+                true,
+                TransparentCoinbasePolicy::Disallow,
+                {ReceiverType::Orchard}).value();
+        UnifiedAddress recipient;
+        ASSERT_TRUE(recipient.AddReceiver(ForeignOrchardReceiver()));
+
+        WalletTxBuilder builder(Params(), minRelayTxFee);
+        auto payout = [&](size_t recipients) {
+            std::vector<Payment> payments(recipients, Payment(recipient, 10000, std::nullopt));
+            return builder.PrepareTransaction(
+                    *pwalletMain, selector, IronwoodInputs({100 * COIN}), payments, chainActive,
+                    TransactionStrategy(PrivacyPolicy::FullPrivacy), std::nullopt, 1, true);
+        };
+
+        // One spend with 329 recipients and change fills a block's 330 Ironwood actions.
+        auto fits = payout(ORCHARD_PROTOCOL_BLOCK_ACTION_LIMIT - 1);
+        ASSERT_TRUE(fits.has_value());
+        EXPECT_EQ(fits->GetFee(), ORCHARD_PROTOCOL_BLOCK_ACTION_LIMIT * MARGINAL_FEE);
+
+        // One more recipient needs 331 actions, which no block can hold.
+        auto tooMany = payout(ORCHARD_PROTOCOL_BLOCK_ACTION_LIMIT);
+        ASSERT_FALSE(tooMany.has_value());
+        auto err = std::get<ExcessShieldedActionsError>(tooMany.error());
+        EXPECT_TRUE(err.ironwood);
+        EXPECT_EQ(err.actions, ORCHARD_PROTOCOL_BLOCK_ACTION_LIMIT + 1);
+        EXPECT_EQ(err.limit, ORCHARD_PROTOCOL_BLOCK_ACTION_LIMIT);
+    }
+
+    nOrchardActionLimit = previousActionLimit;
 }
 
 TEST(WalletRPCTests, PrepareTransactionSaplingLimitAfterNU7)
